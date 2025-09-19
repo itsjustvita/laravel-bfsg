@@ -1,0 +1,49 @@
+{
+  "name": "itsjustvita/laravel-bfsg",
+  "description": "Laravel Package für BFSG/WCAG Barrierefreiheit Compliance",
+  "version": "1.0.0",
+  "keywords": [
+    "laravel",
+    "accessibility",
+    "bfsg",
+    "wcag",
+    "a11y"
+  ],
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Vitalis Feist-Wurm",
+      "email": "hello@itsjustvita.com"
+    }
+  ],
+  "require": {
+    "php": "^8.2",
+    "illuminate/support": "^12.0"
+  },
+  "require-dev": {
+    "orchestra/testbench": "^10.0",
+    "phpunit/phpunit": "^11.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "ItsJustVita\\LaravelBfsg\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "ItsJustVita\\LaravelBfsg\\Tests\\": "tests/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": [
+        "ItsJustVita\\LaravelBfsg\\BfsgServiceProvider"
+      ],
+      "aliases": {
+        "Bfsg": "ItsJustVita\\LaravelBfsg\\Facades\\Bfsg"
+      }
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true
+}
