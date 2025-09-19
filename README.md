@@ -13,7 +13,7 @@ A comprehensive Laravel package for BFSG (Barrierefreiheitsstärkungsgesetz) and
 - ✅ **WCAG 2.1 Level AA/AAA Compliance Checking**
 - ✅ **BFSG 2025 Ready** - Full compliance with German accessibility law
 - ✅ **Real-time Analysis** - Check your pages for accessibility issues
-- ✅ **Multiple Analyzers** - Images, Forms, Headings, ARIA, Links, and more
+- ✅ **Multiple Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard Navigation, and more
 - ✅ **Blade Components** - Pre-built accessible components
 - ✅ **Artisan Commands** - CLI tools for accessibility testing
 - ✅ **Auto-fix Capabilities** - Automatic correction of common issues
@@ -199,6 +199,14 @@ Route::middleware(['accessible'])->group(function () {
 - Checks for descriptive link text
 - Validates link context
 - Identifies "click here" anti-patterns
+
+### KeyboardNavigationAnalyzer
+- Detects missing skip links
+- Validates tab order and tabindex usage
+- Checks for keyboard traps in modals
+- Ensures click handlers are keyboard accessible
+- Validates focus management
+- Detects mouse-only event handlers
 
 ## 📊 Understanding Violations
 

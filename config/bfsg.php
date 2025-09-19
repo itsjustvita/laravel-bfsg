@@ -37,7 +37,7 @@ return [
         'contrast' => true,    // Color contrast ratios
         'aria' => true,        // ARIA attributes
         'links' => true,       // Link accessibility
-        'keyboard' => false,   // Keyboard navigation (coming soon)
+        'keyboard' => true,    // Keyboard navigation
     ],
     
     /*

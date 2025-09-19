@@ -21,13 +21,16 @@ it('analyzes HTML for multiple violations', function () {
 
 it('returns empty array for accessible HTML', function () {
     $html = '<!DOCTYPE html><html><body>
+        <a href="#main" class="sr-only">Skip to main content</a>
         <h1>Main Heading</h1>
-        <img src="test.jpg" alt="Test image">
-        <form aria-label="Contact Form">
-            <label for="email">Email</label>
-            <input type="email" id="email" name="email">
-        </form>
-        <a href="/about">Learn more about us</a>
+        <main id="main">
+            <img src="test.jpg" alt="Test image">
+            <form aria-label="Contact Form">
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email">
+            </form>
+            <a href="/about">Learn more about us</a>
+        </main>
     </body></html>';
 
     $bfsg = new Bfsg();
@@ -37,7 +40,14 @@ it('returns empty array for accessible HTML', function () {
 });
 
 it('correctly identifies accessible content', function () {
-    $accessibleHtml = '<!DOCTYPE html><html><body><h1>Title</h1><img src="test.jpg" alt="Description"></body></html>';
+    $accessibleHtml = '<!DOCTYPE html><html><body>
+        <a href="#main">Skip to main</a>
+        <h1>Title</h1>
+        <main id="main">
+            <img src="test.jpg" alt="Description">
+        </main>
+    </body></html>';
+
     $inaccessibleHtml = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
 
     $bfsg = new Bfsg();
