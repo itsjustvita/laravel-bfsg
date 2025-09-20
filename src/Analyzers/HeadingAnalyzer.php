@@ -26,7 +26,7 @@ class HeadingAnalyzer
         // Check for multiple h1 tags
         $this->checkMultipleH1Tags($xpath);
 
-        return $this->violations;
+        return ['issues' => $this->violations];
     }
 
     protected function checkHeadingHierarchy(DOMXPath $xpath): void
@@ -47,7 +47,7 @@ class HeadingAnalyzer
                     'element' => $heading->nodeName,
                     'message' => "Heading hierarchy broken: {$heading->nodeName} follows h{$previousLevel}",
                     'content' => substr(trim($heading->textContent), 0, 50),
-                    'suggestion' => "Use h" . ($previousLevel + 1) . " instead of {$heading->nodeName}",
+                    'suggestion' => 'Use h'.($previousLevel + 1)." instead of {$heading->nodeName}",
                     'auto_fixable' => false,
                 ];
             }
@@ -119,12 +119,12 @@ class HeadingAnalyzer
             // List all h1 contents for reference
             foreach ($h1Tags as $index => $h1) {
                 $content = substr(trim($h1->textContent), 0, 50);
-                if (!empty($content)) {
+                if (! empty($content)) {
                     $this->violations[] = [
                         'type' => 'notice',
                         'rule' => 'WCAG 1.3.1',
                         'element' => 'h1',
-                        'message' => "h1 #" . ($index + 1) . ": '{$content}'",
+                        'message' => 'h1 #'.($index + 1).": '{$content}'",
                         'suggestion' => 'Consider using h2 or restructuring the content',
                         'auto_fixable' => false,
                     ];

@@ -1,177 +1,204 @@
 <?php
 
+namespace ItsJustVita\LaravelBfsg\Tests\Unit;
+
+use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
+use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
-it('detects missing skip links', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <nav>Navigation</nav>
-        <main>Main content</main>
-    </body></html>';
+class KeyboardNavigationAnalyzerTest extends TestCase
+{
+    public function test_detects_missing_skip_links(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <nav>Navigation</nav>
+            <main>Main content</main>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toHaveCount(1)
-        ->and($violations[0]['message'])->toContain('No skip link found');
-});
+        $this->assertCount(1, $violations);
+        $this->assertStringContainsString('No skip link found', $violations[0]['message']);
+    }
 
-it('accepts pages with skip links', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <a href="#main" class="skip-link">Skip to main content</a>
-        <nav>Navigation</nav>
-        <main id="main">Main content</main>
-    </body></html>';
+    public function test_accepts_pages_with_skip_links(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <a href="#main" class="skip-link">Skip to main content</a>
+            <nav>Navigation</nav>
+            <main id="main">Main content</main>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    // Should not have skip link violation
-    $skipLinkViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'skip link'));
-    expect($skipLinkViolations)->toBeEmpty();
-});
+        // Should not have skip link violation
+        $skipLinkViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'skip link'));
+        $this->assertEmpty($skipLinkViolations);
+    }
 
-it('warns about positive tabindex values', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <button tabindex="1">First</button>
-        <button tabindex="2">Second</button>
-        <button tabindex="3">Third</button>
-    </body></html>';
+    public function test_warns_about_positive_tabindex_values(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <button tabindex="1">First</button>
+            <button tabindex="2">Second</button>
+            <button tabindex="3">Third</button>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    $tabindexViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'positive tabindex'));
-    expect($tabindexViolations)->not->toBeEmpty();
-});
+        $tabindexViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'positive tabindex'));
+        $this->assertNotEmpty($tabindexViolations);
+    }
 
-it('detects modals without proper focus management', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <div role="dialog">
-            <h2>Modal Title</h2>
-            <p>Modal content</p>
-        </div>
-    </body></html>';
+    public function test_detects_modals_without_proper_focus_management(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <div role="dialog">
+                <h2>Modal Title</h2>
+                <p>Modal content</p>
+            </div>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    // Should have violations for missing aria-modal and aria-label
-    $modalViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Modal'));
-    expect($modalViolations)->toHaveCount(2);
-});
+        // Should have violations for missing aria-modal and aria-label
+        $modalViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Modal'));
+        $this->assertCount(2, $modalViolations);
+    }
 
-it('accepts properly configured modals', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <div role="dialog" aria-modal="true" aria-labelledby="modal-title">
-            <h2 id="modal-title">Modal Title</h2>
-            <p>Modal content</p>
-        </div>
-    </body></html>';
+    public function test_accepts_properly_configured_modals(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <div role="dialog" aria-modal="true" aria-labelledby="modal-title">
+                <h2 id="modal-title">Modal Title</h2>
+                <p>Modal content</p>
+            </div>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    // Should not have modal violations
-    $modalViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Modal') || str_contains($v['message'], 'modal'));
-    expect($modalViolations)->toBeEmpty();
-});
+        // Should not have modal violations
+        $modalViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Modal') || str_contains($v['message'], 'modal'));
+        $this->assertEmpty($modalViolations);
+    }
 
-it('detects links without href', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <a>Click me</a>
-        <a href="#">Valid link</a>
-    </body></html>';
+    public function test_detects_links_without_href(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <a>Click me</a>
+            <a href="#">Valid link</a>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    $linkViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Link without href'));
-    expect($linkViolations)->toHaveCount(1);
-});
+        $linkViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Link without href'));
+        $this->assertCount(1, $linkViolations);
+    }
 
-it('detects click handlers on non-interactive elements', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <div onclick="doSomething()">Clickable div</div>
-        <span onclick="handleClick()">Clickable span</span>
-        <button onclick="valid()">Valid button</button>
-    </body></html>';
+    public function test_detects_click_handlers_on_non_interactive_elements(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <div onclick="doSomething()">Clickable div</div>
+            <span onclick="handleClick()">Clickable span</span>
+            <button onclick="valid()">Valid button</button>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    $clickViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'click handler'));
-    expect($clickViolations)->toHaveCount(2);
-});
+        $clickViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'click handler'));
+        $this->assertCount(2, $clickViolations);
+    }
 
-it('accepts non-interactive elements with proper keyboard support', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <div onclick="doSomething()" tabindex="0" onkeydown="handleKey(event)" role="button">
-            Properly accessible div button
-        </div>
-    </body></html>';
+    public function test_accepts_non_interactive_elements_with_proper_keyboard_support(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <div onclick="doSomething()" tabindex="0" onkeydown="handleKey(event)" role="button">
+                Properly accessible div button
+            </div>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    // Should not have violations for this properly configured element
-    $clickViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'click handler'));
-    expect($clickViolations)->toBeEmpty();
-});
+        // Should not have violations for this properly configured element
+        $clickViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'click handler'));
+        $this->assertEmpty($clickViolations);
+    }
 
-it('warns about mouse-only event handlers', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <div onmouseover="showTooltip()" onmouseout="hideTooltip()">
-            Hover for tooltip
-        </div>
-    </body></html>';
+    public function test_warns_about_mouse_only_event_handlers(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <div onmouseover="showTooltip()" onmouseout="hideTooltip()">
+                Hover for tooltip
+            </div>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    $mouseViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'mouse events'));
-    expect($mouseViolations)->toHaveCount(1);
-});
+        $mouseViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'mouse events'));
+        $this->assertCount(1, $mouseViolations);
+    }
 
-it('accepts elements with both mouse and keyboard events', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <div onmouseover="show()" onmouseout="hide()" onfocus="show()" onblur="hide()">
-            Accessible hover element
-        </div>
-    </body></html>';
+    public function test_accepts_elements_with_both_mouse_and_keyboard_events(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <div onmouseover="show()" onmouseout="hide()" onfocus="show()" onblur="hide()">
+                Accessible hover element
+            </div>
+        </body></html>';
 
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new KeyboardNavigationAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new KeyboardNavigationAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    $mouseViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'mouse events'));
-    expect($mouseViolations)->toBeEmpty();
-});
+        $mouseViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'mouse events'));
+        $this->assertEmpty($mouseViolations);
+    }
+}

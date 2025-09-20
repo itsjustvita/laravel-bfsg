@@ -1,7 +1,7 @@
 {
   "name": "itsjustvita/laravel-bfsg",
   "description": "Laravel Package für BFSG/WCAG Barrierefreiheit Compliance",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "keywords": [
     "laravel",
     "accessibility",
@@ -22,7 +22,10 @@
   },
   "require-dev": {
     "orchestra/testbench": "^10.0",
-    "phpunit/phpunit": "^11.0"
+    "phpunit/phpunit": "^12.0"
+  },
+  "suggest": {
+    "pestphp/pest-plugin-browser": "Required for browser-based accessibility testing of SPAs (^0.1)"
   },
   "autoload": {
     "psr-4": {

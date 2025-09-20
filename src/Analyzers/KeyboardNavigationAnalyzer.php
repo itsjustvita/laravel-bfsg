@@ -12,13 +12,13 @@ class KeyboardNavigationAnalyzer
     // Interactive elements that should be keyboard accessible
     protected const INTERACTIVE_ELEMENTS = [
         'a', 'button', 'input', 'select', 'textarea',
-        'audio', 'video', 'iframe', 'embed', 'object'
+        'audio', 'video', 'iframe', 'embed', 'object',
     ];
 
     // Elements that can receive tabindex
     protected const FOCUSABLE_ROLES = [
         'button', 'link', 'textbox', 'menuitem', 'tab',
-        'checkbox', 'radio', 'combobox', 'slider'
+        'checkbox', 'radio', 'combobox', 'slider',
     ];
 
     public function analyze(DOMDocument $dom): array
@@ -44,7 +44,7 @@ class KeyboardNavigationAnalyzer
         // Check for click handlers on non-interactive elements
         $this->checkClickHandlers($xpath);
 
-        return $this->violations;
+        return ['issues' => $this->violations];
     }
 
     protected function checkSkipLinks(DOMXPath $xpath): void
@@ -67,7 +67,7 @@ class KeyboardNavigationAnalyzer
             }
         }
 
-        if (!$hasSkipLink) {
+        if (! $hasSkipLink) {
             $this->violations[] = [
                 'type' => 'warning',
                 'rule' => 'WCAG 2.4.1',
@@ -90,12 +90,12 @@ class KeyboardNavigationAnalyzer
             $tabindex = $element->getAttribute('tabindex');
             $tabOrders[] = [
                 'element' => $element->nodeName,
-                'tabindex' => (int)$tabindex,
+                'tabindex' => (int) $tabindex,
             ];
         }
 
         // Check for logical tab order
-        $positiveTabindexes = array_filter($tabOrders, fn($item) => $item['tabindex'] > 0);
+        $positiveTabindexes = array_filter($tabOrders, fn ($item) => $item['tabindex'] > 0);
 
         if (count($positiveTabindexes) > 0 && count($positiveTabindexes) < count($tabOrders)) {
             $this->violations[] = [
@@ -120,7 +120,7 @@ class KeyboardNavigationAnalyzer
             $hasAriaModal = $modal->getAttribute('aria-modal') === 'true';
             $hasAriaLabel = $modal->hasAttribute('aria-label') || $modal->hasAttribute('aria-labelledby');
 
-            if (!$hasAriaModal) {
+            if (! $hasAriaModal) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 2.1.2',
@@ -131,7 +131,7 @@ class KeyboardNavigationAnalyzer
                 ];
             }
 
-            if (!$hasAriaLabel) {
+            if (! $hasAriaLabel) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 4.1.2',
@@ -169,7 +169,7 @@ class KeyboardNavigationAnalyzer
                 }
 
                 // Check links without href
-                if ($element->nodeName === 'a' && !$element->hasAttribute('href')) {
+                if ($element->nodeName === 'a' && ! $element->hasAttribute('href')) {
                     $this->violations[] = [
                         'type' => 'error',
                         'rule' => 'WCAG 2.1.1',
@@ -210,16 +210,16 @@ class KeyboardNavigationAnalyzer
             $role = $element->getAttribute('role');
 
             // Check if it's not a naturally interactive element
-            if (!in_array($tagName, self::INTERACTIVE_ELEMENTS)) {
+            if (! in_array($tagName, self::INTERACTIVE_ELEMENTS)) {
                 // Check if it has an interactive role
-                if (!in_array($role, self::FOCUSABLE_ROLES)) {
+                if (! in_array($role, self::FOCUSABLE_ROLES)) {
                     // Check if it has tabindex to make it focusable
-                    if (!$element->hasAttribute('tabindex') || $element->getAttribute('tabindex') === '-1') {
+                    if (! $element->hasAttribute('tabindex') || $element->getAttribute('tabindex') === '-1') {
                         $this->violations[] = [
                             'type' => 'error',
                             'rule' => 'WCAG 2.1.1',
                             'element' => $element->nodeName,
-                            'message' => "Non-interactive element with click handler is not keyboard accessible",
+                            'message' => 'Non-interactive element with click handler is not keyboard accessible',
                             'suggestion' => 'Add tabindex="0" and keyboard event handlers (onkeydown/onkeyup)',
                             'auto_fixable' => true,
                         ];
@@ -239,7 +239,7 @@ class KeyboardNavigationAnalyzer
                                 $element->hasAttribute('onfocus') ||
                                 $element->hasAttribute('onblur');
 
-            if (!$hasKeyboardEvents) {
+            if (! $hasKeyboardEvents) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 2.1.1',

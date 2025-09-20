@@ -23,7 +23,7 @@ class FormAnalyzer
         // Check for required fields without proper indication
         $this->checkRequiredFields($xpath);
 
-        return $this->violations;
+        return ['issues' => $this->violations];
     }
 
     protected function checkInputsWithoutLabels(DOMXPath $xpath): void
@@ -41,7 +41,7 @@ class FormAnalyzer
                 $hasLabel = $labels->length > 0;
             }
 
-            if (!$hasLabel) {
+            if (! $hasLabel) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 1.3.1, 3.3.2',
@@ -72,12 +72,12 @@ class FormAnalyzer
                 $hasLabel = $labels->length > 0;
             }
 
-            if (!$hasLabel) {
+            if (! $hasLabel) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 1.3.1, 3.3.2',
                     'element' => $element,
-                    'message' => ucfirst($element) . ' without associated label',
+                    'message' => ucfirst($element).' without associated label',
                     'name' => $elem->getAttribute('name') ?: 'unnamed',
                     'suggestion' => 'Add a <label> element or aria-label attribute',
                     'auto_fixable' => false,
@@ -95,7 +95,7 @@ class FormAnalyzer
             // Check if form has a heading or legend that could serve as label
             $hasHeading = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//legend', $form)->length > 0;
 
-            if (!$hasHeading) {
+            if (! $hasHeading) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 1.3.1',
@@ -117,7 +117,7 @@ class FormAnalyzer
             $hasAriaRequired = $input->getAttribute('aria-required') === 'true';
             $id = $input->getAttribute('id');
 
-            if (!$hasAriaRequired) {
+            if (! $hasAriaRequired) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 3.3.2',

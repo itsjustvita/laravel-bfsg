@@ -76,8 +76,9 @@ class Bfsg
         
         foreach ($this->analyzers as $name => $analyzer) {
             $results = $analyzer->analyze($dom);
-            if (!empty($results)) {
-                $this->violations[$name] = $results;
+            // Extract issues from the result array
+            if (!empty($results['issues'])) {
+                $this->violations[$name] = $results['issues'];
             }
         }
         

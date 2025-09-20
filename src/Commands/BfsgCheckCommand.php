@@ -220,7 +220,8 @@ class BfsgCheckCommand extends Command
             $this->error("❌ {$category} - {$count} issues found:");
 
             foreach ($issues as $issue) {
-                $message = "  - [{$issue['rule']}] {$issue['message']}";
+                $rule = $issue['rule'] ?? 'BFSG';
+                $message = "  - [{$rule}] {$issue['message']}";
 
                 if ($this->option('detailed')) {
                     // Show additional details

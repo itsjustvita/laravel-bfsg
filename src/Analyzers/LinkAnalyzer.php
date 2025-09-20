@@ -50,7 +50,7 @@ class LinkAnalyzer
         // Check for link purpose clarity
         $this->checkLinkPurposeClarity($xpath);
 
-        return $this->violations;
+        return ['issues' => $this->violations];
     }
 
     protected function checkNonDescriptiveLinks(DOMXPath $xpath): void
@@ -73,7 +73,7 @@ class LinkAnalyzer
             }
 
             // Check for very short link text
-            if (strlen($linkText) > 0 && strlen($linkText) <= 2 && !$link->hasAttribute('aria-label')) {
+            if (strlen($linkText) > 0 && strlen($linkText) <= 2 && ! $link->hasAttribute('aria-label')) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 2.4.4',
@@ -93,7 +93,7 @@ class LinkAnalyzer
 
         foreach ($emptyLinks as $link) {
             // Check if link has aria-label or title
-            if (!$link->hasAttribute('aria-label') && !$link->hasAttribute('title')) {
+            if (! $link->hasAttribute('aria-label') && ! $link->hasAttribute('title')) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 2.4.4, 4.1.2',
@@ -115,7 +115,7 @@ class LinkAnalyzer
             // Check if link has other text content
             $textContent = trim(str_replace($img->textContent, '', $link->textContent));
 
-            if (empty($textContent) && !$link->hasAttribute('aria-label')) {
+            if (empty($textContent) && ! $link->hasAttribute('aria-label')) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 2.4.4, 1.1.1',
@@ -156,7 +156,7 @@ class LinkAnalyzer
             $currentHref = $link->getAttribute('href');
             $currentText = trim($link->textContent);
 
-            if ($previousHref === $currentHref && !empty($currentHref)) {
+            if ($previousHref === $currentHref && ! empty($currentHref)) {
                 // Check if links are adjacent (siblings)
                 if ($link->previousSibling && $link->previousSibling->nodeName === 'a') {
                     $this->violations[] = [
@@ -196,7 +196,7 @@ class LinkAnalyzer
                 stripos($title, 'new tab') !== false
             );
 
-            if (!$hasWarning) {
+            if (! $hasWarning) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 3.2.5',
@@ -256,13 +256,13 @@ class LinkAnalyzer
                     stripos($linkText, 'file') !== false
                 );
 
-                if (!$hasFileIndication) {
+                if (! $hasFileIndication) {
                     $fileType = strtoupper(pathinfo($href, PATHINFO_EXTENSION));
                     $this->violations[] = [
                         'type' => 'warning',
                         'rule' => 'WCAG 2.4.4',
                         'element' => 'a',
-                        'message' => "File download link without file type indication",
+                        'message' => 'File download link without file type indication',
                         'href' => $href,
                         'linkText' => substr($linkText, 0, 50),
                         'suggestion' => "Add file type and size info (e.g., 'Document ({$fileType}, 2MB)')",

@@ -35,7 +35,7 @@ class ContrastAnalyzer
         // Check for text without sufficient background definition
         $this->checkTextWithoutBackground($xpath);
 
-        return $this->violations;
+        return ['issues' => $this->violations];
     }
 
     protected function checkInlineStyles(DOMXPath $xpath): void
@@ -133,7 +133,7 @@ class ContrastAnalyzer
 
     protected function extractColor(string $style, string $property): ?string
     {
-        $pattern = '/' . preg_quote($property, '/') . '\s*:\s*([^;]+)/i';
+        $pattern = '/'.preg_quote($property, '/').'\s*:\s*([^;]+)/i';
 
         if (preg_match($pattern, $style, $matches)) {
             return trim($matches[1]);
@@ -147,7 +147,7 @@ class ContrastAnalyzer
         $rgb1 = $this->colorToRgb($color1);
         $rgb2 = $this->colorToRgb($color2);
 
-        if (!$rgb1 || !$rgb2) {
+        if (! $rgb1 || ! $rgb2) {
             return null;
         }
 
@@ -169,7 +169,7 @@ class ContrastAnalyzer
             $hex = $matches[1];
 
             if (strlen($hex) === 3) {
-                $hex = $hex[0] . $hex[0] . $hex[1] . $hex[1] . $hex[2] . $hex[2];
+                $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
             }
 
             return [

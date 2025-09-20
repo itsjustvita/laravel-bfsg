@@ -1,64 +1,82 @@
 <?php
 
+namespace ItsJustVita\LaravelBfsg\Tests\Unit;
+
+use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\FormAnalyzer;
+use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
-it('detects inputs without labels', function () {
-    $html = '<form><h2>Contact Form</h2><input type="text" name="email"></form>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+class FormAnalyzerTest extends TestCase
+{
+    public function test_detects_inputs_without_labels(): void
+    {
+        $html = '<form><h2>Contact Form</h2><input type="text" name="email"></form>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new FormAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new FormAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toHaveCount(1)
-        ->and($violations[0]['message'])->toBe('Form input without associated label')
-        ->and($violations[0]['rule'])->toBe('WCAG 1.3.1, 3.3.2');
-});
+        $this->assertNotEmpty($violations);
+        $this->assertCount(1, $violations);
+        $this->assertEquals('Form input without associated label', $violations[0]['message']);
+        $this->assertEquals('WCAG 1.3.1, 3.3.2', $violations[0]['rule']);
+    }
 
-it('accepts inputs with labels', function () {
-    $html = '<form><h2>Form</h2><label for="email">Email</label><input type="text" id="email" name="email"></form>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_accepts_inputs_with_labels(): void
+    {
+        $html = '<form><h2>Form</h2><label for="email">Email</label><input type="text" id="email" name="email"></form>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new FormAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new FormAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toBeEmpty();
-});
+        $this->assertEmpty($violations);
+    }
 
-it('accepts inputs with aria-label', function () {
-    $html = '<form aria-label="Contact Form"><input type="text" name="email" aria-label="Email address"></form>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_accepts_inputs_with_aria_label(): void
+    {
+        $html = '<form aria-label="Contact Form"><input type="text" name="email" aria-label="Email address"></form>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new FormAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new FormAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toBeEmpty();
-});
+        $this->assertEmpty($violations);
+    }
 
-it('warns about required fields without aria-required', function () {
-    $html = '<form><legend>Form</legend><input type="text" name="email" required aria-label="Email"></form>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_warns_about_required_fields_without_aria_required(): void
+    {
+        $html = '<form><legend>Form</legend><input type="text" name="email" required aria-label="Email"></form>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new FormAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new FormAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    // Should have 1 violation: missing aria-required
-    expect($violations)->toHaveCount(1)
-        ->and($violations[0]['message'])->toBe('Required field without aria-required attribute')
-        ->and($violations[0]['type'])->toBe('warning');
-});
+        // Should have 1 violation: missing aria-required
+        $this->assertCount(1, $violations);
+        $this->assertEquals('Required field without aria-required attribute', $violations[0]['message']);
+        $this->assertEquals('warning', $violations[0]['type']);
+    }
 
-it('detects textareas without labels', function () {
-    $html = '<form><legend>Contact</legend><textarea name="message"></textarea></form>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_detects_textareas_without_labels(): void
+    {
+        $html = '<form><legend>Contact</legend><textarea name="message"></textarea></form>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new FormAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new FormAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toHaveCount(1)
-        ->and($violations[0]['message'])->toBe('Textarea without associated label');
-});
+        $this->assertCount(1, $violations);
+        $this->assertEquals('Textarea without associated label', $violations[0]['message']);
+    }
+}

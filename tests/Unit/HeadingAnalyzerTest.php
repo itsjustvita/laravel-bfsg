@@ -1,63 +1,80 @@
 <?php
 
+namespace ItsJustVita\LaravelBfsg\Tests\Unit;
+
+use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer;
+use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
-it('detects missing h1', function () {
-    $html = '<h2>Section</h2><p>Content</p>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+class HeadingAnalyzerTest extends TestCase
+{
+    public function test_detects_missing_h1(): void
+    {
+        $html = '<h2>Section</h2><p>Content</p>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new HeadingAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new HeadingAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toHaveCount(1)
-        ->and($violations[0]['message'])->toBe('No h1 heading found on the page')
-        ->and($violations[0]['type'])->toBe('warning');
-});
+        $this->assertCount(1, $violations);
+        $this->assertEquals('No h1 heading found on the page', $violations[0]['message']);
+        $this->assertEquals('warning', $violations[0]['type']);
+    }
 
-it('detects broken heading hierarchy', function () {
-    $html = '<h1>Main</h1><h3>Skipped h2</h3>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_detects_broken_heading_hierarchy(): void
+    {
+        $html = '<h1>Main</h1><h3>Skipped h2</h3>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new HeadingAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new HeadingAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toHaveCount(1)
-        ->and($violations[0]['message'])->toContain('Heading hierarchy broken');
-});
+        $this->assertCount(1, $violations);
+        $this->assertStringContainsString('Heading hierarchy broken', $violations[0]['message']);
+    }
 
-it('accepts proper heading hierarchy', function () {
-    $html = '<h1>Main</h1><h2>Section</h2><h3>Subsection</h3>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_accepts_proper_heading_hierarchy(): void
+    {
+        $html = '<h1>Main</h1><h2>Section</h2><h3>Subsection</h3>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new HeadingAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new HeadingAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->toBeEmpty();
-});
+        $this->assertEmpty($violations);
+    }
 
-it('detects empty headings', function () {
-    $html = '<h1></h1><h2>   </h2>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_detects_empty_headings(): void
+    {
+        $html = '<h1></h1><h2>   </h2>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new HeadingAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new HeadingAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    expect($violations)->not->toBeEmpty()
-        ->and($violations[0]['message'])->toContain('Empty h1 heading found');
-});
+        $this->assertNotEmpty($violations);
+        $this->assertStringContainsString('Empty h1 heading found', $violations[0]['message']);
+    }
 
-it('warns about multiple h1 tags', function () {
-    $html = '<h1>First</h1><h1>Second</h1>';
-    $dom = new DOMDocument();
-    @$dom->loadHTML($html);
+    public function test_warns_about_multiple_h1_tags(): void
+    {
+        $html = '<h1>First</h1><h1>Second</h1>';
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
 
-    $analyzer = new HeadingAnalyzer();
-    $violations = $analyzer->analyze($dom);
+        $analyzer = new HeadingAnalyzer();
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
 
-    $messages = array_column($violations, 'message');
-    expect($messages)->toContain('Multiple h1 headings found (2 total)');
-});
+        $messages = array_column($violations, 'message');
+        $this->assertContains('Multiple h1 headings found (2 total)', $messages);
+    }
+}

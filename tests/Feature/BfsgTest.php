@@ -1,68 +1,78 @@
 <?php
 
+namespace ItsJustVita\LaravelBfsg\Tests\Feature;
+
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
-it('analyzes HTML for multiple violations', function () {
-    $html = '<html><body>
-        <img src="test.jpg">
-        <h3>Skipped heading levels</h3>
-        <form><h2>Form</h2><input type="text" name="email"></form>
-        <a href="#">Click here</a>
-    </body></html>';
+class BfsgTest extends TestCase
+{
+    public function test_analyzes_html_for_multiple_violations(): void
+    {
+        $html = '<html><body>
+            <img src="test.jpg">
+            <h3>Skipped heading levels</h3>
+            <form><h2>Form</h2><input type="text" name="email"></form>
+            <a href="#">Click here</a>
+        </body></html>';
 
-    $bfsg = new Bfsg();
-    $violations = $bfsg->analyze($html);
+        $bfsg = new Bfsg();
+        $violations = $bfsg->analyze($html);
 
-    expect($violations)->toHaveKey('images')
-        ->and($violations)->toHaveKey('headings')
-        ->and($violations)->toHaveKey('forms')
-        ->and($violations)->toHaveKey('links');
-});
+        $this->assertArrayHasKey('images', $violations);
+        $this->assertArrayHasKey('headings', $violations);
+        $this->assertArrayHasKey('forms', $violations);
+        $this->assertArrayHasKey('links', $violations);
+    }
 
-it('returns empty array for accessible HTML', function () {
-    $html = '<!DOCTYPE html><html><body>
-        <a href="#main" class="sr-only">Skip to main content</a>
-        <h1>Main Heading</h1>
-        <main id="main">
-            <img src="test.jpg" alt="Test image">
-            <form aria-label="Contact Form">
-                <label for="email">Email</label>
-                <input type="email" id="email" name="email">
-            </form>
-            <a href="/about">Learn more about us</a>
-        </main>
-    </body></html>';
+    public function test_returns_empty_array_for_accessible_html(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <a href="#main" class="sr-only">Skip to main content</a>
+            <h1>Main Heading</h1>
+            <main id="main">
+                <img src="test.jpg" alt="Test image">
+                <form aria-label="Contact Form">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" name="email">
+                </form>
+                <a href="/about">Learn more about us</a>
+            </main>
+        </body></html>';
 
-    $bfsg = new Bfsg();
-    $violations = $bfsg->analyze($html);
+        $bfsg = new Bfsg();
+        $violations = $bfsg->analyze($html);
 
-    expect($violations)->toBeEmpty();
-});
+        $this->assertEmpty($violations);
+    }
 
-it('correctly identifies accessible content', function () {
-    $accessibleHtml = '<!DOCTYPE html><html><body>
-        <a href="#main">Skip to main</a>
-        <h1>Title</h1>
-        <main id="main">
-            <img src="test.jpg" alt="Description">
-        </main>
-    </body></html>';
+    public function test_correctly_identifies_accessible_content(): void
+    {
+        $accessibleHtml = '<!DOCTYPE html><html><body>
+            <a href="#main">Skip to main</a>
+            <h1>Title</h1>
+            <main id="main">
+                <img src="test.jpg" alt="Description">
+            </main>
+        </body></html>';
 
-    $inaccessibleHtml = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
+        $inaccessibleHtml = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
 
-    $bfsg = new Bfsg();
+        $bfsg = new Bfsg();
 
-    expect($bfsg->isAccessible($accessibleHtml))->toBeTrue()
-        ->and($bfsg->isAccessible($inaccessibleHtml))->toBeFalse();
-});
+        $this->assertTrue($bfsg->isAccessible($accessibleHtml));
+        $this->assertFalse($bfsg->isAccessible($inaccessibleHtml));
+    }
 
-it('can get violations after analysis', function () {
-    $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
+    public function test_can_get_violations_after_analysis(): void
+    {
+        $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-    $bfsg = new Bfsg();
-    $bfsg->analyze($html);
-    $violations = $bfsg->getViolations();
+        $bfsg = new Bfsg();
+        $bfsg->analyze($html);
+        $violations = $bfsg->getViolations();
 
-    expect($violations)->toHaveKey('images')
-        ->and($violations['images'])->not->toBeEmpty();
-});
+        $this->assertArrayHasKey('images', $violations);
+        $this->assertNotEmpty($violations['images']);
+    }
+}

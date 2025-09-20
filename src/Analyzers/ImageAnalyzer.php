@@ -8,15 +8,15 @@ use DOMXPath;
 class ImageAnalyzer
 {
     protected array $violations = [];
-    
+
     public function analyze(DOMDocument $dom): array
     {
         $this->violations = [];
         $xpath = new DOMXPath($dom);
-        
+
         // Find all images without alt attribute
         $images = $xpath->query('//img[not(@alt)]');
-        
+
         foreach ($images as $img) {
             $this->violations[] = [
                 'type' => 'error',
@@ -28,12 +28,12 @@ class ImageAnalyzer
                 'auto_fixable' => true,
             ];
         }
-        
+
         // Find images with empty alt text that are not decorative
         $imagesWithEmptyAlt = $xpath->query('//img[@alt=""]');
-        
+
         foreach ($imagesWithEmptyAlt as $img) {
-            if (!$this->isDecorative($img)) {
+            if (! $this->isDecorative($img)) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 1.1.1',
@@ -45,10 +45,10 @@ class ImageAnalyzer
                 ];
             }
         }
-        
-        return $this->violations;
+
+        return ['issues' => $this->violations];
     }
-    
+
     protected function isDecorative($img): bool
     {
         // Check if role="presentation" or aria-hidden="true"

@@ -3,8 +3,8 @@
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
 use DOMDocument;
-use DOMXPath;
 use DOMElement;
+use DOMXPath;
 
 class AriaAnalyzer
 {
@@ -53,7 +53,7 @@ class AriaAnalyzer
         // Check for ARIA on non-interactive elements
         $this->checkAriaOnNonInteractiveElements($xpath);
 
-        return $this->violations;
+        return ['issues' => $this->violations];
     }
 
     protected function checkAriaRoles(DOMXPath $xpath): void
@@ -64,7 +64,7 @@ class AriaAnalyzer
             $role = $element->getAttribute('role');
 
             // Check for invalid role values
-            if (!in_array($role, self::VALID_ROLES)) {
+            if (! in_array($role, self::VALID_ROLES)) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 4.1.2',
@@ -104,7 +104,7 @@ class AriaAnalyzer
 
             foreach ($elements as $element) {
                 foreach ($requiredAttrs as $attr) {
-                    if (!$element->hasAttribute($attr)) {
+                    if (! $element->hasAttribute($attr)) {
                         $this->violations[] = [
                             'type' => 'error',
                             'rule' => 'WCAG 4.1.2',
@@ -160,7 +160,7 @@ class AriaAnalyzer
 
             foreach ($ids as $id) {
                 $id = trim($id);
-                if (!empty($id)) {
+                if (! empty($id)) {
                     $referencedElement = $xpath->query("//*[@id='{$id}']");
 
                     if ($referencedElement->length === 0) {
@@ -185,7 +185,7 @@ class AriaAnalyzer
 
             foreach ($ids as $id) {
                 $id = trim($id);
-                if (!empty($id)) {
+                if (! empty($id)) {
                     $referencedElement = $xpath->query("//*[@id='{$id}']");
 
                     if ($referencedElement->length === 0) {
@@ -218,7 +218,7 @@ class AriaAnalyzer
                     $role = $element->getAttribute('role');
                     $interactiveRoles = ['button', 'checkbox', 'link', 'menuitem', 'option', 'radio', 'switch', 'tab'];
 
-                    if (!in_array($role, $interactiveRoles)) {
+                    if (! in_array($role, $interactiveRoles)) {
                         $this->violations[] = [
                             'type' => 'warning',
                             'rule' => 'WCAG 4.1.2',
@@ -259,6 +259,7 @@ class AriaAnalyzer
         if (isset($implicitRoles[$tagName])) {
             if (is_array($implicitRoles[$tagName])) {
                 $type = $element->getAttribute('type');
+
                 return isset($implicitRoles[$tagName][$type]) && $implicitRoles[$tagName][$type] === $role;
             }
 

@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg;
 
 use Illuminate\Support\ServiceProvider;
+use ItsJustVita\LaravelBfsg\Commands\AnalyzeUrlCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
 use ItsJustVita\LaravelBfsg\Components\AccessibleImage;
 
@@ -44,6 +45,7 @@ class BfsgServiceProvider extends ServiceProvider
             // Register commands
             $this->commands([
                 BfsgCheckCommand::class,
+                AnalyzeUrlCommand::class,
             ]);
         }
         
