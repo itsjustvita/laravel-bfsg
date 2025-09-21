@@ -6,6 +6,8 @@ use Illuminate\Console\Command;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
 use Exception;
+use Symfony\Component\Process\Process;
+use Symfony\Component\Process\PhpExecutableFinder;
 
 class BfsgCheckCommand extends Command
 {
@@ -26,7 +28,8 @@ class BfsgCheckCommand extends Command
                             {--sanctum : Use Laravel Sanctum authentication}
                             {--detailed : Show detailed violation information}
                             {--save : Save results to database}
-                            {--format=cli : Output format (cli, json, html)}';
+                            {--format=cli : Output format (cli, json, html)}
+                            {--verify-ssl=false : Verify SSL certificates (set to true for production)}';
 
     protected $description = 'Check a URL for accessibility compliance';
 
@@ -190,18 +193,42 @@ class BfsgCheckCommand extends Command
             return $this->httpClient->fetchAuthenticatedUrl($url);
         }
 
-        // Otherwise use simple file_get_contents
+        // Check if this is a Herd domain and handle accordingly
+        $parsedUrl = parse_url($url);
+        $host = $parsedUrl['host'] ?? '';
+
+        // If it's a .test domain (Herd domain), start a temporary PHP server
+        if (str_ends_with($host, '.test')) {
+            return $this->fetchHtmlFromHerdDomain($url);
+        }
+
+        // Otherwise use simple file_get_contents with SSL handling
+        $verifySSL = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+
         $context = stream_context_create([
             'http' => [
                 'timeout' => 30,
-                'user_agent' => 'BFSG-Checker/1.0',
+                'user_agent' => 'BFSG-Checker/1.2',
+            ],
+            'ssl' => [
+                'verify_peer' => $verifySSL,
+                'verify_peer_name' => $verifySSL,
+                'allow_self_signed' => !$verifySSL,
             ],
         ]);
 
         $html = @file_get_contents($url, false, $context);
 
         if ($html === false) {
-            throw new Exception("Failed to fetch URL: {$url}");
+            $error = error_get_last();
+            $errorMsg = $error['message'] ?? 'Unknown error';
+
+            // Check if it's an SSL error
+            if (strpos($errorMsg, 'SSL') !== false || strpos($errorMsg, 'certificate') !== false) {
+                throw new Exception("SSL/Certificate error when fetching {$url}. For local development with self-signed certificates, this is expected.");
+            }
+
+            throw new Exception("Failed to fetch URL: {$url}. Error: {$errorMsg}");
         }
 
         return $html;
@@ -286,5 +313,86 @@ class BfsgCheckCommand extends Command
     {
         // This would save to database if the table exists
         $this->info('💾 Results saved to database');
+    }
+
+    protected function fetchHtmlFromHerdDomain(string $url): string
+    {
+        // Find an available port
+        $port = $this->findAvailablePort();
+
+        // Get the PHP executable
+        $phpFinder = new PhpExecutableFinder();
+        $phpBinary = $phpFinder->find();
+
+        if (!$phpBinary) {
+            throw new Exception('Could not find PHP binary');
+        }
+
+        // Get the project public directory
+        $publicPath = base_path('public');
+
+        // Start the PHP server in background
+        $serverCommand = [
+            $phpBinary,
+            '-S',
+            "127.0.0.1:{$port}",
+            '-t',
+            $publicPath,
+            base_path('server.php')
+        ];
+
+        $serverProcess = new Process($serverCommand);
+        $serverProcess->setTimeout(null);
+        $serverProcess->start();
+
+        // Wait a moment for the server to start
+        usleep(500000); // 500ms
+
+        try {
+            // Parse the original URL to get the path
+            $parsedUrl = parse_url($url);
+            $path = $parsedUrl['path'] ?? '/';
+            $query = isset($parsedUrl['query']) ? '?' . $parsedUrl['query'] : '';
+            $fragment = isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '';
+
+            // Build the local server URL
+            $localUrl = "http://127.0.0.1:{$port}{$path}{$query}{$fragment}";
+
+            // Fetch the HTML from the local server
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,
+                    'user_agent' => 'BFSG-Checker/1.2',
+                ]
+            ]);
+
+            $html = @file_get_contents($localUrl, false, $context);
+
+            if ($html === false) {
+                $error = error_get_last();
+                throw new Exception("Failed to fetch from temporary server: " . ($error['message'] ?? 'Unknown error'));
+            }
+
+            return $html;
+
+        } finally {
+            // Always stop the server - use signal 9 for immediate termination
+            $serverProcess->stop(0, 9);
+        }
+    }
+
+    protected function findAvailablePort(): int
+    {
+        // Try to find an available port between 8100-8199
+        for ($port = 8100; $port <= 8199; $port++) {
+            $socket = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
+            if ($socket === false) {
+                // Port is available
+                return $port;
+            }
+            fclose($socket);
+        }
+
+        throw new Exception('Could not find an available port for temporary server');
     }
 }

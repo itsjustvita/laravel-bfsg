@@ -15,7 +15,8 @@ class AnalyzeUrlCommand extends Command
     protected $signature = 'bfsg:analyze {url}
                             {--browser : Use browser rendering for SPAs}
                             {--headless=true : Run browser in headless mode}
-                            {--timeout=30000 : Timeout in milliseconds}';
+                            {--timeout=30000 : Timeout in milliseconds}
+                            {--verify-ssl=false : Verify SSL certificates (set to true for production)}';
 
     /**
      * The console command description.
@@ -71,11 +72,26 @@ class AnalyzeUrlCommand extends Command
     protected function analyzeServerSide(string $url): void
     {
         try {
-            // Fetch HTML content
-            $html = file_get_contents($url);
+            // Fetch HTML content with SSL handling
+            $verifySSL = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+
+            $context = stream_context_create([
+                'http' => [
+                    'timeout' => 30,
+                    'user_agent' => 'BFSG-Analyzer/1.2',
+                ],
+                'ssl' => [
+                    'verify_peer' => $verifySSL,
+                    'verify_peer_name' => $verifySSL,
+                    'allow_self_signed' => !$verifySSL,
+                ],
+            ]);
+
+            $html = @file_get_contents($url, false, $context);
 
             if ($html === false) {
                 $this->error('❌ Failed to fetch URL content');
+                $this->warn('Tip: For local development with self-signed certificates, this is expected.');
 
                 return;
             }
