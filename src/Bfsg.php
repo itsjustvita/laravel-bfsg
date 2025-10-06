@@ -9,6 +9,7 @@ use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer;
 
 class Bfsg
 {
@@ -61,6 +62,10 @@ class Bfsg
 
         if ($checks['keyboard'] ?? true) {
             $this->analyzers['keyboard'] = new KeyboardNavigationAnalyzer();
+        }
+
+        if ($checks['language'] ?? true) {
+            $this->analyzers['language'] = new LanguageAnalyzer();
         }
     }
     

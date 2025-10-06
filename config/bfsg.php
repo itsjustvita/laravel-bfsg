@@ -38,6 +38,7 @@ return [
         'aria' => true,        // ARIA attributes
         'links' => true,       // Link accessibility
         'keyboard' => true,    // Keyboard navigation
+        'language' => true,    // Language attributes (BFSG §3 requirement)
     ],
     
     /*

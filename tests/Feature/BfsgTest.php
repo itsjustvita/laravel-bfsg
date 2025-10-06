@@ -27,7 +27,7 @@ class BfsgTest extends TestCase
 
     public function test_returns_empty_array_for_accessible_html(): void
     {
-        $html = '<!DOCTYPE html><html><body>
+        $html = '<!DOCTYPE html><html lang="en"><body>
             <a href="#main" class="sr-only">Skip to main content</a>
             <h1>Main Heading</h1>
             <main id="main">
@@ -48,7 +48,7 @@ class BfsgTest extends TestCase
 
     public function test_correctly_identifies_accessible_content(): void
     {
-        $accessibleHtml = '<!DOCTYPE html><html><body>
+        $accessibleHtml = '<!DOCTYPE html><html lang="en"><body>
             <a href="#main">Skip to main</a>
             <h1>Title</h1>
             <main id="main">
@@ -56,7 +56,7 @@ class BfsgTest extends TestCase
             </main>
         </body></html>';
 
-        $inaccessibleHtml = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
+        $inaccessibleHtml = '<!DOCTYPE html><html lang="en"><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
 
         $bfsg = new Bfsg();
 

@@ -111,6 +111,7 @@ class AnalyzeUrlCommand extends Command
                 'LinkAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer(),
                 'ContrastAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer(),
                 'KeyboardNavigationAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer(),
+                'LanguageAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer(),
             ];
 
             $results = [
