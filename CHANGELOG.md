@@ -5,6 +5,62 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2025-10-28
+
+### Hinzugefügt
+- **TableAnalyzer** - Umfassende Tabellenbarrierefreiheit
+  - Prüfung von `<caption>` Elementen für Tabellenbeschreibungen
+  - Validierung von `<th>` mit `scope`-Attributen (`row`/`col`)
+  - Erkennung von Tabellen ohne Header-Zellen
+  - Unterscheidung zwischen Layout- und Datentabellen
+  - Validierung komplexer Tabellenbeziehungen mit `headers` Attribut
+
+- **MediaAnalyzer** - Audio/Video Barrierefreiheit
+  - Prüfung von Video-Untertiteln (`<track kind="captions">`)
+  - Validierung von Audio-Transkript-Referenzen
+  - Erkennung problematischer `autoplay`-Attribute
+  - Überprüfung auf `controls`-Attribute
+  - YouTube iframe Untertitel-Parameter (`cc_load_policy`)
+
+- **SemanticHTMLAnalyzer** - Semantische HTML-Struktur
+  - Validierung von Landmark-Elementen (`<main>`, `<nav>`, `<header>`, `<footer>`)
+  - Erkennung von "div-itis" (übermäßige `<div>` Nutzung >40%)
+  - Prüfung korrekte Verwendung von `<button>` vs `<a>`
+  - Validierung von Überschriften in `<section>` Elementen
+  - Überprüfung von Listen-Strukturen
+
+- **Report-System** - Professionelle Accessibility-Reports
+  - `ReportGenerator` Klasse für mehrere Ausgabeformate
+  - **HTML-Reports** mit Compliance-Score (0-100%) und Grades (A+ bis F)
+  - **JSON-Reports** für CI/CD Integration
+  - **Markdown-Reports** für Dokumentation
+  - Detaillierte Statistiken (Critical, Errors, Warnings, Notices)
+  - Report-Speicherung in `storage/app/bfsg-reports/`
+
+- **SPA-Testing Guide** - Umfassende Dokumentation
+  - Neue `SPA-TESTING.md` Dokumentation
+  - Playwright Setup und Installation Anleitung
+  - Browser-Konfiguration (Chromium, Firefox, WebKit)
+  - Timeout und Wait-Selector Beispiele
+  - CI/CD Integration Guides
+
+### Verbessert
+- README.md komplett überarbeitet
+  - Klare Trennung zwischen `bfsg:check` (Full-Featured) und `bfsg:analyze` (SPA Support)
+  - Alle 11 Analyzer dokumentiert (4 neue mit ⭐ NEW Badge)
+  - Report-Generation Sektion mit Beispielen
+  - SPA-Testing Sektion mit Playwright-Anleitung
+  - Config-Beispiel mit allen 11 Analyzern
+- Test-Suite auf 60 Tests erweitert (103 Assertions)
+- Alle Tests angepasst für semantisches HTML mit `<header>`, `<main>`, `<footer>`
+
+### Technische Details
+- 3 neue Analyzer-Klassen (Table, Media, SemanticHTML)
+- Report-System mit HTML/JSON/Markdown Templates
+- Blade-Template für HTML-Reports (`resources/views/reports/html.blade.php`)
+- Integration in `BfsgCheckCommand` für `--format=html` und `--format=json`
+- Compliance-Score Algorithmus mit gewichteten Issue-Typen
+
 ## [1.4.0] - 2025-10-06
 
 ### Hinzugefügt

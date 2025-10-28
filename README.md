@@ -12,11 +12,12 @@ A comprehensive Laravel package for BFSG (Barrierefreiheitsstärkungsgesetz) and
 
 - ✅ **WCAG 2.1 Level AA/AAA Compliance Checking**
 - ✅ **BFSG 2025 Ready** - Full compliance with German accessibility law
-- ✅ **Real-time Analysis** - Check your pages for accessibility issues
-- ✅ **Multiple Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard Navigation, and more
+- ✅ **11 Specialized Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard, Language, Tables, Media, Semantic HTML
+- ✅ **SPA Support** - Test React, Vue, Inertia apps with Playwright browser engine
+- ✅ **Beautiful HTML Reports** - Professional reports with compliance scores and grades
+- ✅ **Multiple Report Formats** - HTML, JSON, Markdown with statistics
 - ✅ **Blade Components** - Pre-built accessible components
 - ✅ **Artisan Commands** - CLI tools for accessibility testing
-- ✅ **Auto-fix Capabilities** - Automatic correction of common issues
 - ✅ **Detailed Reporting** - Comprehensive violation reports with suggestions
 - ✅ **Laravel 12 Support** - Built for the latest Laravel version
 
@@ -57,7 +58,7 @@ return [
     // Enable automatic fixes for simple issues
     'auto_fix' => env('BFSG_AUTO_FIX', false),
 
-    // Active checks to perform
+    // Active checks to perform (all 11 analyzers)
     'checks' => [
         'images' => true,      // Alt text validation
         'forms' => true,       // Form label checking
@@ -66,6 +67,10 @@ return [
         'keyboard' => true,    // Keyboard navigation
         'aria' => true,        // ARIA attributes
         'links' => true,       // Link accessibility
+        'language' => true,    // Language attributes (NEW)
+        'tables' => true,      // Table accessibility (NEW)
+        'media' => true,       // Video/audio captions (NEW)
+        'semantic' => true,    // Semantic HTML structure (NEW)
     ],
 
     // Reporting configuration
@@ -81,7 +86,10 @@ return [
 
 ### Command Line
 
-Check a URL for accessibility issues:
+The package provides two commands:
+
+#### `bfsg:check` - Full-Featured Checker
+For production use with authentication, reports, and database storage:
 
 ```bash
 # Check your application's homepage
@@ -93,8 +101,28 @@ php artisan bfsg:check https://example.com
 # Check with detailed output
 php artisan bfsg:check https://example.com --detailed
 
-# Check with JSON output
+# Generate HTML report with compliance score
+php artisan bfsg:check https://example.com --format=html
+
+# Generate JSON report
 php artisan bfsg:check https://example.com --format=json
+```
+
+#### `bfsg:analyze` - Quick Analysis + SPA Support
+For quick checks and Single Page Applications (React, Vue, Inertia):
+
+```bash
+# Quick server-side analysis
+php artisan bfsg:analyze https://example.com
+
+# Analyze SPAs with real browser rendering (Playwright)
+php artisan bfsg:analyze https://example.com --browser
+
+# Browser with visible window (debugging)
+php artisan bfsg:analyze https://example.com --browser --headless=false
+
+# Adjust timeout for slow-loading SPAs
+php artisan bfsg:analyze https://example.com --browser --timeout=60000
 ```
 
 #### Authentication Support
@@ -168,7 +196,7 @@ Route::middleware(['accessible'])->group(function () {
 });
 ```
 
-## 🔍 Available Analyzers
+## 🔍 Available Analyzers (11 Total)
 
 ### ImageAnalyzer
 - Checks for missing alt attributes
@@ -207,6 +235,97 @@ Route::middleware(['accessible'])->group(function () {
 - Ensures click handlers are keyboard accessible
 - Validates focus management
 - Detects mouse-only event handlers
+
+### LanguageAnalyzer ⭐ NEW
+- Validates `lang` attribute on `<html>` element
+- Checks for valid ISO 639-1 language codes
+- Detects language changes in content
+- Validates `xml:lang` attributes (BFSG §3 requirement)
+
+### TableAnalyzer ⭐ NEW
+- Checks for `<caption>` elements
+- Validates `<th>` with proper `scope` attributes
+- Detects tables without header cells
+- Identifies layout tables vs data tables
+- Validates complex table relationships
+
+### MediaAnalyzer ⭐ NEW
+- Checks videos for captions/subtitles (`<track kind="captions">`)
+- Validates audio transcript references
+- Detects autoplay issues
+- Ensures controls are present
+- Validates YouTube iframe caption parameters
+
+### SemanticHTMLAnalyzer ⭐ NEW
+- Validates landmark elements (`<main>`, `<nav>`, `<header>`, `<footer>`)
+- Detects "div-itis" (excessive div usage)
+- Checks button vs link usage
+- Validates section headings
+- Ensures proper list structures
+
+## 📊 Report Generation
+
+Generate professional accessibility reports in multiple formats:
+
+### HTML Reports
+Beautiful, printable reports with compliance scores and grades:
+
+```bash
+php artisan bfsg:check https://example.com --format=html
+```
+
+Reports include:
+- **Compliance Score** (0-100%) with grade (A+ to F)
+- **Detailed Statistics** (critical, errors, warnings, notices)
+- **Issue Breakdown** by analyzer with severity badges
+- **WCAG Rule References** for each violation
+- **Suggestions** for fixing each issue
+
+Reports are saved to `storage/app/bfsg-reports/`.
+
+### JSON Reports
+Machine-readable format for CI/CD integration:
+
+```bash
+php artisan bfsg:check https://example.com --format=json
+```
+
+### Programmatic Report Generation
+
+```php
+use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
+
+$violations = Bfsg::analyze($html);
+$report = new ReportGenerator($url, $violations);
+
+// Generate HTML report
+$htmlReport = $report->setFormat('html')->generate();
+
+// Or save to file
+$filename = $report->setFormat('html')->saveToFile();
+
+// Get statistics
+$stats = $report->getStats();
+// ['compliance_score' => 85, 'grade' => 'B+', 'total_issues' => 12, ...]
+```
+
+## 📱 Testing Single Page Applications (SPAs)
+
+For React, Vue, Inertia.js, and other SPAs, use browser rendering:
+
+```bash
+# Analyze with Playwright browser engine
+php artisan bfsg:analyze https://spa-app.com --browser
+
+# See full documentation
+```
+
+See [SPA-TESTING.md](SPA-TESTING.md) for complete guide including:
+- Playwright setup and installation
+- Browser configuration (Chromium, Firefox, WebKit)
+- Timeout and wait selectors
+- CI/CD integration
+- Debugging with visible browser
 
 ## 📊 Understanding Violations
 

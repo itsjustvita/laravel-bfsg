@@ -112,6 +112,9 @@ class AnalyzeUrlCommand extends Command
                 'ContrastAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer(),
                 'KeyboardNavigationAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer(),
                 'LanguageAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer(),
+                'TableAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer(),
+                'MediaAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer(),
+                'SemanticHTMLAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer(),
             ];
 
             $results = [

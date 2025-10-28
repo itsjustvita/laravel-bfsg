@@ -10,6 +10,9 @@ use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
 
 class Bfsg
 {
@@ -66,6 +69,18 @@ class Bfsg
 
         if ($checks['language'] ?? true) {
             $this->analyzers['language'] = new LanguageAnalyzer();
+        }
+
+        if ($checks['tables'] ?? true) {
+            $this->analyzers['tables'] = new TableAnalyzer();
+        }
+
+        if ($checks['media'] ?? true) {
+            $this->analyzers['media'] = new MediaAnalyzer();
+        }
+
+        if ($checks['semantic'] ?? true) {
+            $this->analyzers['semantic'] = new SemanticHTMLAnalyzer();
         }
     }
     

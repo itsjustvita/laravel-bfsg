@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 use Illuminate\Console\Command;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
+use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Exception;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Process\PhpExecutableFinder;
@@ -282,31 +283,22 @@ class BfsgCheckCommand extends Command
 
     protected function outputJson(array $violations, string $url): void
     {
-        $output = [
-            'url' => $url,
-            'timestamp' => now()->toIso8601String(),
-            'summary' => [
-                'total_issues' => array_sum(array_map('count', $violations)),
-                'categories' => array_map('count', $violations),
-            ],
-            'violations' => $violations,
-        ];
-
-        $this->line(json_encode($output, JSON_PRETTY_PRINT));
+        $report = new ReportGenerator($url, $violations);
+        $this->line($report->setFormat('json')->generate());
     }
 
     protected function outputHtml(array $violations, string $url): void
     {
-        $html = view('bfsg::report', [
-            'url' => $url,
-            'violations' => $violations,
-            'timestamp' => now(),
-        ])->render();
-
-        $filename = 'bfsg-report-' . now()->format('Y-m-d-His') . '.html';
-        file_put_contents($filename, $html);
+        $report = new ReportGenerator($url, $violations);
+        $filename = $report->setFormat('html')->saveToFile();
 
         $this->info("📄 HTML report saved to: {$filename}");
+
+        // Show quick stats
+        $stats = $report->getStats();
+        $this->newLine();
+        $this->info("Compliance Score: {$stats['compliance_score']}% (Grade: {$stats['grade']})");
+        $this->info("Total Issues: {$stats['total_issues']} (Critical: {$stats['critical']}, Errors: {$stats['errors']}, Warnings: {$stats['warnings']})");
     }
 
     protected function saveResults(string $url, array $violations): void

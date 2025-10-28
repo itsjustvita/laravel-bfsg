@@ -39,6 +39,9 @@ return [
         'links' => true,       // Link accessibility
         'keyboard' => true,    // Keyboard navigation
         'language' => true,    // Language attributes (BFSG §3 requirement)
+        'tables' => true,      // Table accessibility (captions, th, scope)
+        'media' => true,       // Video/Audio accessibility (captions, transcripts)
+        'semantic' => true,    // Semantic HTML structure (main, nav, article, etc.)
     ],
     
     /*

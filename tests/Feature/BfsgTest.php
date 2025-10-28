@@ -28,9 +28,13 @@ class BfsgTest extends TestCase
     public function test_returns_empty_array_for_accessible_html(): void
     {
         $html = '<!DOCTYPE html><html lang="en"><body>
-            <a href="#main" class="sr-only">Skip to main content</a>
-            <h1>Main Heading</h1>
+            <header>
+                <nav>
+                    <a href="#main" class="sr-only">Skip to main content</a>
+                </nav>
+            </header>
             <main id="main">
+                <h1>Main Heading</h1>
                 <img src="test.jpg" alt="Test image">
                 <form aria-label="Contact Form">
                     <label for="email">Email</label>
@@ -38,6 +42,9 @@ class BfsgTest extends TestCase
                 </form>
                 <a href="/about">Learn more about us</a>
             </main>
+            <footer>
+                <p>Footer content</p>
+            </footer>
         </body></html>';
 
         $bfsg = new Bfsg();
@@ -49,11 +56,14 @@ class BfsgTest extends TestCase
     public function test_correctly_identifies_accessible_content(): void
     {
         $accessibleHtml = '<!DOCTYPE html><html lang="en"><body>
-            <a href="#main">Skip to main</a>
-            <h1>Title</h1>
+            <header>
+                <nav><a href="#main">Skip to main</a></nav>
+            </header>
             <main id="main">
+                <h1>Title</h1>
                 <img src="test.jpg" alt="Description">
             </main>
+            <footer><p>Footer</p></footer>
         </body></html>';
 
         $inaccessibleHtml = '<!DOCTYPE html><html lang="en"><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
