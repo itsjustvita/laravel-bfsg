@@ -5,6 +5,19 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2025-10-28
+
+### Hinzugefügt
+- **Ignored Selectors Configuration** - Filter third-party widgets from analysis
+  - New `ignored_selectors` config option for CSS selectors
+  - BrowserAnalyzer removes ignored elements before accessibility analysis
+  - Pre-configured for Chatbase and other common widgets
+  - Useful for analytics scripts, chat widgets, and third-party iframes
+
+### Verbessert
+- BrowserAnalyzer now respects `ignored_selectors` config
+- Cleaner analysis results by excluding non-content elements
+
 ## [1.5.0] - 2025-10-28
 
 ### Hinzugefügt

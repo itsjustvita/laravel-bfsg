@@ -83,4 +83,22 @@ return [
         'sanctum_enabled' => false,
         'timeout' => 30,
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Ignored Selectors
+    |--------------------------------------------------------------------------
+    |
+    | CSS selectors for elements that should be removed from the DOM before
+    | accessibility analysis. Useful for third-party widgets, chat widgets,
+    | analytics scripts, etc.
+    |
+    */
+    'ignored_selectors' => [
+        '#chatbase-bubble-button',
+        '#chatbase-bubble-window',
+        '[data-chatbase]',
+        'script[src*="chatbase"]',
+        'iframe[src*="chatbase"]',
+    ],
 ];

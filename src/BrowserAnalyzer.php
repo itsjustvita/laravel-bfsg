@@ -84,6 +84,10 @@ class BrowserAnalyzer
         $scriptPath = sys_get_temp_dir().'/bfsg_browser_'.uniqid().'.js';
         $playwrightPath = $projectRoot.'/node_modules/playwright';
 
+        // Get ignored selectors from config
+        $ignoredSelectors = config('bfsg.ignored_selectors', []);
+        $selectorsJson = json_encode($ignoredSelectors);
+
         $script = <<<JS
 const { chromium, firefox, webkit } = require('{$playwrightPath}');
 
@@ -108,6 +112,14 @@ const { chromium, firefox, webkit } = require('{$playwrightPath}');
 
         // Wait a bit more for any dynamic content
         await page.waitForTimeout(1000);
+
+        // Remove ignored elements from the DOM
+        const ignoredSelectors = {$selectorsJson};
+        for (const selector of ignoredSelectors) {
+            await page.evaluate((sel) => {
+                document.querySelectorAll(sel).forEach(el => el.remove());
+            }, selector);
+        }
 
         // Get the full page HTML
         const html = await page.content();
