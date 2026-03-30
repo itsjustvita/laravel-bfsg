@@ -12,12 +12,12 @@ class CssParserTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->parser = new CssParser();
+        $this->parser = new CssParser;
     }
 
     protected function parseDom(string $html): \DOMDocument
     {
-        $dom = new \DOMDocument();
+        $dom = new \DOMDocument;
         @$dom->loadHTML($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
 
         return $dom;

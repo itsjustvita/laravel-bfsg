@@ -9,6 +9,7 @@ use DOMXPath;
 class CssParser
 {
     protected array $rules = [];
+
     protected DOMXPath $xpath;
 
     /**
