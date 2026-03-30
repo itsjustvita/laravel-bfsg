@@ -5,6 +5,28 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-30
+
+### Added
+- **5 new WCAG 2.1 analyzers**: PageTitleAnalyzer (2.4.2), InputPurposeAnalyzer (1.3.5), FocusAnalyzer (2.4.7), ErrorHandlingAnalyzer (3.3.1/3.3.3), StatusMessageAnalyzer (4.1.3)
+- **CSS-based contrast analysis**: New CssParser service that parses `<style>` blocks, resolves cascade/specificity/inheritance for accurate color contrast checking beyond inline styles
+- **PDF report generation**: Full PDF support via barryvdh/laravel-dompdf with `--format=pdf` option
+- **Database persistence**: BfsgReport and BfsgViolation Eloquent models with publishable migration for tracking violations over time
+- **`bfsg:history` command**: View stored reports, filter by URL, show score trends, cleanup old reports
+- **Laravel 13 support**
+- Comprehensive test suite: 215 tests, 424 assertions (up from 60 tests)
+
+### Changed
+- **AuthenticatedHttpClient** rewritten from `file_get_contents`/`stream_context_create` to Laravel's Http facade for better testability and reliability
+- **BfsgCheckCommand** and **AnalyzeUrlCommand** now use Laravel Http facade
+- **ContrastAnalyzer** extended to check CSS classes and inherited styles, not just inline styles
+- **Middleware `storeViolations()`** fully implemented with score calculation
+- **`saveResults()` in BfsgCheckCommand** fully implemented
+
+### Fixed
+- All previously skipped tests now pass
+- BrowserAnalyzer temp file cleanup guaranteed via try/finally
+
 ## [1.5.1] - 2025-10-28
 
 ### Hinzugefügt
