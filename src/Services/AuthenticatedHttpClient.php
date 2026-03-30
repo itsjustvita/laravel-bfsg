@@ -3,6 +3,8 @@
 namespace ItsJustVita\LaravelBfsg\Services;
 
 use Exception;
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Http;
 
 class AuthenticatedHttpClient
 {
@@ -34,55 +36,38 @@ class AuthenticatedHttpClient
         $isJsonAuth = $customFieldNames['json_auth'] ?? false;
 
         if ($isJsonAuth) {
-            $headers = [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'X-Requested-With: XMLHttpRequest',
-            ];
-            $content = json_encode($postData);
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'X-Requested-With' => 'XMLHttpRequest',
+            ])->timeout(30)->post($loginUrl, $postData);
         } else {
-            $headers = [
-                'Content-Type: application/x-www-form-urlencoded',
-                'Accept: text/html,application/xhtml+xml',
-            ];
-            $content = http_build_query($postData);
+            $response = Http::asForm()->withHeaders([
+                'Accept' => 'text/html,application/xhtml+xml',
+            ])->timeout(30)->post($loginUrl, $postData);
         }
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => $headers,
-                'content' => $content,
-                'follow_location' => true,
-                'timeout' => 30,
-                'ignore_errors' => true, // Get response even on HTTP errors
-            ],
-        ]);
-
-        $response = @file_get_contents($loginUrl, false, $context);
-
-        if ($response === false) {
+        if ($response->failed() && $response->status() >= 500) {
             throw new Exception('Failed to authenticate: Could not connect to login URL');
         }
 
         // Extract cookies from response headers
-        $this->extractCookiesFromHeaders($http_response_header);
+        $this->extractCookiesFromResponse($response);
 
         // For JSON responses, check for token
         if ($isJsonAuth) {
-            $responseData = json_decode($response, true);
+            $responseData = $response->json();
 
             // Check for JWT/Bearer token in response
             if (isset($responseData['token'])) {
                 $this->bearerToken = $responseData['token'];
-                $this->headers[] = "Authorization: Bearer {$responseData['token']}";
+                $this->headers['Authorization'] = "Bearer {$responseData['token']}";
                 return true;
             }
 
             // Check for access_token (OAuth style)
             if (isset($responseData['access_token'])) {
                 $this->bearerToken = $responseData['access_token'];
-                $this->headers[] = "Authorization: Bearer {$responseData['access_token']}";
+                $this->headers['Authorization'] = "Bearer {$responseData['access_token']}";
                 return true;
             }
         }
@@ -97,7 +82,7 @@ class AuthenticatedHttpClient
     public function authenticateWithBearerToken(string $token, string $type = 'Bearer'): void
     {
         $this->bearerToken = $token;
-        $this->headers[] = "Authorization: {$type} {$token}";
+        $this->headers['Authorization'] = "{$type} {$token}";
     }
 
     /**
@@ -113,7 +98,7 @@ class AuthenticatedHttpClient
      */
     public function authenticateWithApiKey(string $apiKey, string $headerName = 'X-API-Key'): void
     {
-        $this->headers[] = "{$headerName}: {$apiKey}";
+        $this->headers[$headerName] = $apiKey;
     }
 
     /**
@@ -122,7 +107,7 @@ class AuthenticatedHttpClient
     public function authenticateWithOAuth2(string $accessToken): void
     {
         $this->bearerToken = $accessToken;
-        $this->headers[] = "Authorization: Bearer {$accessToken}";
+        $this->headers['Authorization'] = "Bearer {$accessToken}";
     }
 
     /**
@@ -131,7 +116,7 @@ class AuthenticatedHttpClient
     public function authenticateWithCustomHeaders(array $headers): void
     {
         foreach ($headers as $header => $value) {
-            $this->headers[] = "{$header}: {$value}";
+            $this->headers[$header] = $value;
         }
     }
 
@@ -150,20 +135,14 @@ class AuthenticatedHttpClient
     public function authenticateWithSanctum(string $apiUrl, string $email, string $password): ?string
     {
         // First get CSRF token
-        $csrfContext = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'header' => [
-                    'Accept: application/json',
-                    'X-Requested-With: XMLHttpRequest',
-                ],
-                'timeout' => 30,
-            ],
-        ]);
-
         $csrfUrl = rtrim($apiUrl, '/') . '/sanctum/csrf-cookie';
-        @file_get_contents($csrfUrl, false, $csrfContext);
-        $this->extractCookiesFromHeaders($http_response_header);
+
+        $csrfResponse = Http::withHeaders([
+            'Accept' => 'application/json',
+            'X-Requested-With' => 'XMLHttpRequest',
+        ])->timeout(30)->get($csrfUrl);
+
+        $this->extractCookiesFromResponse($csrfResponse);
 
         // Get XSRF token from cookies
         $xsrfToken = $this->cookies['XSRF-TOKEN'] ?? null;
@@ -178,32 +157,25 @@ class AuthenticatedHttpClient
             'password' => $password,
         ];
 
-        $loginContext = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => [
-                    'Content-Type: application/json',
-                    'Accept: application/json',
-                    'X-Requested-With: XMLHttpRequest',
-                    'X-XSRF-TOKEN: ' . urldecode($xsrfToken),
-                    'Cookie: ' . $this->getCookieString(),
-                ],
-                'content' => json_encode($loginData),
-                'timeout' => 30,
-            ],
-        ]);
+        $cookieHeader = $this->getCookieString();
 
         $loginUrl = rtrim($apiUrl, '/') . '/login';
-        $response = @file_get_contents($loginUrl, false, $loginContext);
 
-        if ($response === false) {
+        $loginResponse = Http::withHeaders([
+            'Accept' => 'application/json',
+            'X-Requested-With' => 'XMLHttpRequest',
+            'X-XSRF-TOKEN' => urldecode($xsrfToken),
+            'Cookie' => $cookieHeader,
+        ])->timeout(30)->post($loginUrl, $loginData);
+
+        if ($loginResponse->failed()) {
             throw new Exception('Failed to authenticate with Sanctum');
         }
 
-        $this->extractCookiesFromHeaders($http_response_header);
+        $this->extractCookiesFromResponse($loginResponse);
 
         // For API token based Sanctum
-        $responseData = json_decode($response, true);
+        $responseData = $loginResponse->json();
         if (isset($responseData['token'])) {
             $this->bearerToken = $responseData['token'];
             return $responseData['token'];
@@ -215,55 +187,63 @@ class AuthenticatedHttpClient
     /**
      * Fetch a URL with authentication
      */
-    public function fetchAuthenticatedUrl(string $url): string
+    public function fetchAuthenticatedUrl(string $url, bool $verifySsl = true): string
     {
-        $headers = $this->headers;
+        $request = Http::withHeaders($this->headers)->timeout(30);
 
-        if ($this->hasCookies()) {
-            $headers[] = 'Cookie: ' . $this->getCookieString();
+        if (!$verifySsl) {
+            $request = $request->withoutVerifying();
         }
 
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'GET',
-                'header' => $headers,
-                'timeout' => 30,
-                'follow_location' => true,
-            ],
-        ]);
+        if ($this->hasCookies()) {
+            $request = $request->withHeaders([
+                'Cookie' => $this->getCookieString(),
+            ]);
+        }
 
-        $content = @file_get_contents($url, false, $context);
+        $response = $request->get($url);
 
-        if ($content === false) {
+        if ($response->failed()) {
             throw new Exception("Failed to fetch authenticated URL: {$url}");
         }
 
-        return $content;
+        return $response->body();
     }
 
     /**
-     * Extract cookies from HTTP response headers
+     * Extract cookies from HTTP response
      */
-    protected function extractCookiesFromHeaders(?array $headers): void
+    protected function extractCookiesFromResponse(Response $response): void
     {
-        if (!$headers) {
-            return;
+        $setCookieHeaders = $response->header('Set-Cookie');
+
+        if (empty($setCookieHeaders)) {
+            // Try getting all headers - some responses have multiple Set-Cookie headers
+            $headers = $response->headers();
+            $setCookieHeaders = $headers['Set-Cookie'] ?? [];
         }
 
-        foreach ($headers as $header) {
-            if (stripos($header, 'Set-Cookie:') === 0) {
-                $cookieString = substr($header, 12);
-                $parts = explode(';', $cookieString);
-                $cookie = trim($parts[0]);
+        if (!is_array($setCookieHeaders)) {
+            $setCookieHeaders = [$setCookieHeaders];
+        }
 
-                if (strpos($cookie, '=') !== false) {
-                    list($name, $value) = explode('=', $cookie, 2);
-                    $this->cookies[trim($name)] = trim($value);
+        foreach ($setCookieHeaders as $cookieString) {
+            if (empty($cookieString)) {
+                continue;
+            }
 
-                    // Check for Laravel session cookie
-                    if (stripos($name, 'laravel_session') !== false || $name === 'PHPSESSID') {
-                        $this->sessionCookie = $cookie;
-                    }
+            $parts = explode(';', $cookieString);
+            $cookie = trim($parts[0]);
+
+            if (strpos($cookie, '=') !== false) {
+                [$name, $value] = explode('=', $cookie, 2);
+                $name = trim($name);
+                $value = trim($value);
+                $this->cookies[$name] = $value;
+
+                // Check for Laravel session cookie
+                if (stripos($name, 'laravel_session') !== false || $name === 'PHPSESSID') {
+                    $this->sessionCookie = $cookie;
                 }
             }
         }
