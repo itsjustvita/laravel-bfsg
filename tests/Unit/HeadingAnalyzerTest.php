@@ -11,10 +11,10 @@ class HeadingAnalyzerTest extends TestCase
     public function test_detects_missing_h1(): void
     {
         $html = '<h2>Section</h2><p>Content</p>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new HeadingAnalyzer();
+        $analyzer = new HeadingAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -26,10 +26,10 @@ class HeadingAnalyzerTest extends TestCase
     public function test_detects_broken_heading_hierarchy(): void
     {
         $html = '<h1>Main</h1><h3>Skipped h2</h3>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new HeadingAnalyzer();
+        $analyzer = new HeadingAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -40,10 +40,10 @@ class HeadingAnalyzerTest extends TestCase
     public function test_accepts_proper_heading_hierarchy(): void
     {
         $html = '<h1>Main</h1><h2>Section</h2><h3>Subsection</h3>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new HeadingAnalyzer();
+        $analyzer = new HeadingAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -53,10 +53,10 @@ class HeadingAnalyzerTest extends TestCase
     public function test_detects_empty_headings(): void
     {
         $html = '<h1></h1><h2>   </h2>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new HeadingAnalyzer();
+        $analyzer = new HeadingAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -67,10 +67,10 @@ class HeadingAnalyzerTest extends TestCase
     public function test_warns_about_multiple_h1_tags(): void
     {
         $html = '<h1>First</h1><h1>Second</h1>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new HeadingAnalyzer();
+        $analyzer = new HeadingAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 

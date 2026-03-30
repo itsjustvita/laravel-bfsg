@@ -2,14 +2,14 @@
 
 namespace ItsJustVita\LaravelBfsg\Commands;
 
+use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
-use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
-use Exception;
-use Symfony\Component\Process\Process;
+use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
 use Symfony\Component\Process\PhpExecutableFinder;
+use Symfony\Component\Process\Process;
 
 class BfsgCheckCommand extends Command
 {
@@ -40,7 +40,7 @@ class BfsgCheckCommand extends Command
     public function __construct()
     {
         parent::__construct();
-        $this->httpClient = new AuthenticatedHttpClient();
+        $this->httpClient = new AuthenticatedHttpClient;
     }
 
     public function handle()
@@ -84,7 +84,8 @@ class BfsgCheckCommand extends Command
             return empty($violations) ? Command::SUCCESS : Command::FAILURE;
 
         } catch (Exception $e) {
-            $this->error("❌ Error: " . $e->getMessage());
+            $this->error('❌ Error: '.$e->getMessage());
+
             return Command::FAILURE;
         }
     }
@@ -96,6 +97,7 @@ class BfsgCheckCommand extends Command
             $this->info('🔐 Authenticating with JWT token...');
             $this->httpClient->authenticateWithJWT($jwt);
             $this->info('✅ JWT authentication configured');
+
             return;
         }
 
@@ -104,6 +106,7 @@ class BfsgCheckCommand extends Command
             $this->info('🔐 Authenticating with bearer token...');
             $this->httpClient->authenticateWithBearerToken($bearer);
             $this->info('✅ Bearer token authentication configured');
+
             return;
         }
 
@@ -113,6 +116,7 @@ class BfsgCheckCommand extends Command
             $headerName = $this->option('api-key-header') ?? 'X-API-Key';
             $this->httpClient->authenticateWithApiKey($apiKey, $headerName);
             $this->info('✅ API key authentication configured');
+
             return;
         }
 
@@ -124,9 +128,10 @@ class BfsgCheckCommand extends Command
                 throw new Exception('Session format must be: name=value');
             }
 
-            list($name, $value) = explode('=', $session, 2);
+            [$name, $value] = explode('=', $session, 2);
             $this->httpClient->authenticateWithSessionCookie($name, $value);
             $this->info('✅ Session cookie authentication configured');
+
             return;
         }
 
@@ -135,7 +140,7 @@ class BfsgCheckCommand extends Command
             $email = $this->option('email') ?? $this->ask('Email');
             $password = $this->option('password') ?? $this->secret('Password');
 
-            if (!$email || !$password) {
+            if (! $email || ! $password) {
                 throw new Exception('Email and password are required for authentication');
             }
 
@@ -152,8 +157,8 @@ class BfsgCheckCommand extends Command
             } else {
                 // Regular form authentication with custom field support
                 $loginUrl = $this->option('login-url')
-                    ? $baseUrl . '/' . ltrim($this->option('login-url'), '/')
-                    : $baseUrl . '/login';
+                    ? $baseUrl.'/'.ltrim($this->option('login-url'), '/')
+                    : $baseUrl.'/login';
 
                 $customFields = [];
                 if ($this->option('username-field')) {
@@ -179,7 +184,7 @@ class BfsgCheckCommand extends Command
                     $customFields
                 );
 
-                if (!$success && !$this->option('json-auth')) {
+                if (! $success && ! $this->option('json-auth')) {
                     throw new Exception('Authentication failed - no session cookie received');
                 }
 
@@ -193,6 +198,7 @@ class BfsgCheckCommand extends Command
         // Use authenticated client if we have authentication
         if ($this->option('auth') || $this->option('bearer') || $this->option('session')) {
             $verifySsl = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+
             return $this->httpClient->fetchAuthenticatedUrl($url, $verifySsl);
         }
 
@@ -225,6 +231,7 @@ class BfsgCheckCommand extends Command
     {
         if (empty($violations)) {
             $this->info('✅ No accessibility issues found!');
+
             return;
         }
 
@@ -299,10 +306,10 @@ class BfsgCheckCommand extends Command
         $port = $this->findAvailablePort();
 
         // Get the PHP executable
-        $phpFinder = new PhpExecutableFinder();
+        $phpFinder = new PhpExecutableFinder;
         $phpBinary = $phpFinder->find();
 
-        if (!$phpBinary) {
+        if (! $phpBinary) {
             throw new Exception('Could not find PHP binary');
         }
 
@@ -316,7 +323,7 @@ class BfsgCheckCommand extends Command
             "127.0.0.1:{$port}",
             '-t',
             $publicPath,
-            base_path('server.php')
+            base_path('server.php'),
         ];
 
         $serverProcess = new Process($serverCommand);
@@ -330,8 +337,8 @@ class BfsgCheckCommand extends Command
             // Parse the original URL to get the path
             $parsedUrl = parse_url($url);
             $path = $parsedUrl['path'] ?? '/';
-            $query = isset($parsedUrl['query']) ? '?' . $parsedUrl['query'] : '';
-            $fragment = isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '';
+            $query = isset($parsedUrl['query']) ? '?'.$parsedUrl['query'] : '';
+            $fragment = isset($parsedUrl['fragment']) ? '#'.$parsedUrl['fragment'] : '';
 
             // Build the local server URL
             $localUrl = "http://127.0.0.1:{$port}{$path}{$query}{$fragment}";

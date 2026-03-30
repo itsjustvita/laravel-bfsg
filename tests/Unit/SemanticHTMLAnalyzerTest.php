@@ -13,12 +13,12 @@ class SemanticHTMLAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new SemanticHTMLAnalyzer();
+        $this->analyzer = new SemanticHTMLAnalyzer;
     }
 
     protected function analyzeHtml(string $html): array
     {
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         return $this->analyzer->analyze($dom);

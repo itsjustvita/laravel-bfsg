@@ -2,8 +2,8 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class CommandsTest extends TestCase
 {
@@ -35,14 +35,14 @@ class CommandsTest extends TestCase
     public function test_bfsg_check_command_with_json_format()
     {
         $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
-            . '<header><nav><a href="#main">Skip to content</a></nav></header>'
-            . '<main id="main"><h1>Welcome</h1>'
-            . '<img src="photo.jpg" alt="A descriptive alt text">'
-            . '<form aria-label="Contact"><label for="email">Email</label>'
-            . '<input type="email" id="email" name="email"></form>'
-            . '<a href="/about">Learn more about our company</a>'
-            . '</main><footer><p>Footer content</p></footer>'
-            . '</body></html>';
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Welcome</h1>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email"></form>'
+            .'<a href="/about">Learn more about our company</a>'
+            .'</main><footer><p>Footer content</p></footer>'
+            .'</body></html>';
 
         Http::fake([
             'http://example.com/*' => Http::response($html, 200),
@@ -83,14 +83,14 @@ class CommandsTest extends TestCase
     public function test_bfsg_check_command_success_with_accessible_html()
     {
         $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
-            . '<header><nav><a href="#main">Skip to content</a></nav></header>'
-            . '<main id="main"><h1>Welcome</h1>'
-            . '<img src="photo.jpg" alt="A descriptive alt text">'
-            . '<form aria-label="Contact"><label for="email">Email</label>'
-            . '<input type="email" id="email" name="email"></form>'
-            . '<a href="/about">Learn more about our company</a>'
-            . '</main><footer><p>Footer content</p></footer>'
-            . '</body></html>';
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Welcome</h1>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email"></form>'
+            .'<a href="/about">Learn more about our company</a>'
+            .'</main><footer><p>Footer content</p></footer>'
+            .'</body></html>';
 
         Http::fake([
             'http://example.com/*' => Http::response($html, 200),
@@ -103,7 +103,7 @@ class CommandsTest extends TestCase
     public function test_bfsg_analyze_command_server_side_mode()
     {
         $html = '<!DOCTYPE html><html lang="en"><head><title>Test</title></head>'
-            . '<body><h1>Title</h1></body></html>';
+            .'<body><h1>Title</h1></body></html>';
 
         Http::fake([
             'http://example.com/*' => Http::response($html, 200),
@@ -112,7 +112,7 @@ class CommandsTest extends TestCase
         $this->artisan('bfsg:analyze', [
             'url' => 'http://example.com/page',
         ])->assertSuccessful()
-          ->expectsOutputToContain('Using server-side analysis');
+            ->expectsOutputToContain('Using server-side analysis');
     }
 
     public function test_bfsg_analyze_command_browser_mode()
@@ -126,14 +126,14 @@ class CommandsTest extends TestCase
     public function test_bfsg_check_with_bearer_auth()
     {
         $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
-            . '<header><nav><a href="#main">Skip to content</a></nav></header>'
-            . '<main id="main"><h1>Welcome</h1>'
-            . '<img src="photo.jpg" alt="A descriptive alt text">'
-            . '<form aria-label="Contact"><label for="email">Email</label>'
-            . '<input type="email" id="email" name="email"></form>'
-            . '<a href="/about">Learn more about our company</a>'
-            . '</main><footer><p>Footer content</p></footer>'
-            . '</body></html>';
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Welcome</h1>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email"></form>'
+            .'<a href="/about">Learn more about our company</a>'
+            .'</main><footer><p>Footer content</p></footer>'
+            .'</body></html>';
 
         Http::fake([
             'http://example.com/*' => Http::response($html, 200),

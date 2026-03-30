@@ -18,10 +18,10 @@ class BfsgServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(
             __DIR__.'/../config/bfsg.php', 'bfsg'
         );
-        
+
         // Register main class as singleton
         $this->app->singleton('bfsg', function ($app) {
-            return new Bfsg();
+            return new Bfsg;
         });
     }
 
@@ -36,22 +36,22 @@ class BfsgServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../config/bfsg.php' => config_path('bfsg.php'),
             ], 'bfsg-config');
-            
+
             // Publish views
             $this->publishes([
                 __DIR__.'/../resources/views' => resource_path('views/vendor/bfsg'),
             ], 'bfsg-views');
-            
+
             // Register commands
             $this->commands([
                 BfsgCheckCommand::class,
                 AnalyzeUrlCommand::class,
             ]);
         }
-        
+
         // Load views
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfsg');
-        
+
         // Register Blade components
         $this->loadViewComponentsAs('bfsg', [
             AccessibleImage::class,

@@ -2,28 +2,29 @@
 
 namespace ItsJustVita\LaravelBfsg;
 
-use ItsJustVita\LaravelBfsg\Analyzers\ImageAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\FormAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\ImageAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
 
 class Bfsg
 {
     protected array $analyzers = [];
+
     protected array $violations = [];
-    
+
     public function __construct()
     {
         $this->registerDefaultAnalyzers();
     }
-    
+
     /**
      * Register the default analyzers
      */
@@ -40,80 +41,81 @@ class Bfsg
         }
 
         if ($checks['images'] ?? true) {
-            $this->analyzers['images'] = new ImageAnalyzer();
+            $this->analyzers['images'] = new ImageAnalyzer;
         }
 
         if ($checks['forms'] ?? true) {
-            $this->analyzers['forms'] = new FormAnalyzer();
+            $this->analyzers['forms'] = new FormAnalyzer;
         }
 
         if ($checks['headings'] ?? true) {
-            $this->analyzers['headings'] = new HeadingAnalyzer();
+            $this->analyzers['headings'] = new HeadingAnalyzer;
         }
 
         if ($checks['contrast'] ?? true) {
-            $this->analyzers['contrast'] = new ContrastAnalyzer();
+            $this->analyzers['contrast'] = new ContrastAnalyzer;
         }
 
         if ($checks['aria'] ?? true) {
-            $this->analyzers['aria'] = new AriaAnalyzer();
+            $this->analyzers['aria'] = new AriaAnalyzer;
         }
 
         if ($checks['links'] ?? true) {
-            $this->analyzers['links'] = new LinkAnalyzer();
+            $this->analyzers['links'] = new LinkAnalyzer;
         }
 
         if ($checks['keyboard'] ?? true) {
-            $this->analyzers['keyboard'] = new KeyboardNavigationAnalyzer();
+            $this->analyzers['keyboard'] = new KeyboardNavigationAnalyzer;
         }
 
         if ($checks['language'] ?? true) {
-            $this->analyzers['language'] = new LanguageAnalyzer();
+            $this->analyzers['language'] = new LanguageAnalyzer;
         }
 
         if ($checks['tables'] ?? true) {
-            $this->analyzers['tables'] = new TableAnalyzer();
+            $this->analyzers['tables'] = new TableAnalyzer;
         }
 
         if ($checks['media'] ?? true) {
-            $this->analyzers['media'] = new MediaAnalyzer();
+            $this->analyzers['media'] = new MediaAnalyzer;
         }
 
         if ($checks['semantic'] ?? true) {
-            $this->analyzers['semantic'] = new SemanticHTMLAnalyzer();
+            $this->analyzers['semantic'] = new SemanticHTMLAnalyzer;
         }
     }
-    
+
     /**
      * Analyze HTML for accessibility
      */
     public function analyze(string $html): array
     {
         $this->violations = [];
-        
-        $dom = new \DOMDocument();
+
+        $dom = new \DOMDocument;
         @$dom->loadHTML($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-        
+
         foreach ($this->analyzers as $name => $analyzer) {
             $results = $analyzer->analyze($dom);
             // Extract issues from the result array
-            if (!empty($results['issues'])) {
+            if (! empty($results['issues'])) {
                 $this->violations[$name] = $results['issues'];
             }
         }
-        
+
         return $this->violations;
     }
-    
+
     /**
      * Check if HTML is accessible
      */
     public function isAccessible(string $html): bool
     {
         $violations = $this->analyze($html);
+
         return empty($violations);
     }
-    
+
     /**
      * Get all violations
      */

@@ -175,7 +175,7 @@ class ReportGeneratorTest extends TestCase
         $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
         $generator->setFormat('json');
 
-        $tempPath = sys_get_temp_dir() . '/bfsg_test_report_' . uniqid() . '.json';
+        $tempPath = sys_get_temp_dir().'/bfsg_test_report_'.uniqid().'.json';
 
         try {
             $savedPath = $generator->saveToFile($tempPath);

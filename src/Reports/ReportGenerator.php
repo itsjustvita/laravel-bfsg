@@ -7,8 +7,11 @@ use Illuminate\Support\Facades\View;
 class ReportGenerator
 {
     protected array $violations = [];
+
     protected string $url = '';
+
     protected string $format = 'html';
+
     protected array $stats = [];
 
     /**
@@ -27,6 +30,7 @@ class ReportGenerator
     public function setFormat(string $format): self
     {
         $this->format = $format;
+
         return $this;
     }
 
@@ -47,7 +51,7 @@ class ReportGenerator
     /**
      * Save report to file
      */
-    public function saveToFile(string $path = null): string
+    public function saveToFile(?string $path = null): string
     {
         if ($path === null) {
             $timestamp = now()->format('Y-m-d_His');
@@ -56,7 +60,7 @@ class ReportGenerator
         }
 
         $directory = dirname($path);
-        if (!is_dir($directory)) {
+        if (! is_dir($directory)) {
             mkdir($directory, 0755, true);
         }
 
@@ -106,7 +110,7 @@ class ReportGenerator
     {
         $md = "# BFSG Accessibility Report\n\n";
         $md .= "**URL:** {$this->url}\n";
-        $md .= "**Date:** " . now()->format('Y-m-d H:i:s') . "\n";
+        $md .= '**Date:** '.now()->format('Y-m-d H:i:s')."\n";
         $md .= "**Compliance Score:** {$this->stats['compliance_score']}%\n\n";
 
         $md .= "## Summary\n\n";
@@ -118,13 +122,14 @@ class ReportGenerator
 
         if ($this->stats['total_issues'] === 0) {
             $md .= "✅ **No accessibility issues found!**\n\n";
+
             return $md;
         }
 
         $md .= "## Issues by Category\n\n";
 
         foreach ($this->violations as $category => $issues) {
-            $md .= "### " . ucfirst($category) . " ({$this->stats['by_category'][$category]} issues)\n\n";
+            $md .= '### '.ucfirst($category)." ({$this->stats['by_category'][$category]} issues)\n\n";
 
             foreach ($issues as $idx => $issue) {
                 $severity = $issue['severity'] ?? 'notice';

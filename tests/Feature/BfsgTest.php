@@ -16,7 +16,7 @@ class BfsgTest extends TestCase
             <a href="#">Click here</a>
         </body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($html);
 
         $this->assertArrayHasKey('images', $violations);
@@ -47,7 +47,7 @@ class BfsgTest extends TestCase
             </footer>
         </body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($html);
 
         $this->assertEmpty($violations);
@@ -68,7 +68,7 @@ class BfsgTest extends TestCase
 
         $inaccessibleHtml = '<!DOCTYPE html><html lang="en"><body><img src="test.jpg"><h3>Wrong heading level</h3></body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
 
         $this->assertTrue($bfsg->isAccessible($accessibleHtml));
         $this->assertFalse($bfsg->isAccessible($inaccessibleHtml));
@@ -78,7 +78,7 @@ class BfsgTest extends TestCase
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $bfsg->analyze($html);
         $violations = $bfsg->getViolations();
 

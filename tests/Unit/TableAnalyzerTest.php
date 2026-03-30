@@ -13,12 +13,12 @@ class TableAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new TableAnalyzer();
+        $this->analyzer = new TableAnalyzer;
     }
 
     protected function analyzeHtml(string $html): array
     {
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         return $this->analyzer->analyze($dom);

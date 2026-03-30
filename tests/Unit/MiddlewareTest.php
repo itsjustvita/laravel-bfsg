@@ -2,11 +2,11 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use ItsJustVita\LaravelBfsg\Middleware\CheckAccessibility;
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
+use ItsJustVita\LaravelBfsg\Middleware\CheckAccessibility;
+use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class MiddlewareTest extends TestCase
 {
@@ -26,7 +26,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/test', 'POST');
         $response = new Response('<html><body><img src="test.jpg"></body></html>', 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -39,7 +39,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/test', 'GET');
         $response = new Response('{"key": "value"}', 200, ['Content-Type' => 'application/json']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -54,7 +54,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/test', 'GET');
         $response = new Response('<html><body><img src="test.jpg"></body></html>', 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -69,7 +69,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/admin/dashboard', 'GET');
         $response = new Response('<html><body><img src="test.jpg"></body></html>', 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -85,7 +85,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/test', 'GET');
         $response = new Response($html, 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -102,7 +102,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/test', 'GET');
         $response = new Response($html, 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -124,7 +124,7 @@ class MiddlewareTest extends TestCase
         $request = Request::create('/test', 'GET');
         $response = new Response($html, 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $middleware->handle($request, function () use ($response) {
             return $response;
         });
@@ -135,20 +135,20 @@ class MiddlewareTest extends TestCase
         config()->set('app.debug', true);
 
         $html = '<!DOCTYPE html><html lang="en"><head><title>Test</title></head><body>'
-            . '<a href="#main" class="skip-link">Skip to main content</a>'
-            . '<header><h1>Page Title</h1></header>'
-            . '<nav><a href="/about">About us</a></nav>'
-            . '<main id="main">'
-            . '<p>Some accessible content.</p>'
-            . '<img src="photo.jpg" alt="A descriptive alt text">'
-            . '</main>'
-            . '<footer><p>Footer content</p></footer>'
-            . '</body></html>';
+            .'<a href="#main" class="skip-link">Skip to main content</a>'
+            .'<header><h1>Page Title</h1></header>'
+            .'<nav><a href="/about">About us</a></nav>'
+            .'<main id="main">'
+            .'<p>Some accessible content.</p>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'</main>'
+            .'<footer><p>Footer content</p></footer>'
+            .'</body></html>';
 
         $request = Request::create('/test', 'GET');
         $response = new Response($html, 200, ['Content-Type' => 'text/html']);
 
-        $middleware = new CheckAccessibility();
+        $middleware = new CheckAccessibility;
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });

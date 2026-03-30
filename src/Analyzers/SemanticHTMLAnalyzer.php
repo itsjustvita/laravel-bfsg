@@ -87,7 +87,7 @@ class SemanticHTMLAnalyzer
         $buttons = $dom->getElementsByTagName('button');
         foreach ($buttons as $button) {
             $href = $button->getAttribute('href');
-            if (!empty($href)) {
+            if (! empty($href)) {
                 $issues[] = [
                     'rule' => 'WCAG 1.3.1',
                     'message' => '<button> with href attribute found',

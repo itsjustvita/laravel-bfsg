@@ -9,8 +9,11 @@ use Illuminate\Support\Facades\Http;
 class AuthenticatedHttpClient
 {
     protected array $cookies = [];
+
     protected ?string $bearerToken = null;
+
     protected array $headers = [];
+
     protected ?string $sessionCookie = null;
 
     /**
@@ -61,6 +64,7 @@ class AuthenticatedHttpClient
             if (isset($responseData['token'])) {
                 $this->bearerToken = $responseData['token'];
                 $this->headers['Authorization'] = "Bearer {$responseData['token']}";
+
                 return true;
             }
 
@@ -68,6 +72,7 @@ class AuthenticatedHttpClient
             if (isset($responseData['access_token'])) {
                 $this->bearerToken = $responseData['access_token'];
                 $this->headers['Authorization'] = "Bearer {$responseData['access_token']}";
+
                 return true;
             }
         }
@@ -135,7 +140,7 @@ class AuthenticatedHttpClient
     public function authenticateWithSanctum(string $apiUrl, string $email, string $password): ?string
     {
         // First get CSRF token
-        $csrfUrl = rtrim($apiUrl, '/') . '/sanctum/csrf-cookie';
+        $csrfUrl = rtrim($apiUrl, '/').'/sanctum/csrf-cookie';
 
         $csrfResponse = Http::withHeaders([
             'Accept' => 'application/json',
@@ -147,7 +152,7 @@ class AuthenticatedHttpClient
         // Get XSRF token from cookies
         $xsrfToken = $this->cookies['XSRF-TOKEN'] ?? null;
 
-        if (!$xsrfToken) {
+        if (! $xsrfToken) {
             throw new Exception('Failed to get CSRF token from Sanctum');
         }
 
@@ -159,7 +164,7 @@ class AuthenticatedHttpClient
 
         $cookieHeader = $this->getCookieString();
 
-        $loginUrl = rtrim($apiUrl, '/') . '/login';
+        $loginUrl = rtrim($apiUrl, '/').'/login';
 
         $loginResponse = Http::withHeaders([
             'Accept' => 'application/json',
@@ -178,6 +183,7 @@ class AuthenticatedHttpClient
         $responseData = $loginResponse->json();
         if (isset($responseData['token'])) {
             $this->bearerToken = $responseData['token'];
+
             return $responseData['token'];
         }
 
@@ -191,7 +197,7 @@ class AuthenticatedHttpClient
     {
         $request = Http::withHeaders($this->headers)->timeout(30);
 
-        if (!$verifySsl) {
+        if (! $verifySsl) {
             $request = $request->withoutVerifying();
         }
 
@@ -223,7 +229,7 @@ class AuthenticatedHttpClient
             $setCookieHeaders = $headers['Set-Cookie'] ?? [];
         }
 
-        if (!is_array($setCookieHeaders)) {
+        if (! is_array($setCookieHeaders)) {
             $setCookieHeaders = [$setCookieHeaders];
         }
 
@@ -264,7 +270,7 @@ class AuthenticatedHttpClient
      */
     protected function hasCookies(): bool
     {
-        return !empty($this->cookies);
+        return ! empty($this->cookies);
     }
 
     /**
@@ -276,6 +282,7 @@ class AuthenticatedHttpClient
         foreach ($this->cookies as $name => $value) {
             $cookieParts[] = "{$name}={$value}";
         }
+
         return implode('; ', $cookieParts);
     }
 

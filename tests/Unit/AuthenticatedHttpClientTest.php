@@ -14,7 +14,7 @@ class AuthenticatedHttpClientTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->client = new AuthenticatedHttpClient();
+        $this->client = new AuthenticatedHttpClient;
     }
 
     // ─── Form-based credential auth ─────────────────────────────────────
@@ -145,6 +145,7 @@ class AuthenticatedHttpClientTest extends TestCase
 
         Http::assertSent(function ($request) {
             $body = json_decode($request->body(), true);
+
             return $request->url() === 'https://example.com/auth'
                 && isset($body['username'])
                 && $body['username'] === 'admin@example.com'
@@ -421,9 +422,9 @@ class AuthenticatedHttpClientTest extends TestCase
 
         Http::assertSent(function ($request) {
             return $request->url() === 'https://example.com/public'
-                && !$request->hasHeader('Authorization')
-                && !$request->hasHeader('X-API-Key')
-                && !$request->hasHeader('Cookie');
+                && ! $request->hasHeader('Authorization')
+                && ! $request->hasHeader('X-API-Key')
+                && ! $request->hasHeader('Cookie');
         });
     }
 

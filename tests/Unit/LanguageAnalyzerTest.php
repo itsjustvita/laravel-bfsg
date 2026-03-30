@@ -13,12 +13,12 @@ class LanguageAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new LanguageAnalyzer();
+        $this->analyzer = new LanguageAnalyzer;
     }
 
     protected function analyzeHtml(string $html): array
     {
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         return $this->analyzer->analyze($dom);
@@ -73,7 +73,7 @@ class LanguageAnalyzerTest extends TestCase
     public function test_detects_mismatched_lang_and_xml_lang()
     {
         // xml:lang is only preserved when using loadXML, not loadHTML
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadXML('<html lang="en" xml:lang="de"><body><p>Hello</p></body></html>');
         $result = $this->analyzer->analyze($dom);
 

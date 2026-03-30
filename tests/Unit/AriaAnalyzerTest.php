@@ -13,13 +13,13 @@ class AriaAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new AriaAnalyzer();
+        $this->analyzer = new AriaAnalyzer;
     }
 
     public function test_detects_invalid_aria_roles()
     {
         $html = '<div role="invalid-role">Content</div>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -31,7 +31,7 @@ class AriaAnalyzerTest extends TestCase
     public function test_detects_redundant_aria_roles()
     {
         $html = '<input type="checkbox" role="checkbox">';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -43,7 +43,7 @@ class AriaAnalyzerTest extends TestCase
     public function test_detects_missing_required_aria_attributes()
     {
         $html = '<div role="slider">Slider</div>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -56,7 +56,7 @@ class AriaAnalyzerTest extends TestCase
     public function test_detects_invalid_aria_labelledby_references()
     {
         $html = '<div aria-labelledby="non-existent">Content</div>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -68,7 +68,7 @@ class AriaAnalyzerTest extends TestCase
     public function test_detects_focusable_elements_with_aria_hidden()
     {
         $html = '<button aria-hidden="true">Hidden Button</button>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -85,7 +85,7 @@ class AriaAnalyzerTest extends TestCase
             <input type="text" aria-describedby="help-text">
             <span id="help-text">Enter your name</span>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);

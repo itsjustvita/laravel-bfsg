@@ -13,7 +13,7 @@ class AccessibleImage extends Component
         public bool $decorative = false,
         public ?string $loading = 'lazy',
     ) {}
-    
+
     public function render()
     {
         return view('bfsg::components.accessible-image');

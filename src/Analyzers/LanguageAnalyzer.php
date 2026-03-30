@@ -11,14 +11,11 @@ class LanguageAnalyzer
         'de', 'en', 'fr', 'es', 'it', 'nl', 'pl', 'pt', 'ru', 'tr',
         'ar', 'zh', 'ja', 'ko', 'hi', 'sv', 'no', 'da', 'fi', 'el',
         'cs', 'hu', 'ro', 'bg', 'hr', 'sr', 'sk', 'sl', 'uk', 'vi',
-        'th', 'id', 'ms', 'fa', 'he', 'ur', 'bn', 'ta', 'te', 'mr'
+        'th', 'id', 'ms', 'fa', 'he', 'ur', 'bn', 'ta', 'te', 'mr',
     ];
 
     /**
      * Analyze language attributes in HTML
-     *
-     * @param \DOMDocument $dom
-     * @return array
      */
     public function analyze(\DOMDocument $dom): array
     {
@@ -36,18 +33,18 @@ class LanguageAnalyzer
                     'message' => 'Missing language attribute on html element',
                     'element' => '<html>',
                     'suggestion' => 'Add lang attribute to html element (e.g., lang="de" for German)',
-                    'severity' => 'critical'
+                    'severity' => 'critical',
                 ];
             } else {
                 // Validate language code
                 $langCode = $this->extractLanguageCode($langAttr);
-                if (!$this->isValidLanguageCode($langCode)) {
+                if (! $this->isValidLanguageCode($langCode)) {
                     $issues[] = [
                         'rule' => 'WCAG 3.1.1, BFSG §3',
                         'message' => "Invalid language code: {$langAttr}",
                         'element' => '<html>',
                         'suggestion' => 'Use valid ISO 639-1 language code (e.g., "de", "en", "fr")',
-                        'severity' => 'error'
+                        'severity' => 'error',
                     ];
                 }
             }
@@ -56,7 +53,7 @@ class LanguageAnalyzer
                 'rule' => 'WCAG 3.1.1, BFSG §3',
                 'message' => 'No html element found in document',
                 'suggestion' => 'Ensure document has proper html structure',
-                'severity' => 'critical'
+                'severity' => 'critical',
             ];
         }
 
@@ -75,14 +72,14 @@ class LanguageAnalyzer
                 if ($this->containsMixedLanguage($element->nodeValue, $parentLang)) {
                     $elementLang = $element->getAttribute('lang');
                     if (empty($elementLang)) {
-                        $snippet = substr(trim($element->nodeValue), 0, 50) . '...';
+                        $snippet = substr(trim($element->nodeValue), 0, 50).'...';
                         $issues[] = [
                             'rule' => 'WCAG 3.1.2',
                             'message' => 'Possible language change without lang attribute',
                             'element' => $element->nodeName,
                             'content' => $snippet,
                             'suggestion' => 'Add lang attribute to elements with different language',
-                            'severity' => 'warning'
+                            'severity' => 'warning',
                         ];
                     }
                 }
@@ -95,13 +92,13 @@ class LanguageAnalyzer
             $langAttr = $element->getAttribute('lang');
             if ($langAttr) {
                 $langCode = $this->extractLanguageCode($langAttr);
-                if (!$this->isValidLanguageCode($langCode)) {
+                if (! $this->isValidLanguageCode($langCode)) {
                     $issues[] = [
                         'rule' => 'WCAG 3.1.1',
                         'message' => "Invalid language code: {$langAttr}",
-                        'element' => '<' . $element->nodeName . '>',
+                        'element' => '<'.$element->nodeName.'>',
                         'suggestion' => 'Use valid ISO 639-1 language code',
-                        'severity' => 'error'
+                        'severity' => 'error',
                     ];
                 }
             }
@@ -117,9 +114,9 @@ class LanguageAnalyzer
                 $issues[] = [
                     'rule' => 'WCAG 3.1.1',
                     'message' => 'Mismatched lang and xml:lang attributes',
-                    'element' => '<' . $element->nodeName . '>',
+                    'element' => '<'.$element->nodeName.'>',
                     'suggestion' => 'Ensure lang and xml:lang attributes have the same value',
-                    'severity' => 'warning'
+                    'severity' => 'warning',
                 ];
             }
         }
@@ -128,9 +125,9 @@ class LanguageAnalyzer
             'issues' => $issues,
             'stats' => [
                 'total_issues' => count($issues),
-                'critical_issues' => count(array_filter($issues, fn($i) => ($i['severity'] ?? '') === 'critical')),
-                'has_main_lang' => $htmlElements->length > 0 && !empty($htmlElements->item(0)->getAttribute('lang'))
-            ]
+                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['severity'] ?? '') === 'critical')),
+                'has_main_lang' => $htmlElements->length > 0 && ! empty($htmlElements->item(0)->getAttribute('lang')),
+            ],
         ];
     }
 
@@ -141,6 +138,7 @@ class LanguageAnalyzer
     {
         // Handle values like "en-US", "de-DE" by extracting the primary code
         $parts = explode('-', strtolower(trim($lang)));
+
         return $parts[0] ?? '';
     }
 
@@ -164,6 +162,7 @@ class LanguageAnalyzer
             }
             $current = $current->parentNode instanceof \DOMElement ? $current->parentNode : null;
         }
+
         return null;
     }
 
@@ -173,7 +172,7 @@ class LanguageAnalyzer
     protected function containsMixedLanguage(string $text, ?string $documentLang): bool
     {
         // Skip if no document language is set
-        if (!$documentLang) {
+        if (! $documentLang) {
             return false;
         }
 
@@ -181,12 +180,12 @@ class LanguageAnalyzer
         $indicators = [
             'de' => [
                 'english' => ['the', 'and', 'for', 'with', 'from', 'about', 'this', 'that', 'have', 'will'],
-                'pattern' => '/\b(the|and|for|with|from|about|this|that|have|will)\b/i'
+                'pattern' => '/\b(the|and|for|with|from|about|this|that|have|will)\b/i',
             ],
             'en' => [
                 'german' => ['der', 'die', 'das', 'und', 'für', 'mit', 'von', 'über', 'diese', 'haben'],
-                'pattern' => '/\b(der|die|das|und|für|mit|von|über|diese|haben)\b/i'
-            ]
+                'pattern' => '/\b(der|die|das|und|für|mit|von|über|diese|haben)\b/i',
+            ],
         ];
 
         // Only check for German/English mix as example
@@ -195,20 +194,22 @@ class LanguageAnalyzer
                 // Additional check: multiple indicators
                 $matches = 0;
                 foreach ($indicators['de']['english'] as $word) {
-                    if (stripos($text, ' ' . $word . ' ') !== false) {
+                    if (stripos($text, ' '.$word.' ') !== false) {
                         $matches++;
                     }
                 }
+
                 return $matches >= 3; // At least 3 English words
             }
         } elseif ($documentLang === 'en' && isset($indicators['en'])) {
             if (preg_match($indicators['en']['pattern'], $text)) {
                 $matches = 0;
                 foreach ($indicators['en']['german'] as $word) {
-                    if (stripos($text, ' ' . $word . ' ') !== false) {
+                    if (stripos($text, ' '.$word.' ') !== false) {
                         $matches++;
                     }
                 }
+
                 return $matches >= 3; // At least 3 German words
             }
         }

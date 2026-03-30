@@ -4,6 +4,17 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\FormAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\ImageAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
 
 class AnalyzeUrlCommand extends Command
@@ -91,24 +102,24 @@ class AnalyzeUrlCommand extends Command
             $html = $response->body();
 
             // Convert to DOMDocument
-            $dom = new \DOMDocument();
+            $dom = new \DOMDocument;
             libxml_use_internal_errors(true);
             $dom->loadHTML($html);
             libxml_clear_errors();
 
             // Run analyzers
             $analyzers = [
-                'HeadingAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer(),
-                'ImageAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\ImageAnalyzer(),
-                'FormAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\FormAnalyzer(),
-                'AriaAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer(),
-                'LinkAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer(),
-                'ContrastAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer(),
-                'KeyboardNavigationAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer(),
-                'LanguageAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer(),
-                'TableAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer(),
-                'MediaAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer(),
-                'SemanticHTMLAnalyzer' => new \ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer(),
+                'HeadingAnalyzer' => new HeadingAnalyzer,
+                'ImageAnalyzer' => new ImageAnalyzer,
+                'FormAnalyzer' => new FormAnalyzer,
+                'AriaAnalyzer' => new AriaAnalyzer,
+                'LinkAnalyzer' => new LinkAnalyzer,
+                'ContrastAnalyzer' => new ContrastAnalyzer,
+                'KeyboardNavigationAnalyzer' => new KeyboardNavigationAnalyzer,
+                'LanguageAnalyzer' => new LanguageAnalyzer,
+                'TableAnalyzer' => new TableAnalyzer,
+                'MediaAnalyzer' => new MediaAnalyzer,
+                'SemanticHTMLAnalyzer' => new SemanticHTMLAnalyzer,
             ];
 
             $results = [

@@ -11,7 +11,7 @@ return [
     |
     */
     'compliance_level' => env('BFSG_LEVEL', 'AA'),
-    
+
     /*
     |--------------------------------------------------------------------------
     | Automatic Corrections
@@ -21,7 +21,7 @@ return [
     |
     */
     'auto_fix' => env('BFSG_AUTO_FIX', false),
-    
+
     /*
     |--------------------------------------------------------------------------
     | Active Checks
@@ -43,7 +43,7 @@ return [
         'media' => true,       // Video/Audio accessibility (captions, transcripts)
         'semantic' => true,    // Semantic HTML structure (main, nav, article, etc.)
     ],
-    
+
     /*
     |--------------------------------------------------------------------------
     | Reporting

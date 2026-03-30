@@ -4,8 +4,8 @@ namespace ItsJustVita\LaravelBfsg\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use Illuminate\Support\Facades\Log;
+use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 
 class CheckAccessibility
 {
@@ -17,7 +17,7 @@ class CheckAccessibility
         $response = $next($request);
 
         // Only check HTML responses
-        if (!$this->shouldCheck($request, $response)) {
+        if (! $this->shouldCheck($request, $response)) {
             return $response;
         }
 
@@ -27,7 +27,7 @@ class CheckAccessibility
         // Analyze for accessibility
         $violations = Bfsg::analyze($html);
 
-        if (!empty($violations)) {
+        if (! empty($violations)) {
             $this->handleViolations($request, $violations);
 
             // Add violations to response headers for debugging
@@ -48,7 +48,7 @@ class CheckAccessibility
     protected function shouldCheck(Request $request, $response): bool
     {
         // Only check GET requests
-        if (!$request->isMethod('GET')) {
+        if (! $request->isMethod('GET')) {
             return false;
         }
 
@@ -59,7 +59,7 @@ class CheckAccessibility
         }
 
         // Skip if disabled
-        if (!config('bfsg.middleware.enabled', true)) {
+        if (! config('bfsg.middleware.enabled', true)) {
             return false;
         }
 

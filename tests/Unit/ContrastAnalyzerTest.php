@@ -13,7 +13,7 @@ class ContrastAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new ContrastAnalyzer();
+        $this->analyzer = new ContrastAnalyzer;
     }
 
     public function test_detects_low_contrast_text()
@@ -22,7 +22,7 @@ class ContrastAnalyzerTest extends TestCase
             <p style="color: #999; background-color: #fff;">Low contrast text</p>
             <p style="color: #aaa; background-color: #fff;">Very low contrast</p>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -34,7 +34,7 @@ class ContrastAnalyzerTest extends TestCase
     public function test_detects_light_gray_text()
     {
         $html = '<p style="color: #ccc;">Light gray text</p>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -46,7 +46,7 @@ class ContrastAnalyzerTest extends TestCase
     public function test_detects_placeholder_contrast_issues()
     {
         $html = '<input type="text" placeholder="Enter text here">';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -61,7 +61,7 @@ class ContrastAnalyzerTest extends TestCase
             <p style="color: #000; background-color: #fff;">High contrast black on white</p>
             <p style="color: #fff; background-color: #000;">High contrast white on black</p>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -74,7 +74,7 @@ class ContrastAnalyzerTest extends TestCase
     public function test_calculates_contrast_ratio_correctly()
     {
         $html = '<p style="color: #767676; background-color: #ffffff;">4.54:1 contrast ratio</p>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
