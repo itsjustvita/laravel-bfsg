@@ -6,6 +6,7 @@ use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
+use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
 use Symfony\Component\Process\PhpExecutableFinder;
@@ -30,7 +31,7 @@ class BfsgCheckCommand extends Command
                             {--sanctum : Use Laravel Sanctum authentication}
                             {--detailed : Show detailed violation information}
                             {--save : Save results to database}
-                            {--format=cli : Output format (cli, json, html)}
+                            {--format=cli : Output format (cli, json, html, pdf)}
                             {--verify-ssl=false : Verify SSL certificates (set to true for production)}';
 
     protected $description = 'Check a URL for accessibility compliance';
@@ -70,6 +71,9 @@ class BfsgCheckCommand extends Command
                     break;
                 case 'html':
                     $this->outputHtml($violations, $url);
+                    break;
+                case 'pdf':
+                    $this->outputPdf($violations, $url);
                     break;
                 default:
                     $this->outputCli($violations);
@@ -294,12 +298,25 @@ class BfsgCheckCommand extends Command
         $this->info("Total Issues: {$stats['total_issues']} (Critical: {$stats['critical']}, Errors: {$stats['errors']}, Warnings: {$stats['warnings']})");
     }
 
+    protected function outputPdf(array $violations, string $url): void
+    {
+        $report = new ReportGenerator($url, $violations);
+        $filename = $report->setFormat('pdf')->saveToFile();
+
+        $this->info("PDF report saved to: {$filename}");
+
+        $stats = $report->getStats();
+        $this->newLine();
+        $this->info("Compliance Score: {$stats['compliance_score']}% (Grade: {$stats['grade']})");
+        $this->info("Total Issues: {$stats['total_issues']}");
+    }
+
     protected function saveResults(string $url, array $violations): void
     {
         $report = new ReportGenerator($url, $violations);
         $stats = $report->getStats();
 
-        $dbReport = \ItsJustVita\LaravelBfsg\Models\BfsgReport::create([
+        $dbReport = BfsgReport::create([
             'url' => $url,
             'total_violations' => $stats['total_issues'],
             'score' => $stats['compliance_score'],
