@@ -109,7 +109,58 @@ class CheckAccessibility
      */
     protected function storeViolations(string $url, array $violations): void
     {
-        // This would store violations in a database table
-        // You can create a migration for this if needed
+        $totalViolations = array_sum(array_map('count', $violations));
+
+        $critical = 0;
+        $errors = 0;
+        $warnings = 0;
+        $notices = 0;
+
+        foreach ($violations as $issues) {
+            foreach ($issues as $issue) {
+                match ($issue['severity'] ?? 'notice') {
+                    'critical' => $critical++,
+                    'error' => $errors++,
+                    'warning' => $warnings++,
+                    default => $notices++,
+                };
+            }
+        }
+
+        $score = max(0, min(100, (int) (100 - ($critical * 10 + $errors * 5 + $warnings * 2 + $notices * 0.5))));
+
+        $grade = match (true) {
+            $score >= 95 => 'A+',
+            $score >= 90 => 'A',
+            $score >= 85 => 'B+',
+            $score >= 80 => 'B',
+            $score >= 75 => 'C+',
+            $score >= 70 => 'C',
+            $score >= 60 => 'D',
+            default => 'F',
+        };
+
+        $report = \ItsJustVita\LaravelBfsg\Models\BfsgReport::create([
+            'url' => $url,
+            'total_violations' => $totalViolations,
+            'score' => $score,
+            'grade' => $grade,
+            'metadata' => [
+                'compliance_level' => config('bfsg.compliance_level'),
+            ],
+        ]);
+
+        foreach ($violations as $analyzer => $issues) {
+            foreach ($issues as $issue) {
+                $report->violations()->create([
+                    'analyzer' => $analyzer,
+                    'severity' => $issue['severity'] ?? 'notice',
+                    'message' => $issue['message'],
+                    'element' => $issue['element'] ?? null,
+                    'wcag_rule' => $issue['rule'] ?? null,
+                    'suggestion' => $issue['suggestion'] ?? null,
+                ]);
+            }
+        }
     }
 }

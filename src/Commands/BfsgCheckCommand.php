@@ -296,8 +296,30 @@ class BfsgCheckCommand extends Command
 
     protected function saveResults(string $url, array $violations): void
     {
-        // This would save to database if the table exists
-        $this->info('💾 Results saved to database');
+        $report = new ReportGenerator($url, $violations);
+        $stats = $report->getStats();
+
+        $dbReport = \ItsJustVita\LaravelBfsg\Models\BfsgReport::create([
+            'url' => $url,
+            'total_violations' => $stats['total_issues'],
+            'score' => $stats['compliance_score'],
+            'grade' => $stats['grade'],
+        ]);
+
+        foreach ($violations as $analyzer => $issues) {
+            foreach ($issues as $issue) {
+                $dbReport->violations()->create([
+                    'analyzer' => $analyzer,
+                    'severity' => $issue['severity'] ?? 'notice',
+                    'message' => $issue['message'],
+                    'element' => $issue['element'] ?? null,
+                    'wcag_rule' => $issue['rule'] ?? null,
+                    'suggestion' => $issue['suggestion'] ?? null,
+                ]);
+            }
+        }
+
+        $this->info("Results saved to database (Report #{$dbReport->id})");
     }
 
     protected function fetchHtmlFromHerdDomain(string $url): string

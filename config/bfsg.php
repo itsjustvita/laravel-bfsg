@@ -52,7 +52,10 @@ return [
     'reporting' => [
         'enabled' => env('BFSG_REPORTING', true),
         'email' => env('BFSG_REPORT_EMAIL', null),
-        'save_to_database' => false,
+        'save_to_database' => env('BFSG_SAVE_TO_DB', false),
+        'database' => [
+            'connection' => env('BFSG_DB_CONNECTION', null),
+        ],
     ],
 
     /*

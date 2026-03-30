@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg;
 use Illuminate\Support\ServiceProvider;
 use ItsJustVita\LaravelBfsg\Commands\AnalyzeUrlCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
+use ItsJustVita\LaravelBfsg\Commands\BfsgHistoryCommand;
 use ItsJustVita\LaravelBfsg\Components\AccessibleImage;
 
 class BfsgServiceProvider extends ServiceProvider
@@ -42,12 +43,21 @@ class BfsgServiceProvider extends ServiceProvider
                 __DIR__.'/../resources/views' => resource_path('views/vendor/bfsg'),
             ], 'bfsg-views');
 
+            // Publish migrations
+            $this->publishes([
+                __DIR__.'/../database/migrations' => database_path('migrations'),
+            ], 'bfsg-migrations');
+
             // Register commands
             $this->commands([
                 BfsgCheckCommand::class,
                 AnalyzeUrlCommand::class,
+                BfsgHistoryCommand::class,
             ]);
         }
+
+        // Load migrations
+        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
 
         // Load views
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfsg');
