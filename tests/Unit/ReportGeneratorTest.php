@@ -113,14 +113,13 @@ class ReportGeneratorTest extends TestCase
         $this->assertStringContainsString('WCAG 1.1.1', $output);
     }
 
-    public function test_pdf_falls_back_to_html(): void
+    public function test_pdf_generates_valid_pdf(): void
     {
         $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
 
         $pdfOutput = $generator->setFormat('pdf')->generate();
-        $htmlOutput = $generator->setFormat('html')->generate();
 
-        $this->assertEquals($htmlOutput, $pdfOutput);
+        $this->assertStringStartsWith('%PDF', $pdfOutput);
     }
 
     public function test_calculates_stats_correctly(): void

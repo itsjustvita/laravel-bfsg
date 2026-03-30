@@ -55,7 +55,12 @@ class ReportGenerator
     {
         if ($path === null) {
             $timestamp = now()->format('Y-m-d_His');
-            $extension = $this->format === 'json' ? 'json' : 'html';
+            $extension = match ($this->format) {
+                'json' => 'json',
+                'markdown' => 'md',
+                'pdf' => 'pdf',
+                default => 'html',
+            };
             $path = storage_path("app/bfsg-reports/report_{$timestamp}.{$extension}");
         }
 
@@ -147,13 +152,20 @@ class ReportGenerator
     }
 
     /**
-     * Generate PDF report (placeholder - would need PDF library)
+     * Generate PDF report
      */
     protected function generatePdf(): string
     {
-        // This would require a PDF library like DomPDF or wkhtmltopdf
-        // For now, return HTML that can be printed to PDF
-        return $this->generateHtml();
+        if (! class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+            throw new \RuntimeException(
+                'PDF generation requires barryvdh/laravel-dompdf. Install it with: composer require barryvdh/laravel-dompdf'
+            );
+        }
+
+        $html = $this->generateHtml();
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html);
+
+        return $pdf->output();
     }
 
     /**

@@ -16,11 +16,13 @@ class TestCase extends Orchestra
     {
         return [
             BfsgServiceProvider::class,
+            \Barryvdh\DomPDF\ServiceProvider::class,
         ];
     }
 
     protected function getEnvironmentSetUp($app)
     {
         config()->set('database.default', 'testing');
+        config()->set('database.connections.testing.foreign_key_constraints', true);
     }
 }
