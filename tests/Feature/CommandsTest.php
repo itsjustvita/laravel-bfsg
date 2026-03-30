@@ -34,13 +34,14 @@ class CommandsTest extends TestCase
 
     public function test_bfsg_check_command_with_json_format()
     {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
             .'<header><nav><a href="#main">Skip to content</a></nav></header>'
             .'<main id="main"><h1>Welcome</h1>'
             .'<img src="photo.jpg" alt="A descriptive alt text">'
             .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email"></form>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
             .'<a href="/about">Learn more about our company</a>'
+            .'<div aria-live="polite"></div>'
             .'</main><footer><p>Footer content</p></footer>'
             .'</body></html>';
 
@@ -82,13 +83,14 @@ class CommandsTest extends TestCase
 
     public function test_bfsg_check_command_success_with_accessible_html()
     {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
             .'<header><nav><a href="#main">Skip to content</a></nav></header>'
             .'<main id="main"><h1>Welcome</h1>'
             .'<img src="photo.jpg" alt="A descriptive alt text">'
             .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email"></form>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
             .'<a href="/about">Learn more about our company</a>'
+            .'<div aria-live="polite"></div>'
             .'</main><footer><p>Footer content</p></footer>'
             .'</body></html>';
 
@@ -125,13 +127,14 @@ class CommandsTest extends TestCase
 
     public function test_bfsg_check_with_bearer_auth()
     {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
             .'<header><nav><a href="#main">Skip to content</a></nav></header>'
             .'<main id="main"><h1>Welcome</h1>'
             .'<img src="photo.jpg" alt="A descriptive alt text">'
             .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email"></form>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
             .'<a href="/about">Learn more about our company</a>'
+            .'<div aria-live="polite"></div>'
             .'</main><footer><p>Footer content</p></footer>'
             .'</body></html>';
 

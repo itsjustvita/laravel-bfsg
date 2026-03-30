@@ -27,7 +27,7 @@ class BfsgTest extends TestCase
 
     public function test_returns_empty_array_for_accessible_html(): void
     {
-        $html = '<!DOCTYPE html><html lang="en"><body>
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Contact Us - Our Company</title></head><body>
             <header>
                 <nav>
                     <a href="#main" class="sr-only">Skip to main content</a>
@@ -38,9 +38,10 @@ class BfsgTest extends TestCase
                 <img src="test.jpg" alt="Test image">
                 <form aria-label="Contact Form">
                     <label for="email">Email</label>
-                    <input type="email" id="email" name="email">
+                    <input type="email" id="email" name="email" autocomplete="email">
                 </form>
                 <a href="/about">Learn more about us</a>
+                <div aria-live="polite"></div>
             </main>
             <footer>
                 <p>Footer content</p>
@@ -55,7 +56,7 @@ class BfsgTest extends TestCase
 
     public function test_correctly_identifies_accessible_content(): void
     {
-        $accessibleHtml = '<!DOCTYPE html><html lang="en"><body>
+        $accessibleHtml = '<!DOCTYPE html><html lang="en"><head><title>About Our Company</title></head><body>
             <header>
                 <nav><a href="#main">Skip to main</a></nav>
             </header>

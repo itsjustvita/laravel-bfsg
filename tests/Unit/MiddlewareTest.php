@@ -134,7 +134,7 @@ class MiddlewareTest extends TestCase
     {
         config()->set('app.debug', true);
 
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test</title></head><body>'
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Accessible Test Page</title></head><body>'
             .'<a href="#main" class="skip-link">Skip to main content</a>'
             .'<header><h1>Page Title</h1></header>'
             .'<nav><a href="/about">About us</a></nav>'
