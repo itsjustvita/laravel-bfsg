@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
 
 class AnalyzeUrlCommand extends Command
@@ -75,26 +76,19 @@ class AnalyzeUrlCommand extends Command
             // Fetch HTML content with SSL handling
             $verifySSL = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
 
-            $context = stream_context_create([
-                'http' => [
-                    'timeout' => 30,
-                    'user_agent' => 'BFSG-Analyzer/1.2',
-                ],
-                'ssl' => [
-                    'verify_peer' => $verifySSL,
-                    'verify_peer_name' => $verifySSL,
-                    'allow_self_signed' => !$verifySSL,
-                ],
-            ]);
+            $response = Http::withOptions(['verify' => $verifySSL])
+                ->timeout(30)
+                ->withUserAgent('BFSG-Analyzer/2.0')
+                ->get($url);
 
-            $html = @file_get_contents($url, false, $context);
-
-            if ($html === false) {
-                $this->error('❌ Failed to fetch URL content');
+            if ($response->failed()) {
+                $this->error('Failed to fetch URL content');
                 $this->warn('Tip: For local development with self-signed certificates, this is expected.');
 
                 return;
             }
+
+            $html = $response->body();
 
             // Convert to DOMDocument
             $dom = new \DOMDocument();

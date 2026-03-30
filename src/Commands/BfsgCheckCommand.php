@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
@@ -191,7 +192,8 @@ class BfsgCheckCommand extends Command
     {
         // Use authenticated client if we have authentication
         if ($this->option('auth') || $this->option('bearer') || $this->option('session')) {
-            return $this->httpClient->fetchAuthenticatedUrl($url);
+            $verifySsl = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+            return $this->httpClient->fetchAuthenticatedUrl($url, $verifySsl);
         }
 
         // Check if this is a Herd domain and handle accordingly
@@ -203,36 +205,20 @@ class BfsgCheckCommand extends Command
             return $this->fetchHtmlFromHerdDomain($url);
         }
 
-        // Otherwise use simple file_get_contents with SSL handling
+        // Otherwise use Http facade with SSL handling
         $verifySSL = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
 
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => 30,
-                'user_agent' => 'BFSG-Checker/1.2',
-            ],
-            'ssl' => [
-                'verify_peer' => $verifySSL,
-                'verify_peer_name' => $verifySSL,
-                'allow_self_signed' => !$verifySSL,
-            ],
-        ]);
+        $response = Http::withOptions(['verify' => $verifySSL])
+            ->timeout(30)
+            ->withUserAgent('BFSG-Checker/2.0')
+            ->get($url);
 
-        $html = @file_get_contents($url, false, $context);
-
-        if ($html === false) {
-            $error = error_get_last();
-            $errorMsg = $error['message'] ?? 'Unknown error';
-
-            // Check if it's an SSL error
-            if (strpos($errorMsg, 'SSL') !== false || strpos($errorMsg, 'certificate') !== false) {
-                throw new Exception("SSL/Certificate error when fetching {$url}. For local development with self-signed certificates, this is expected.");
-            }
-
-            throw new Exception("Failed to fetch URL: {$url}. Error: {$errorMsg}");
+        if ($response->failed()) {
+            $status = $response->status();
+            throw new Exception("Failed to fetch URL: {$url}. HTTP status: {$status}");
         }
 
-        return $html;
+        return $response->body();
     }
 
     protected function outputCli(array $violations): void
@@ -351,21 +337,13 @@ class BfsgCheckCommand extends Command
             $localUrl = "http://127.0.0.1:{$port}{$path}{$query}{$fragment}";
 
             // Fetch the HTML from the local server
-            $context = stream_context_create([
-                'http' => [
-                    'timeout' => 30,
-                    'user_agent' => 'BFSG-Checker/1.2',
-                ]
-            ]);
+            $response = Http::timeout(30)->withUserAgent('BFSG-Checker/2.0')->get($localUrl);
 
-            $html = @file_get_contents($localUrl, false, $context);
-
-            if ($html === false) {
-                $error = error_get_last();
-                throw new Exception("Failed to fetch from temporary server: " . ($error['message'] ?? 'Unknown error'));
+            if ($response->failed()) {
+                throw new Exception("Failed to fetch from temporary server: HTTP {$response->status()}");
             }
 
-            return $html;
+            return $response->body();
 
         } finally {
             // Always stop the server - use signal 9 for immediate termination
