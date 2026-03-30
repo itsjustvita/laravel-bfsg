@@ -42,6 +42,7 @@ class BfsgHistoryCommand extends Command
 
         if ($reports->isEmpty()) {
             $this->info('No reports found.');
+
             return Command::SUCCESS;
         }
 
@@ -68,6 +69,7 @@ class BfsgHistoryCommand extends Command
 
         if (! $url) {
             $this->error('The --url option is required when using --trend');
+
             return Command::FAILURE;
         }
 
@@ -78,6 +80,7 @@ class BfsgHistoryCommand extends Command
 
         if ($reports->isEmpty()) {
             $this->info("No reports found for: {$url}");
+
             return Command::SUCCESS;
         }
 
@@ -114,6 +117,7 @@ class BfsgHistoryCommand extends Command
 
         if ($count === 0) {
             $this->info('No old reports to clean up.');
+
             return Command::SUCCESS;
         }
 

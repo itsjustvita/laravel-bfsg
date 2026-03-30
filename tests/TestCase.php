@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests;
 
+use Barryvdh\DomPDF\ServiceProvider;
 use ItsJustVita\LaravelBfsg\BfsgServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
@@ -16,7 +17,7 @@ class TestCase extends Orchestra
     {
         return [
             BfsgServiceProvider::class,
-            \Barryvdh\DomPDF\ServiceProvider::class,
+            ServiceProvider::class,
         ];
     }
 

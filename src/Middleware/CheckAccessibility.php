@@ -6,6 +6,7 @@ use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
+use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 
 class CheckAccessibility
 {
@@ -140,7 +141,7 @@ class CheckAccessibility
             default => 'F',
         };
 
-        $report = \ItsJustVita\LaravelBfsg\Models\BfsgReport::create([
+        $report = BfsgReport::create([
             'url' => $url,
             'total_violations' => $totalViolations,
             'score' => $score,

@@ -2,10 +2,10 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Models\BfsgViolation;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 
 class DatabasePersistenceTest extends TestCase
 {

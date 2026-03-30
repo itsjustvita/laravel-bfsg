@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Reports;
 
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\View;
 
 class ReportGenerator
@@ -156,14 +157,14 @@ class ReportGenerator
      */
     protected function generatePdf(): string
     {
-        if (! class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+        if (! class_exists(Pdf::class)) {
             throw new \RuntimeException(
                 'PDF generation requires barryvdh/laravel-dompdf. Install it with: composer require barryvdh/laravel-dompdf'
             );
         }
 
         $html = $this->generateHtml();
-        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($html);
+        $pdf = Pdf::loadHTML($html);
 
         return $pdf->output();
     }
