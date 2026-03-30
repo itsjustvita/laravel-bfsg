@@ -57,7 +57,7 @@ class MediaAnalyzer
             }
         }
 
-        if (!$hasCaptions) {
+        if (! $hasCaptions) {
             $issues[] = [
                 'rule' => 'WCAG 1.2.2, 1.2.4',
                 'message' => 'Video element without captions or subtitles',
@@ -76,7 +76,7 @@ class MediaAnalyzer
             }
         }
 
-        if (!$hasAudioDescription && $tracks->length > 0) {
+        if (! $hasAudioDescription && $tracks->length > 0) {
             $issues[] = [
                 'rule' => 'WCAG 1.2.5 (Level AA)',
                 'message' => 'Video without audio description track',
@@ -98,7 +98,7 @@ class MediaAnalyzer
         }
 
         // Check for controls
-        if (!$video->hasAttribute('controls')) {
+        if (! $video->hasAttribute('controls')) {
             $issues[] = [
                 'rule' => 'WCAG 2.1.1',
                 'message' => 'Video without controls attribute',
@@ -118,7 +118,7 @@ class MediaAnalyzer
         // Note: This is a simplified check - in reality, transcript might be in surrounding context
         $hasTranscriptLink = $audio->hasAttribute('aria-describedby');
 
-        if (!$hasTranscriptLink) {
+        if (! $hasTranscriptLink) {
             $issues[] = [
                 'rule' => 'WCAG 1.2.1',
                 'message' => 'Audio element without transcript reference',
@@ -140,7 +140,7 @@ class MediaAnalyzer
         }
 
         // Check for controls
-        if (!$audio->hasAttribute('controls')) {
+        if (! $audio->hasAttribute('controls')) {
             $issues[] = [
                 'rule' => 'WCAG 2.1.1',
                 'message' => 'Audio without controls attribute',
@@ -169,7 +169,7 @@ class MediaAnalyzer
                     'rule' => 'WCAG 2.4.1, 4.1.2',
                     'message' => 'Media iframe without title attribute',
                     'element' => 'iframe',
-                    'src' => substr($src, 0, 50) . '...',
+                    'src' => substr($src, 0, 50).'...',
                     'suggestion' => 'Add descriptive title attribute to iframe (e.g., "YouTube video: Tutorial title")',
                     'severity' => 'error',
                 ];

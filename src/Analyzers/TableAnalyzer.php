@@ -48,7 +48,7 @@ class TableAnalyzer
                         'suggestion' => 'Add scope="col" or scope="row" to <th> elements',
                         'severity' => 'error',
                     ];
-                } elseif (!in_array($scope, ['col', 'row', 'colgroup', 'rowgroup'])) {
+                } elseif (! in_array($scope, ['col', 'row', 'colgroup', 'rowgroup'])) {
                     $issues[] = [
                         'rule' => 'WCAG 1.3.1',
                         'message' => "Invalid scope attribute value: {$scope}",
@@ -140,7 +140,7 @@ class TableAnalyzer
             'stats' => [
                 'total_issues' => count($issues),
                 'tables_found' => $tables->length,
-                'critical_issues' => count(array_filter($issues, fn($i) => ($i['severity'] ?? '') === 'error')),
+                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['severity'] ?? '') === 'error')),
             ],
         ];
     }

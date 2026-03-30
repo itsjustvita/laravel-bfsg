@@ -2,8 +2,8 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
+use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
-use Illuminate\Support\Facades\Artisan;
 
 class CommandsTest extends TestCase
 {
@@ -23,59 +23,132 @@ class CommandsTest extends TestCase
 
     public function test_bfsg_check_command_with_invalid_url()
     {
-        $this->artisan('bfsg:check', ['url' => 'not-a-valid-url'])
+        Http::fake([
+            'http://invalid-server.example/*' => Http::response('', 500),
+        ]);
+
+        $this->artisan('bfsg:check', ['url' => 'http://invalid-server.example/page'])
             ->assertFailed()
             ->expectsOutputToContain('Error');
     }
 
     public function test_bfsg_check_command_with_json_format()
     {
-        // Skip this test as it requires HTTP mocking
-        $this->markTestSkipped('Requires HTTP mocking implementation');
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Welcome</h1>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
+            .'<a href="/about">Learn more about our company</a>'
+            .'<div aria-live="polite"></div>'
+            .'</main><footer><p>Footer content</p></footer>'
+            .'</body></html>';
+
+        Http::fake([
+            'http://example.com/*' => Http::response($html, 200),
+        ]);
+
+        $this->artisan('bfsg:check', [
+            'url' => 'http://example.com/page',
+            '--format' => 'json',
+        ])->assertSuccessful();
     }
 
-    public function test_bfsg_analyze_command_server_side_mode()
+    public function test_bfsg_check_command_with_violations()
     {
-        $html = '<html><body><img src="test.jpg"><h1>Title</h1></body></html>';
+        $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $this->mockHttpResponse($html);
+        Http::fake([
+            'http://example.com/*' => Http::response($html, 200),
+        ]);
 
-        $this->artisan('bfsg:analyze', [
-            'url' => 'http://example.test',
-        ])->assertSuccessful()
-          ->expectsOutputToContain('Using server-side analysis');
-    }
-
-    public function test_bfsg_analyze_command_browser_mode()
-    {
-        $this->artisan('bfsg:analyze', [
-            'url' => 'http://example.test',
-            '--browser' => true,
-        ])->expectsOutputToContain('Using browser rendering');
+        $this->artisan('bfsg:check', ['url' => 'http://example.com/page'])
+            ->assertFailed();
     }
 
     public function test_bfsg_check_command_with_detailed_option()
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $this->mockHttpResponse($html);
+        Http::fake([
+            'http://example.com/*' => Http::response($html, 200),
+        ]);
 
         $this->artisan('bfsg:check', [
-            'url' => 'http://example.test',
+            'url' => 'http://example.com/page',
             '--detailed' => true,
-        ])->assertFailed(); // Will fail due to accessibility issues
+        ])->assertFailed();
     }
 
     public function test_bfsg_check_command_success_with_accessible_html()
     {
-        // Skip this test as it requires HTTP mocking
-        $this->markTestSkipped('Requires HTTP mocking implementation');
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Welcome</h1>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
+            .'<a href="/about">Learn more about our company</a>'
+            .'<div aria-live="polite"></div>'
+            .'</main><footer><p>Footer content</p></footer>'
+            .'</body></html>';
+
+        Http::fake([
+            'http://example.com/*' => Http::response($html, 200),
+        ]);
+
+        $this->artisan('bfsg:check', ['url' => 'http://example.com/page'])
+            ->assertSuccessful();
     }
 
-    protected function mockHttpResponse($html)
+    public function test_bfsg_analyze_command_server_side_mode()
     {
-        // This is a helper method for mocking HTTP responses in tests
-        // In a real test environment, you would use Laravel's HTTP fake
-        // For now, we'll skip the actual implementation
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test</title></head>'
+            .'<body><h1>Title</h1></body></html>';
+
+        Http::fake([
+            'http://example.com/*' => Http::response($html, 200),
+        ]);
+
+        $this->artisan('bfsg:analyze', [
+            'url' => 'http://example.com/page',
+        ])->assertSuccessful()
+            ->expectsOutputToContain('Using server-side analysis');
+    }
+
+    public function test_bfsg_analyze_command_browser_mode()
+    {
+        $this->artisan('bfsg:analyze', [
+            'url' => 'http://example.com/page',
+            '--browser' => true,
+        ])->expectsOutputToContain('Using browser rendering');
+    }
+
+    public function test_bfsg_check_with_bearer_auth()
+    {
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Welcome</h1>'
+            .'<img src="photo.jpg" alt="A descriptive alt text">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
+            .'<a href="/about">Learn more about our company</a>'
+            .'<div aria-live="polite"></div>'
+            .'</main><footer><p>Footer content</p></footer>'
+            .'</body></html>';
+
+        Http::fake([
+            'http://example.com/*' => Http::response($html, 200),
+        ]);
+
+        $this->artisan('bfsg:check', [
+            'url' => 'http://example.com/page',
+            '--bearer' => 'test-token-123',
+        ])->assertSuccessful();
+
+        Http::assertSent(function ($request) {
+            return $request->hasHeader('Authorization', 'Bearer test-token-123');
+        });
     }
 }

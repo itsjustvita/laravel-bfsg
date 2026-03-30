@@ -13,7 +13,7 @@ class LinkAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new LinkAnalyzer();
+        $this->analyzer = new LinkAnalyzer;
     }
 
     public function test_detects_non_descriptive_link_text()
@@ -23,7 +23,7 @@ class LinkAnalyzerTest extends TestCase
             <a href="/page2">Read more</a>
             <a href="/page3">More</a>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -38,7 +38,7 @@ class LinkAnalyzerTest extends TestCase
             <a href="/page1"></a>
             <a href="/page2">  </a>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -50,7 +50,7 @@ class LinkAnalyzerTest extends TestCase
     public function test_detects_links_without_href()
     {
         $html = '<a>Link without href</a>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -62,7 +62,7 @@ class LinkAnalyzerTest extends TestCase
     public function test_detects_new_window_links_without_warning()
     {
         $html = '<a href="https://example.com" target="_blank">External Site</a>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -77,7 +77,7 @@ class LinkAnalyzerTest extends TestCase
             <a href="/document.pdf">Annual Report</a>
             <a href="/data.xlsx">Spreadsheet</a>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -89,7 +89,7 @@ class LinkAnalyzerTest extends TestCase
     public function test_detects_url_as_link_text()
     {
         $html = '<a href="https://www.example.com">https://www.example.com</a>';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
@@ -108,7 +108,7 @@ class LinkAnalyzerTest extends TestCase
             </a>
             <a href="/report.pdf">Download Annual Report (PDF, 2.3MB)</a>
         ';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);

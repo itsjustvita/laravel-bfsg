@@ -2,13 +2,15 @@
 
 namespace ItsJustVita\LaravelBfsg\Commands;
 
-use Illuminate\Console\Command;
-use ItsJustVita\LaravelBfsg\Facades\Bfsg;
-use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
-use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Exception;
-use Symfony\Component\Process\Process;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\Facades\Bfsg;
+use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
+use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
 use Symfony\Component\Process\PhpExecutableFinder;
+use Symfony\Component\Process\Process;
 
 class BfsgCheckCommand extends Command
 {
@@ -29,7 +31,7 @@ class BfsgCheckCommand extends Command
                             {--sanctum : Use Laravel Sanctum authentication}
                             {--detailed : Show detailed violation information}
                             {--save : Save results to database}
-                            {--format=cli : Output format (cli, json, html)}
+                            {--format=cli : Output format (cli, json, html, pdf)}
                             {--verify-ssl=false : Verify SSL certificates (set to true for production)}';
 
     protected $description = 'Check a URL for accessibility compliance';
@@ -39,7 +41,7 @@ class BfsgCheckCommand extends Command
     public function __construct()
     {
         parent::__construct();
-        $this->httpClient = new AuthenticatedHttpClient();
+        $this->httpClient = new AuthenticatedHttpClient;
     }
 
     public function handle()
@@ -70,6 +72,9 @@ class BfsgCheckCommand extends Command
                 case 'html':
                     $this->outputHtml($violations, $url);
                     break;
+                case 'pdf':
+                    $this->outputPdf($violations, $url);
+                    break;
                 default:
                     $this->outputCli($violations);
                     break;
@@ -83,7 +88,8 @@ class BfsgCheckCommand extends Command
             return empty($violations) ? Command::SUCCESS : Command::FAILURE;
 
         } catch (Exception $e) {
-            $this->error("❌ Error: " . $e->getMessage());
+            $this->error('❌ Error: '.$e->getMessage());
+
             return Command::FAILURE;
         }
     }
@@ -95,6 +101,7 @@ class BfsgCheckCommand extends Command
             $this->info('🔐 Authenticating with JWT token...');
             $this->httpClient->authenticateWithJWT($jwt);
             $this->info('✅ JWT authentication configured');
+
             return;
         }
 
@@ -103,6 +110,7 @@ class BfsgCheckCommand extends Command
             $this->info('🔐 Authenticating with bearer token...');
             $this->httpClient->authenticateWithBearerToken($bearer);
             $this->info('✅ Bearer token authentication configured');
+
             return;
         }
 
@@ -112,6 +120,7 @@ class BfsgCheckCommand extends Command
             $headerName = $this->option('api-key-header') ?? 'X-API-Key';
             $this->httpClient->authenticateWithApiKey($apiKey, $headerName);
             $this->info('✅ API key authentication configured');
+
             return;
         }
 
@@ -123,9 +132,10 @@ class BfsgCheckCommand extends Command
                 throw new Exception('Session format must be: name=value');
             }
 
-            list($name, $value) = explode('=', $session, 2);
+            [$name, $value] = explode('=', $session, 2);
             $this->httpClient->authenticateWithSessionCookie($name, $value);
             $this->info('✅ Session cookie authentication configured');
+
             return;
         }
 
@@ -134,7 +144,7 @@ class BfsgCheckCommand extends Command
             $email = $this->option('email') ?? $this->ask('Email');
             $password = $this->option('password') ?? $this->secret('Password');
 
-            if (!$email || !$password) {
+            if (! $email || ! $password) {
                 throw new Exception('Email and password are required for authentication');
             }
 
@@ -151,8 +161,8 @@ class BfsgCheckCommand extends Command
             } else {
                 // Regular form authentication with custom field support
                 $loginUrl = $this->option('login-url')
-                    ? $baseUrl . '/' . ltrim($this->option('login-url'), '/')
-                    : $baseUrl . '/login';
+                    ? $baseUrl.'/'.ltrim($this->option('login-url'), '/')
+                    : $baseUrl.'/login';
 
                 $customFields = [];
                 if ($this->option('username-field')) {
@@ -178,7 +188,7 @@ class BfsgCheckCommand extends Command
                     $customFields
                 );
 
-                if (!$success && !$this->option('json-auth')) {
+                if (! $success && ! $this->option('json-auth')) {
                     throw new Exception('Authentication failed - no session cookie received');
                 }
 
@@ -191,7 +201,9 @@ class BfsgCheckCommand extends Command
     {
         // Use authenticated client if we have authentication
         if ($this->option('auth') || $this->option('bearer') || $this->option('session')) {
-            return $this->httpClient->fetchAuthenticatedUrl($url);
+            $verifySsl = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+
+            return $this->httpClient->fetchAuthenticatedUrl($url, $verifySsl);
         }
 
         // Check if this is a Herd domain and handle accordingly
@@ -203,42 +215,27 @@ class BfsgCheckCommand extends Command
             return $this->fetchHtmlFromHerdDomain($url);
         }
 
-        // Otherwise use simple file_get_contents with SSL handling
+        // Otherwise use Http facade with SSL handling
         $verifySSL = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
 
-        $context = stream_context_create([
-            'http' => [
-                'timeout' => 30,
-                'user_agent' => 'BFSG-Checker/1.2',
-            ],
-            'ssl' => [
-                'verify_peer' => $verifySSL,
-                'verify_peer_name' => $verifySSL,
-                'allow_self_signed' => !$verifySSL,
-            ],
-        ]);
+        $response = Http::withOptions(['verify' => $verifySSL])
+            ->timeout(30)
+            ->withUserAgent('BFSG-Checker/2.0')
+            ->get($url);
 
-        $html = @file_get_contents($url, false, $context);
-
-        if ($html === false) {
-            $error = error_get_last();
-            $errorMsg = $error['message'] ?? 'Unknown error';
-
-            // Check if it's an SSL error
-            if (strpos($errorMsg, 'SSL') !== false || strpos($errorMsg, 'certificate') !== false) {
-                throw new Exception("SSL/Certificate error when fetching {$url}. For local development with self-signed certificates, this is expected.");
-            }
-
-            throw new Exception("Failed to fetch URL: {$url}. Error: {$errorMsg}");
+        if ($response->failed()) {
+            $status = $response->status();
+            throw new Exception("Failed to fetch URL: {$url}. HTTP status: {$status}");
         }
 
-        return $html;
+        return $response->body();
     }
 
     protected function outputCli(array $violations): void
     {
         if (empty($violations)) {
             $this->info('✅ No accessibility issues found!');
+
             return;
         }
 
@@ -301,10 +298,45 @@ class BfsgCheckCommand extends Command
         $this->info("Total Issues: {$stats['total_issues']} (Critical: {$stats['critical']}, Errors: {$stats['errors']}, Warnings: {$stats['warnings']})");
     }
 
+    protected function outputPdf(array $violations, string $url): void
+    {
+        $report = new ReportGenerator($url, $violations);
+        $filename = $report->setFormat('pdf')->saveToFile();
+
+        $this->info("PDF report saved to: {$filename}");
+
+        $stats = $report->getStats();
+        $this->newLine();
+        $this->info("Compliance Score: {$stats['compliance_score']}% (Grade: {$stats['grade']})");
+        $this->info("Total Issues: {$stats['total_issues']}");
+    }
+
     protected function saveResults(string $url, array $violations): void
     {
-        // This would save to database if the table exists
-        $this->info('💾 Results saved to database');
+        $report = new ReportGenerator($url, $violations);
+        $stats = $report->getStats();
+
+        $dbReport = BfsgReport::create([
+            'url' => $url,
+            'total_violations' => $stats['total_issues'],
+            'score' => $stats['compliance_score'],
+            'grade' => $stats['grade'],
+        ]);
+
+        foreach ($violations as $analyzer => $issues) {
+            foreach ($issues as $issue) {
+                $dbReport->violations()->create([
+                    'analyzer' => $analyzer,
+                    'severity' => $issue['severity'] ?? 'notice',
+                    'message' => $issue['message'],
+                    'element' => $issue['element'] ?? null,
+                    'wcag_rule' => $issue['rule'] ?? null,
+                    'suggestion' => $issue['suggestion'] ?? null,
+                ]);
+            }
+        }
+
+        $this->info("Results saved to database (Report #{$dbReport->id})");
     }
 
     protected function fetchHtmlFromHerdDomain(string $url): string
@@ -313,10 +345,10 @@ class BfsgCheckCommand extends Command
         $port = $this->findAvailablePort();
 
         // Get the PHP executable
-        $phpFinder = new PhpExecutableFinder();
+        $phpFinder = new PhpExecutableFinder;
         $phpBinary = $phpFinder->find();
 
-        if (!$phpBinary) {
+        if (! $phpBinary) {
             throw new Exception('Could not find PHP binary');
         }
 
@@ -330,7 +362,7 @@ class BfsgCheckCommand extends Command
             "127.0.0.1:{$port}",
             '-t',
             $publicPath,
-            base_path('server.php')
+            base_path('server.php'),
         ];
 
         $serverProcess = new Process($serverCommand);
@@ -344,28 +376,20 @@ class BfsgCheckCommand extends Command
             // Parse the original URL to get the path
             $parsedUrl = parse_url($url);
             $path = $parsedUrl['path'] ?? '/';
-            $query = isset($parsedUrl['query']) ? '?' . $parsedUrl['query'] : '';
-            $fragment = isset($parsedUrl['fragment']) ? '#' . $parsedUrl['fragment'] : '';
+            $query = isset($parsedUrl['query']) ? '?'.$parsedUrl['query'] : '';
+            $fragment = isset($parsedUrl['fragment']) ? '#'.$parsedUrl['fragment'] : '';
 
             // Build the local server URL
             $localUrl = "http://127.0.0.1:{$port}{$path}{$query}{$fragment}";
 
             // Fetch the HTML from the local server
-            $context = stream_context_create([
-                'http' => [
-                    'timeout' => 30,
-                    'user_agent' => 'BFSG-Checker/1.2',
-                ]
-            ]);
+            $response = Http::timeout(30)->withUserAgent('BFSG-Checker/2.0')->get($localUrl);
 
-            $html = @file_get_contents($localUrl, false, $context);
-
-            if ($html === false) {
-                $error = error_get_last();
-                throw new Exception("Failed to fetch from temporary server: " . ($error['message'] ?? 'Unknown error'));
+            if ($response->failed()) {
+                throw new Exception("Failed to fetch from temporary server: HTTP {$response->status()}");
             }
 
-            return $html;
+            return $response->body();
 
         } finally {
             // Always stop the server - use signal 9 for immediate termination

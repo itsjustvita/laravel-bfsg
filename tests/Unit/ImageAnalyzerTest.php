@@ -11,10 +11,10 @@ class ImageAnalyzerTest extends TestCase
     public function test_detects_missing_alt_attributes(): void
     {
         $html = '<img src="test.jpg">';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new ImageAnalyzer();
+        $analyzer = new ImageAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -26,10 +26,10 @@ class ImageAnalyzerTest extends TestCase
     public function test_accepts_images_with_alt_text(): void
     {
         $html = '<img src="test.jpg" alt="Test image">';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new ImageAnalyzer();
+        $analyzer = new ImageAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -39,10 +39,10 @@ class ImageAnalyzerTest extends TestCase
     public function test_accepts_decorative_images_with_empty_alt(): void
     {
         $html = '<img src="decoration.jpg" alt="" role="presentation">';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new ImageAnalyzer();
+        $analyzer = new ImageAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -52,10 +52,10 @@ class ImageAnalyzerTest extends TestCase
     public function test_warns_about_empty_alt_without_decorative_role(): void
     {
         $html = '<img src="important.jpg" alt="">';
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new ImageAnalyzer();
+        $analyzer = new ImageAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 

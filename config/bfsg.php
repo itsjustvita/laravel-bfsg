@@ -11,7 +11,7 @@ return [
     |
     */
     'compliance_level' => env('BFSG_LEVEL', 'AA'),
-    
+
     /*
     |--------------------------------------------------------------------------
     | Automatic Corrections
@@ -21,7 +21,7 @@ return [
     |
     */
     'auto_fix' => env('BFSG_AUTO_FIX', false),
-    
+
     /*
     |--------------------------------------------------------------------------
     | Active Checks
@@ -42,8 +42,13 @@ return [
         'tables' => true,      // Table accessibility (captions, th, scope)
         'media' => true,       // Video/Audio accessibility (captions, transcripts)
         'semantic' => true,    // Semantic HTML structure (main, nav, article, etc.)
+        'page_title' => true,  // Page title validation (WCAG 2.4.2)
+        'input_purpose' => true, // Input purpose / autocomplete (WCAG 1.3.5)
+        'focus' => true,       // Focus indicator visibility (WCAG 2.4.7)
+        'error_handling' => true, // Form error handling (WCAG 3.3.1, 3.3.3)
+        'status_messages' => true, // Status messages / live regions (WCAG 4.1.3)
     ],
-    
+
     /*
     |--------------------------------------------------------------------------
     | Reporting
@@ -52,7 +57,10 @@ return [
     'reporting' => [
         'enabled' => env('BFSG_REPORTING', true),
         'email' => env('BFSG_REPORT_EMAIL', null),
-        'save_to_database' => false,
+        'save_to_database' => env('BFSG_SAVE_TO_DB', false),
+        'database' => [
+            'connection' => env('BFSG_DB_CONNECTION', null),
+        ],
     ],
 
     /*

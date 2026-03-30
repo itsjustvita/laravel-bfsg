@@ -4,7 +4,7 @@
 [![Total Downloads](https://img.shields.io/packagist/dt/itsjustvita/laravel-bfsg.svg?style=flat-square)](https://packagist.org/packages/itsjustvita/laravel-bfsg)
 [![License](https://img.shields.io/packagist/l/itsjustvita/laravel-bfsg.svg?style=flat-square)](https://packagist.org/packages/itsjustvita/laravel-bfsg)
 [![PHP Version](https://img.shields.io/packagist/php-v/itsjustvita/laravel-bfsg.svg?style=flat-square)](https://packagist.org/packages/itsjustvita/laravel-bfsg)
-[![Laravel Version](https://img.shields.io/badge/Laravel-12.x-FF2D20?style=flat-square&logo=laravel)](https://laravel.com)
+[![Laravel Version](https://img.shields.io/badge/Laravel-12.x%20|%2013.x-FF2D20?style=flat-square&logo=laravel)](https://laravel.com)
 
 A comprehensive Laravel package for BFSG (Barrierefreiheitsstärkungsgesetz) and WCAG compliance, helping developers create accessible web applications that comply with German and international accessibility standards.
 
@@ -12,19 +12,21 @@ A comprehensive Laravel package for BFSG (Barrierefreiheitsstärkungsgesetz) and
 
 - ✅ **WCAG 2.1 Level AA/AAA Compliance Checking**
 - ✅ **BFSG 2025 Ready** - Full compliance with German accessibility law
-- ✅ **11 Specialized Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard, Language, Tables, Media, Semantic HTML
+- ✅ **16 Specialized Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard, Language, Tables, Media, Semantic HTML, Contrast, Page Title, Input Purpose, Focus, Error Handling, Status Messages
+- ✅ **CSS-Based Contrast Analysis** - Parses `<style>` blocks with cascade/specificity/inheritance resolution
 - ✅ **SPA Support** - Test React, Vue, Inertia apps with Playwright browser engine
-- ✅ **Beautiful HTML Reports** - Professional reports with compliance scores and grades
-- ✅ **Multiple Report Formats** - HTML, JSON, Markdown with statistics
+- ✅ **Beautiful HTML & PDF Reports** - Professional reports with compliance scores and grades
+- ✅ **Multiple Report Formats** - HTML, PDF, JSON, Markdown with statistics
+- ✅ **Database Persistence** - Track violations over time with Eloquent models and publishable migrations
 - ✅ **Blade Components** - Pre-built accessible components
 - ✅ **Artisan Commands** - CLI tools for accessibility testing
 - ✅ **Detailed Reporting** - Comprehensive violation reports with suggestions
-- ✅ **Laravel 12 Support** - Built for the latest Laravel version
+- ✅ **Laravel 12 + 13 Support** - Built for the latest Laravel versions
 
 ## 📋 Requirements
 
 - PHP 8.2 or higher
-- Laravel 12.0 or higher
+- Laravel 12.0 or 13.0 or higher
 
 ## 📦 Installation
 
@@ -46,6 +48,13 @@ Optionally publish the views:
 php artisan vendor:publish --tag=bfsg-views
 ```
 
+Publish the database migrations (required for `--save` and `bfsg:history`):
+
+```bash
+php artisan vendor:publish --tag=bfsg-migrations
+php artisan migrate
+```
+
 ## ⚙️ Configuration
 
 The configuration file `config/bfsg.php` allows you to customize:
@@ -58,19 +67,24 @@ return [
     // Enable automatic fixes for simple issues
     'auto_fix' => env('BFSG_AUTO_FIX', false),
 
-    // Active checks to perform (all 11 analyzers)
+    // Active checks to perform (all 16 analyzers)
     'checks' => [
-        'images' => true,      // Alt text validation
-        'forms' => true,       // Form label checking
-        'headings' => true,    // Heading hierarchy
-        'contrast' => true,    // Color contrast ratios
-        'keyboard' => true,    // Keyboard navigation
-        'aria' => true,        // ARIA attributes
-        'links' => true,       // Link accessibility
-        'language' => true,    // Language attributes (NEW)
-        'tables' => true,      // Table accessibility (NEW)
-        'media' => true,       // Video/audio captions (NEW)
-        'semantic' => true,    // Semantic HTML structure (NEW)
+        'images' => true,         // Alt text validation
+        'forms' => true,          // Form label checking
+        'headings' => true,       // Heading hierarchy
+        'contrast' => true,       // Color contrast ratios (incl. CSS)
+        'keyboard' => true,       // Keyboard navigation
+        'aria' => true,           // ARIA attributes
+        'links' => true,          // Link accessibility
+        'language' => true,       // Language attributes
+        'tables' => true,         // Table accessibility
+        'media' => true,          // Video/audio captions
+        'semantic' => true,       // Semantic HTML structure
+        'page_title' => true,     // Page title (WCAG 2.4.2) (NEW in 2.0)
+        'input_purpose' => true,  // Input purpose (WCAG 1.3.5) (NEW in 2.0)
+        'focus' => true,          // Focus visible (WCAG 2.4.7) (NEW in 2.0)
+        'error_handling' => true, // Error handling (WCAG 3.3.1/3.3.3) (NEW in 2.0)
+        'status_messages' => true, // Status messages (WCAG 4.1.3) (NEW in 2.0)
     ],
 
     // Reporting configuration
@@ -106,6 +120,12 @@ php artisan bfsg:check https://example.com --format=html
 
 # Generate JSON report
 php artisan bfsg:check https://example.com --format=json
+
+# Generate PDF report (requires barryvdh/laravel-dompdf)
+php artisan bfsg:check https://example.com --format=pdf
+
+# Save results to database for historical tracking
+php artisan bfsg:check https://example.com --save
 ```
 
 #### `bfsg:analyze` - Quick Analysis + SPA Support
@@ -123,6 +143,23 @@ php artisan bfsg:analyze https://example.com --browser --headless=false
 
 # Adjust timeout for slow-loading SPAs
 php artisan bfsg:analyze https://example.com --browser --timeout=60000
+```
+
+#### `bfsg:history` - Report History
+View stored reports, track score trends, and manage historical data:
+
+```bash
+# View all stored reports
+php artisan bfsg:history
+
+# Filter by URL
+php artisan bfsg:history --url=https://example.com
+
+# Show score trends over time
+php artisan bfsg:history --trends
+
+# Cleanup reports older than 90 days
+php artisan bfsg:history --cleanup --days=90
 ```
 
 #### Authentication Support
@@ -196,7 +233,7 @@ Route::middleware(['accessible'])->group(function () {
 });
 ```
 
-## 🔍 Available Analyzers (11 Total)
+## 🔍 Available Analyzers (16 Total)
 
 ### ImageAnalyzer
 - Checks for missing alt attributes
@@ -213,10 +250,12 @@ Route::middleware(['accessible'])->group(function () {
 - Checks for missing h1
 - Ensures logical heading structure
 
-### ContrastAnalyzer
+### ContrastAnalyzer (enhanced in 2.0)
 - Calculates color contrast ratios
 - Validates against WCAG AA/AAA standards
 - Checks text and background combinations
+- **NEW**: Parses `<style>` blocks via CssParser for CSS-based contrast checking
+- **NEW**: Resolves cascade, specificity, and inheritance for accurate color detection
 
 ### AriaAnalyzer
 - Validates ARIA roles
@@ -236,32 +275,57 @@ Route::middleware(['accessible'])->group(function () {
 - Validates focus management
 - Detects mouse-only event handlers
 
-### LanguageAnalyzer ⭐ NEW
+### LanguageAnalyzer
 - Validates `lang` attribute on `<html>` element
 - Checks for valid ISO 639-1 language codes
 - Detects language changes in content
 - Validates `xml:lang` attributes (BFSG §3 requirement)
 
-### TableAnalyzer ⭐ NEW
+### TableAnalyzer
 - Checks for `<caption>` elements
 - Validates `<th>` with proper `scope` attributes
 - Detects tables without header cells
 - Identifies layout tables vs data tables
 - Validates complex table relationships
 
-### MediaAnalyzer ⭐ NEW
+### MediaAnalyzer
 - Checks videos for captions/subtitles (`<track kind="captions">`)
 - Validates audio transcript references
 - Detects autoplay issues
 - Ensures controls are present
 - Validates YouTube iframe caption parameters
 
-### SemanticHTMLAnalyzer ⭐ NEW
+### SemanticHTMLAnalyzer
 - Validates landmark elements (`<main>`, `<nav>`, `<header>`, `<footer>`)
 - Detects "div-itis" (excessive div usage)
 - Checks button vs link usage
 - Validates section headings
 - Ensures proper list structures
+
+### PageTitleAnalyzer ⭐ NEW in 2.0
+- Validates page `<title>` element exists (WCAG 2.4.2)
+- Checks for descriptive, non-generic titles
+- Detects duplicate or missing titles
+
+### InputPurposeAnalyzer ⭐ NEW in 2.0
+- Validates `autocomplete` attributes on input fields (WCAG 1.3.5)
+- Checks for appropriate input purpose identification
+- Ensures user data fields support autofill
+
+### FocusAnalyzer ⭐ NEW in 2.0
+- Validates visible focus indicators (WCAG 2.4.7)
+- Detects `outline: none` / `outline: 0` without replacement styles
+- Checks for custom focus indicator implementations
+
+### ErrorHandlingAnalyzer ⭐ NEW in 2.0
+- Validates form error identification (WCAG 3.3.1)
+- Checks for error suggestions (WCAG 3.3.3)
+- Ensures error messages are associated with form fields
+
+### StatusMessageAnalyzer ⭐ NEW in 2.0
+- Validates status messages use ARIA live regions (WCAG 4.1.3)
+- Checks for `role="status"`, `role="alert"`, `aria-live` attributes
+- Ensures dynamic content updates are announced to assistive technologies
 
 ## 📊 Report Generation
 
@@ -282,6 +346,13 @@ Reports include:
 - **Suggestions** for fixing each issue
 
 Reports are saved to `storage/app/bfsg-reports/`.
+
+### PDF Reports
+Professional PDF reports for stakeholders and compliance documentation (requires `barryvdh/laravel-dompdf`):
+
+```bash
+php artisan bfsg:check https://example.com --format=pdf
+```
 
 ### JSON Reports
 Machine-readable format for CI/CD integration:
@@ -307,6 +378,44 @@ $filename = $report->setFormat('html')->saveToFile();
 // Get statistics
 $stats = $report->getStats();
 // ['compliance_score' => 85, 'grade' => 'B+', 'total_issues' => 12, ...]
+```
+
+## 🗄️ Database Persistence
+
+Track accessibility violations over time by saving reports to your database.
+
+### Setup
+
+Publish and run the migrations:
+
+```bash
+php artisan vendor:publish --tag=bfsg-migrations
+php artisan migrate
+```
+
+This creates `bfsg_reports` and `bfsg_violations` tables with corresponding `BfsgReport` and `BfsgViolation` Eloquent models.
+
+### Saving Reports
+
+```bash
+# Save check results to database
+php artisan bfsg:check https://example.com --save
+```
+
+### Viewing History
+
+```bash
+# View all stored reports
+php artisan bfsg:history
+
+# Filter by URL
+php artisan bfsg:history --url=https://example.com
+
+# Show score trends
+php artisan bfsg:history --trends
+
+# Cleanup old reports
+php artisan bfsg:history --cleanup --days=90
 ```
 
 ## 📱 Testing Single Page Applications (SPAs)
@@ -344,7 +453,7 @@ Each violation includes:
 
 ## 🧪 Testing
 
-Run the test suite:
+Run the test suite (215 tests, 424 assertions):
 
 ```bash
 composer test

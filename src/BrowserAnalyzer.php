@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Process;
 class BrowserAnalyzer
 {
     protected array $analyzers;
+
     protected array $options;
 
     public function __construct(array $options = [])
@@ -21,13 +22,13 @@ class BrowserAnalyzer
         ], $options);
 
         $this->analyzers = [
-            new Analyzers\HeadingAnalyzer(),
-            new Analyzers\ImageAnalyzer(),
-            new Analyzers\FormAnalyzer(),
-            new Analyzers\AriaAnalyzer(),
-            new Analyzers\LinkAnalyzer(),
-            new Analyzers\ContrastAnalyzer(),
-            new Analyzers\KeyboardNavigationAnalyzer(),
+            new Analyzers\HeadingAnalyzer,
+            new Analyzers\ImageAnalyzer,
+            new Analyzers\FormAnalyzer,
+            new Analyzers\AriaAnalyzer,
+            new Analyzers\LinkAnalyzer,
+            new Analyzers\ContrastAnalyzer,
+            new Analyzers\KeyboardNavigationAnalyzer,
         ];
     }
 
@@ -44,7 +45,7 @@ class BrowserAnalyzer
             $html = $this->getRenderedHtml($url);
 
             // Convert to DOMDocument for analysis
-            $dom = new DOMDocument();
+            $dom = new DOMDocument;
             libxml_use_internal_errors(true);
             $dom->loadHTML($html);
             libxml_clear_errors();

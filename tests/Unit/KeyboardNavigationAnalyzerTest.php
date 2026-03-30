@@ -15,10 +15,10 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <main>Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
@@ -34,15 +34,15 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <main id="main">Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
         // Should not have skip link violation
-        $skipLinkViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'skip link'));
+        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
         $this->assertEmpty($skipLinkViolations);
     }
 
@@ -54,14 +54,14 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <button tabindex="3">Third</button>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
-        $tabindexViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'positive tabindex'));
+        $tabindexViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'positive tabindex'));
         $this->assertNotEmpty($tabindexViolations);
     }
 
@@ -74,15 +74,15 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
         // Should have violations for missing aria-modal and aria-label
-        $modalViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Modal'));
+        $modalViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Modal'));
         $this->assertCount(2, $modalViolations);
     }
 
@@ -95,15 +95,15 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
         // Should not have modal violations
-        $modalViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Modal') || str_contains($v['message'], 'modal'));
+        $modalViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Modal') || str_contains($v['message'], 'modal'));
         $this->assertEmpty($modalViolations);
     }
 
@@ -114,14 +114,14 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <a href="#">Valid link</a>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
-        $linkViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'Link without href'));
+        $linkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Link without href'));
         $this->assertCount(1, $linkViolations);
     }
 
@@ -133,14 +133,14 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <button onclick="valid()">Valid button</button>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
-        $clickViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'click handler'));
+        $clickViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'click handler'));
         $this->assertCount(2, $clickViolations);
     }
 
@@ -152,15 +152,15 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
         // Should not have violations for this properly configured element
-        $clickViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'click handler'));
+        $clickViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'click handler'));
         $this->assertEmpty($clickViolations);
     }
 
@@ -172,14 +172,14 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
-        $mouseViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'mouse events'));
+        $mouseViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'mouse events'));
         $this->assertCount(1, $mouseViolations);
     }
 
@@ -191,14 +191,14 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer();
+        $analyzer = new KeyboardNavigationAnalyzer;
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
-        $mouseViolations = array_filter($violations, fn($v) => str_contains($v['message'], 'mouse events'));
+        $mouseViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'mouse events'));
         $this->assertEmpty($mouseViolations);
     }
 }

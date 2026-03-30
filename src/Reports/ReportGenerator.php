@@ -2,13 +2,17 @@
 
 namespace ItsJustVita\LaravelBfsg\Reports;
 
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\View;
 
 class ReportGenerator
 {
     protected array $violations = [];
+
     protected string $url = '';
+
     protected string $format = 'html';
+
     protected array $stats = [];
 
     /**
@@ -27,6 +31,7 @@ class ReportGenerator
     public function setFormat(string $format): self
     {
         $this->format = $format;
+
         return $this;
     }
 
@@ -47,16 +52,21 @@ class ReportGenerator
     /**
      * Save report to file
      */
-    public function saveToFile(string $path = null): string
+    public function saveToFile(?string $path = null): string
     {
         if ($path === null) {
             $timestamp = now()->format('Y-m-d_His');
-            $extension = $this->format === 'json' ? 'json' : 'html';
+            $extension = match ($this->format) {
+                'json' => 'json',
+                'markdown' => 'md',
+                'pdf' => 'pdf',
+                default => 'html',
+            };
             $path = storage_path("app/bfsg-reports/report_{$timestamp}.{$extension}");
         }
 
         $directory = dirname($path);
-        if (!is_dir($directory)) {
+        if (! is_dir($directory)) {
             mkdir($directory, 0755, true);
         }
 
@@ -106,7 +116,7 @@ class ReportGenerator
     {
         $md = "# BFSG Accessibility Report\n\n";
         $md .= "**URL:** {$this->url}\n";
-        $md .= "**Date:** " . now()->format('Y-m-d H:i:s') . "\n";
+        $md .= '**Date:** '.now()->format('Y-m-d H:i:s')."\n";
         $md .= "**Compliance Score:** {$this->stats['compliance_score']}%\n\n";
 
         $md .= "## Summary\n\n";
@@ -118,13 +128,14 @@ class ReportGenerator
 
         if ($this->stats['total_issues'] === 0) {
             $md .= "✅ **No accessibility issues found!**\n\n";
+
             return $md;
         }
 
         $md .= "## Issues by Category\n\n";
 
         foreach ($this->violations as $category => $issues) {
-            $md .= "### " . ucfirst($category) . " ({$this->stats['by_category'][$category]} issues)\n\n";
+            $md .= '### '.ucfirst($category)." ({$this->stats['by_category'][$category]} issues)\n\n";
 
             foreach ($issues as $idx => $issue) {
                 $severity = $issue['severity'] ?? 'notice';
@@ -142,13 +153,20 @@ class ReportGenerator
     }
 
     /**
-     * Generate PDF report (placeholder - would need PDF library)
+     * Generate PDF report
      */
     protected function generatePdf(): string
     {
-        // This would require a PDF library like DomPDF or wkhtmltopdf
-        // For now, return HTML that can be printed to PDF
-        return $this->generateHtml();
+        if (! class_exists(Pdf::class)) {
+            throw new \RuntimeException(
+                'PDF generation requires barryvdh/laravel-dompdf. Install it with: composer require barryvdh/laravel-dompdf'
+            );
+        }
+
+        $html = $this->generateHtml();
+        $pdf = Pdf::loadHTML($html);
+
+        return $pdf->output();
     }
 
     /**

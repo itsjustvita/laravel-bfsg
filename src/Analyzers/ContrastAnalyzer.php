@@ -4,10 +4,13 @@ namespace ItsJustVita\LaravelBfsg\Analyzers;
 
 use DOMDocument;
 use DOMXPath;
+use ItsJustVita\LaravelBfsg\Services\CssParser;
 
 class ContrastAnalyzer
 {
     protected array $violations = [];
+
+    protected CssParser $cssParser;
 
     // WCAG AA and AAA contrast requirements
     protected const CONTRAST_REQUIREMENTS = [
@@ -21,50 +24,90 @@ class ContrastAnalyzer
         ],
     ];
 
+    protected const WCAG_AA_NORMAL = 4.5;
+
+    protected const WCAG_AA_LARGE = 3.0;
+
     public function analyze(DOMDocument $dom): array
     {
         $this->violations = [];
         $xpath = new DOMXPath($dom);
 
-        // Check inline styles for potential contrast issues
-        $this->checkInlineStyles($xpath);
+        $this->cssParser = new CssParser;
+        $this->cssParser->parse($dom);
 
-        // Check common problematic color combinations
+        $this->checkCssColors($xpath, $dom);
         $this->checkProblematicPatterns($xpath);
-
-        // Check for text without sufficient background definition
-        $this->checkTextWithoutBackground($xpath);
 
         return ['issues' => $this->violations];
     }
 
-    protected function checkInlineStyles(DOMXPath $xpath): void
+    protected function checkCssColors(DOMXPath $xpath, DOMDocument $dom): void
     {
-        // Find elements with inline color styles
-        $elementsWithColor = $xpath->query('//*[@style and (contains(@style, "color:") or contains(@style, "background-color:"))]');
+        // Query text-containing elements
+        $textElements = $xpath->query('//p | //span | //a | //h1 | //h2 | //h3 | //h4 | //h5 | //h6 | //li | //td | //th | //label | //button | //dt | //dd | //figcaption | //blockquote | //cite');
 
-        foreach ($elementsWithColor as $element) {
-            $style = $element->getAttribute('style');
-            $color = $this->extractColor($style, 'color');
-            $backgroundColor = $this->extractColor($style, 'background-color');
+        if ($textElements === false) {
+            return;
+        }
 
-            if ($color && $backgroundColor) {
-                $ratio = $this->calculateContrastRatio($color, $backgroundColor);
+        foreach ($textElements as $element) {
+            if (! $element instanceof \DOMElement) {
+                continue;
+            }
 
-                if ($ratio !== null && $ratio < self::CONTRAST_REQUIREMENTS['AA']['normal']) {
-                    $this->violations[] = [
-                        'type' => 'error',
-                        'rule' => 'WCAG 1.4.3',
-                        'element' => $element->nodeName,
-                        'message' => sprintf('Insufficient color contrast ratio: %.2f:1', $ratio),
-                        'colors' => [
-                            'foreground' => $color,
-                            'background' => $backgroundColor,
-                        ],
-                        'suggestion' => sprintf('Increase contrast to at least %.1f:1 for WCAG AA compliance', self::CONTRAST_REQUIREMENTS['AA']['normal']),
-                        'auto_fixable' => false,
-                    ];
+            // Skip elements without text content
+            $text = trim($element->textContent);
+            if ($text === '') {
+                continue;
+            }
+
+            $colors = $this->cssParser->getResolvedColors($element);
+
+            $fgRgb = $this->colorToRgb($colors['color']);
+            $bgRgb = $this->colorToRgb($colors['backgroundColor']);
+
+            if ($fgRgb === null || $bgRgb === null) {
+                continue;
+            }
+
+            $ratio = $this->calculateContrastRatio($colors['color'], $colors['backgroundColor']);
+
+            if ($ratio === null) {
+                continue;
+            }
+
+            $requiredRatio = self::WCAG_AA_NORMAL;
+
+            // Check if large text (lower requirement)
+            $tagName = strtolower($element->tagName);
+            if (in_array($tagName, ['h1', 'h2', 'h3', 'h4'])) {
+                $requiredRatio = self::WCAG_AA_LARGE;
+            }
+
+            if ($ratio < $requiredRatio) {
+                $issue = [
+                    'type' => 'error',
+                    'severity' => 'error',
+                    'rule' => 'WCAG 1.4.3',
+                    'message' => sprintf(
+                        'Insufficient contrast ratio %.2f:1 (required %.1f:1) for text "%s" with color %s on background %s',
+                        $ratio,
+                        $requiredRatio,
+                        mb_substr($text, 0, 30),
+                        $colors['color'],
+                        $colors['backgroundColor']
+                    ),
+                    'element' => $tagName,
+                    'suggestion' => 'Increase the contrast between text color and background color to meet WCAG AA requirements.',
+                ];
+
+                if ($colors['approximate']) {
+                    $issue['approximate'] = true;
+                    $issue['message'] .= ' (approximate - colors may be inherited or defaulted)';
                 }
+
+                $this->violations[] = $issue;
             }
         }
     }
@@ -101,33 +144,6 @@ class ContrastAnalyzer
                     'auto_fixable' => false,
                 ];
             }
-        }
-    }
-
-    protected function checkTextWithoutBackground(DOMXPath $xpath): void
-    {
-        // Check for text elements without explicit background
-        $textElements = $xpath->query('//p|//span|//div[text()]|//h1|//h2|//h3|//h4|//h5|//h6');
-        $elementsWithoutBackground = 0;
-
-        foreach ($textElements as $element) {
-            $style = $element->getAttribute('style');
-
-            // Check if element has color but no background
-            if ($style && strpos($style, 'color:') !== false && strpos($style, 'background') === false) {
-                $elementsWithoutBackground++;
-            }
-        }
-
-        if ($elementsWithoutBackground > 0) {
-            $this->violations[] = [
-                'type' => 'notice',
-                'rule' => 'WCAG 1.4.3',
-                'element' => 'text elements',
-                'message' => "Found {$elementsWithoutBackground} text element(s) with color but no explicit background",
-                'suggestion' => 'Ensure sufficient contrast with inherited or default backgrounds',
-                'auto_fixable' => false,
-            ];
         }
     }
 

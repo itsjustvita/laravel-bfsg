@@ -4,8 +4,9 @@ namespace ItsJustVita\LaravelBfsg\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
-use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use Illuminate\Support\Facades\Log;
+use ItsJustVita\LaravelBfsg\Facades\Bfsg;
+use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 
 class CheckAccessibility
 {
@@ -17,7 +18,7 @@ class CheckAccessibility
         $response = $next($request);
 
         // Only check HTML responses
-        if (!$this->shouldCheck($request, $response)) {
+        if (! $this->shouldCheck($request, $response)) {
             return $response;
         }
 
@@ -27,7 +28,7 @@ class CheckAccessibility
         // Analyze for accessibility
         $violations = Bfsg::analyze($html);
 
-        if (!empty($violations)) {
+        if (! empty($violations)) {
             $this->handleViolations($request, $violations);
 
             // Add violations to response headers for debugging
@@ -48,7 +49,7 @@ class CheckAccessibility
     protected function shouldCheck(Request $request, $response): bool
     {
         // Only check GET requests
-        if (!$request->isMethod('GET')) {
+        if (! $request->isMethod('GET')) {
             return false;
         }
 
@@ -59,7 +60,7 @@ class CheckAccessibility
         }
 
         // Skip if disabled
-        if (!config('bfsg.middleware.enabled', true)) {
+        if (! config('bfsg.middleware.enabled', true)) {
             return false;
         }
 
@@ -109,7 +110,58 @@ class CheckAccessibility
      */
     protected function storeViolations(string $url, array $violations): void
     {
-        // This would store violations in a database table
-        // You can create a migration for this if needed
+        $totalViolations = array_sum(array_map('count', $violations));
+
+        $critical = 0;
+        $errors = 0;
+        $warnings = 0;
+        $notices = 0;
+
+        foreach ($violations as $issues) {
+            foreach ($issues as $issue) {
+                match ($issue['severity'] ?? 'notice') {
+                    'critical' => $critical++,
+                    'error' => $errors++,
+                    'warning' => $warnings++,
+                    default => $notices++,
+                };
+            }
+        }
+
+        $score = max(0, min(100, (int) (100 - ($critical * 10 + $errors * 5 + $warnings * 2 + $notices * 0.5))));
+
+        $grade = match (true) {
+            $score >= 95 => 'A+',
+            $score >= 90 => 'A',
+            $score >= 85 => 'B+',
+            $score >= 80 => 'B',
+            $score >= 75 => 'C+',
+            $score >= 70 => 'C',
+            $score >= 60 => 'D',
+            default => 'F',
+        };
+
+        $report = BfsgReport::create([
+            'url' => $url,
+            'total_violations' => $totalViolations,
+            'score' => $score,
+            'grade' => $grade,
+            'metadata' => [
+                'compliance_level' => config('bfsg.compliance_level'),
+            ],
+        ]);
+
+        foreach ($violations as $analyzer => $issues) {
+            foreach ($issues as $issue) {
+                $report->violations()->create([
+                    'analyzer' => $analyzer,
+                    'severity' => $issue['severity'] ?? 'notice',
+                    'message' => $issue['message'],
+                    'element' => $issue['element'] ?? null,
+                    'wcag_rule' => $issue['rule'] ?? null,
+                    'suggestion' => $issue['suggestion'] ?? null,
+                ]);
+            }
+        }
     }
 }

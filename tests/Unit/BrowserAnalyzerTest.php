@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
+use ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
@@ -12,12 +13,12 @@ class BrowserAnalyzerTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->analyzer = new BrowserAnalyzer();
+        $this->analyzer = new BrowserAnalyzer;
     }
 
     public function test_browser_analyzer_initializes_with_default_options()
     {
-        $analyzer = new BrowserAnalyzer();
+        $analyzer = new BrowserAnalyzer;
         $this->assertInstanceOf(BrowserAnalyzer::class, $analyzer);
     }
 
@@ -35,7 +36,7 @@ class BrowserAnalyzerTest extends TestCase
 
     public function test_can_set_custom_analyzers()
     {
-        $customAnalyzer = $this->createMock(\ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer::class);
+        $customAnalyzer = $this->createMock(HeadingAnalyzer::class);
 
         $result = $this->analyzer->setAnalyzers([$customAnalyzer]);
 
@@ -44,7 +45,7 @@ class BrowserAnalyzerTest extends TestCase
 
     public function test_can_add_analyzer()
     {
-        $customAnalyzer = $this->createMock(\ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer::class);
+        $customAnalyzer = $this->createMock(HeadingAnalyzer::class);
 
         $result = $this->analyzer->addAnalyzer($customAnalyzer);
 
@@ -53,6 +54,7 @@ class BrowserAnalyzerTest extends TestCase
 
     /**
      * @group integration
+     *
      * @requires extension curl
      */
     public function test_analyze_url_returns_error_without_playwright()
@@ -63,7 +65,7 @@ class BrowserAnalyzerTest extends TestCase
         $this->assertIsArray($result);
         $this->assertArrayHasKey('success', $result);
 
-        if (!$result['success']) {
+        if (! $result['success']) {
             $this->assertArrayHasKey('error', $result);
             $this->assertArrayHasKey('fallback_message', $result);
         }
@@ -84,12 +86,12 @@ class BrowserAnalyzerTest extends TestCase
                     'issues' => [
                         ['type' => 'error', 'message' => 'Error 1'],
                         ['type' => 'warning', 'message' => 'Warning 1'],
-                    ]
+                    ],
                 ],
                 'ImageAnalyzer' => [
                     'issues' => [
                         ['type' => 'notice', 'message' => 'Notice 1'],
-                    ]
+                    ],
                 ],
             ],
             'summary' => [
@@ -97,7 +99,7 @@ class BrowserAnalyzerTest extends TestCase
                 'errors' => 1,
                 'warnings' => 1,
                 'notices' => 1,
-            ]
+            ],
         ];
 
         $mockAnalyzer->method('analyzeUrl')
