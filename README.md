@@ -8,27 +8,28 @@
 
 A comprehensive Laravel package for BFSG (Barrierefreiheitsstärkungsgesetz) and WCAG compliance, helping developers create accessible web applications that comply with German and international accessibility standards.
 
-## 🎯 Features
+## Features
 
-- ✅ **WCAG 2.1 Level AA/AAA Compliance Checking**
-- ✅ **BFSG 2025 Ready** - Full compliance with German accessibility law
-- ✅ **16 Specialized Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard, Language, Tables, Media, Semantic HTML, Contrast, Page Title, Input Purpose, Focus, Error Handling, Status Messages
-- ✅ **CSS-Based Contrast Analysis** - Parses `<style>` blocks with cascade/specificity/inheritance resolution
-- ✅ **SPA Support** - Test React, Vue, Inertia apps with Playwright browser engine
-- ✅ **Beautiful HTML & PDF Reports** - Professional reports with compliance scores and grades
-- ✅ **Multiple Report Formats** - HTML, PDF, JSON, Markdown with statistics
-- ✅ **Database Persistence** - Track violations over time with Eloquent models and publishable migrations
-- ✅ **Blade Components** - Pre-built accessible components
-- ✅ **Artisan Commands** - CLI tools for accessibility testing
-- ✅ **Detailed Reporting** - Comprehensive violation reports with suggestions
-- ✅ **Laravel 12 + 13 Support** - Built for the latest Laravel versions
+- **WCAG 2.1 Level AA/AAA Compliance Checking**
+- **BFSG 2025 Ready** - Full compliance with German accessibility law
+- **16 Specialized Analyzers** - Images, Forms, Headings, ARIA, Links, Keyboard, Language, Tables, Media, Semantic HTML, Contrast, Page Title, Input Purpose, Focus, Error Handling, Status Messages
+- **CSS-Based Contrast Analysis** - Parses `<style>` blocks with cascade/specificity/inheritance resolution
+- **MCP Server** - Built-in Model Context Protocol server for AI assistant integration (Laravel Boost compatible)
+- **SPA Support** - Test React, Vue, Inertia apps with Playwright browser engine
+- **HTML & PDF Reports** - Professional reports with compliance scores and grades
+- **Multiple Report Formats** - HTML, PDF, JSON, Markdown with statistics
+- **Database Persistence** - Track violations over time with Eloquent models and publishable migrations
+- **Blade Components** - Pre-built accessible components
+- **Artisan Commands** - CLI tools for accessibility testing
+- **Detailed Reporting** - Comprehensive violation reports with suggestions
+- **Laravel 12 + 13 Support** - Built for the latest Laravel versions
 
-## 📋 Requirements
+## Requirements
 
 - PHP 8.2 or higher
 - Laravel 12.0 or 13.0 or higher
 
-## 📦 Installation
+## Installation
 
 You can install the package via composer:
 
@@ -55,7 +56,7 @@ php artisan vendor:publish --tag=bfsg-migrations
 php artisan migrate
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 The configuration file `config/bfsg.php` allows you to customize:
 
@@ -96,7 +97,7 @@ return [
 ];
 ```
 
-## 🚀 Usage
+## Usage
 
 ### Command Line
 
@@ -271,7 +272,7 @@ Route::middleware(['accessible'])->group(function () {
 });
 ```
 
-## 🔍 Available Analyzers (16 Total)
+## Available Analyzers (16 Total)
 
 ### ImageAnalyzer
 - Checks for missing alt attributes
@@ -340,32 +341,32 @@ Route::middleware(['accessible'])->group(function () {
 - Validates section headings
 - Ensures proper list structures
 
-### PageTitleAnalyzer ⭐ NEW in 2.0
+### PageTitleAnalyzer (NEW in 2.0)
 - Validates page `<title>` element exists (WCAG 2.4.2)
 - Checks for descriptive, non-generic titles
 - Detects duplicate or missing titles
 
-### InputPurposeAnalyzer ⭐ NEW in 2.0
+### InputPurposeAnalyzer (NEW in 2.0)
 - Validates `autocomplete` attributes on input fields (WCAG 1.3.5)
 - Checks for appropriate input purpose identification
 - Ensures user data fields support autofill
 
-### FocusAnalyzer ⭐ NEW in 2.0
+### FocusAnalyzer (NEW in 2.0)
 - Validates visible focus indicators (WCAG 2.4.7)
 - Detects `outline: none` / `outline: 0` without replacement styles
 - Checks for custom focus indicator implementations
 
-### ErrorHandlingAnalyzer ⭐ NEW in 2.0
+### ErrorHandlingAnalyzer (NEW in 2.0)
 - Validates form error identification (WCAG 3.3.1)
 - Checks for error suggestions (WCAG 3.3.3)
 - Ensures error messages are associated with form fields
 
-### StatusMessageAnalyzer ⭐ NEW in 2.0
+### StatusMessageAnalyzer (NEW in 2.0)
 - Validates status messages use ARIA live regions (WCAG 4.1.3)
 - Checks for `role="status"`, `role="alert"`, `aria-live` attributes
 - Ensures dynamic content updates are announced to assistive technologies
 
-## 📊 Report Generation
+## Report Generation
 
 Generate professional accessibility reports in multiple formats:
 
@@ -418,7 +419,7 @@ $stats = $report->getStats();
 // ['compliance_score' => 85, 'grade' => 'B+', 'total_issues' => 12, ...]
 ```
 
-## 🗄️ Database Persistence
+## Database Persistence
 
 Track accessibility violations over time by saving reports to your database.
 
@@ -456,7 +457,7 @@ php artisan bfsg:history --trends
 php artisan bfsg:history --cleanup --days=90
 ```
 
-## 📱 Testing Single Page Applications (SPAs)
+## Testing Single Page Applications (SPAs)
 
 For React, Vue, Inertia.js, and other SPAs, use browser rendering:
 
@@ -474,7 +475,7 @@ See [SPA-TESTING.md](SPA-TESTING.md) for complete guide including:
 - CI/CD integration
 - Debugging with visible browser
 
-## 📊 Understanding Violations
+## Understanding Violations
 
 Each violation includes:
 
@@ -489,7 +490,7 @@ Each violation includes:
 ]
 ```
 
-## 🧪 Testing
+## Testing
 
 Run the test suite (215 tests, 424 assertions):
 
@@ -503,7 +504,7 @@ Run specific tests:
 php artisan test --filter=ImageAnalyzerTest
 ```
 
-## 🤝 BFSG Compliance
+## BFSG Compliance
 
 This package helps you comply with the German Barrierefreiheitsstärkungsgesetz (BFSG), which requires:
 
@@ -517,42 +518,39 @@ This package helps you comply with the German Barrierefreiheitsstärkungsgesetz 
 - **June 28, 2025**: BFSG comes into full effect
 - Applies to all digital products and services in Germany
 
-## 📚 Resources
+## Resources
 
 - [WCAG 2.1 Guidelines](https://www.w3.org/WAI/WCAG21/quickref/)
 - [BFSG Information (German)](https://www.bmas.de/DE/Service/Gesetze-und-Gesetzesvorhaben/barrierefreiheitsstaerkungsgesetz.html)
 - [Laravel Documentation](https://laravel.com/docs)
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-## 🐛 Issues
+## Issues
 
 If you discover any security-related issues, please email hello@itsjustvita.com instead of using the issue tracker.
 
-## 📝 Changelog
+## Changelog
 
 Please see [CHANGELOG.md](CHANGELOG.md) for more information on what has changed recently.
 
-## 👤 Author
+## Author
 
 **Vitalis Feist-Wurm**
 - Email: hello@itsjustvita.com
 - GitHub: [@itsjustvita](https://github.com/itsjustvita)
 
-## 📄 License
+## License
 
 The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Thanks to the Laravel community
 - Inspired by various accessibility tools and standards
-- Built with ❤️ for a more accessible web
 
 ---
-
-**Made with ❤️ for accessibility compliance**
 
 *This package is actively maintained and regularly updated to comply with the latest WCAG guidelines and BFSG requirements.*
