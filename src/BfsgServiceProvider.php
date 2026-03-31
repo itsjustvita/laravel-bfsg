@@ -6,6 +6,7 @@ use Illuminate\Support\ServiceProvider;
 use ItsJustVita\LaravelBfsg\Commands\AnalyzeUrlCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgHistoryCommand;
+use ItsJustVita\LaravelBfsg\Commands\McpServerCommand;
 use ItsJustVita\LaravelBfsg\Components\AccessibleImage;
 
 class BfsgServiceProvider extends ServiceProvider
@@ -53,6 +54,7 @@ class BfsgServiceProvider extends ServiceProvider
                 BfsgCheckCommand::class,
                 AnalyzeUrlCommand::class,
                 BfsgHistoryCommand::class,
+                McpServerCommand::class,
             ]);
         }
 

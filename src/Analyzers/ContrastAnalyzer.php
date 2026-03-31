@@ -158,7 +158,7 @@ class ContrastAnalyzer
         return null;
     }
 
-    protected function calculateContrastRatio(string $color1, string $color2): ?float
+    public function calculateContrastRatio(string $color1, string $color2): ?float
     {
         $rgb1 = $this->colorToRgb($color1);
         $rgb2 = $this->colorToRgb($color2);
