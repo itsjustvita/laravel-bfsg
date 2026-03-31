@@ -8,6 +8,14 @@ use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgHistoryCommand;
 use ItsJustVita\LaravelBfsg\Commands\McpServerCommand;
 use ItsJustVita\LaravelBfsg\Components\AccessibleImage;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeHtml;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeUrl;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\CheckContrast;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\GenerateReport;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\GetHistory;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\GetReport;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\ListAnalyzers;
+use Laravel\Boost\BoostServiceProvider;
 
 class BfsgServiceProvider extends ServiceProvider
 {
@@ -68,5 +76,22 @@ class BfsgServiceProvider extends ServiceProvider
         $this->loadViewComponentsAs('bfsg', [
             AccessibleImage::class,
         ]);
+
+        // Auto-register MCP tools with Laravel Boost if available
+        if (class_exists(BoostServiceProvider::class)) {
+            $this->app->booted(function () {
+                $tools = config('boost.mcp.tools.include', []);
+                $bfsgTools = [
+                    AnalyzeHtml::class,
+                    AnalyzeUrl::class,
+                    CheckContrast::class,
+                    ListAnalyzers::class,
+                    GetHistory::class,
+                    GetReport::class,
+                    GenerateReport::class,
+                ];
+                config(['boost.mcp.tools.include' => array_merge($tools, $bfsgTools)]);
+            });
+        }
     }
 }
