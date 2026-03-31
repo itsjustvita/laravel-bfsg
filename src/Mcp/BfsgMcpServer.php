@@ -2,6 +2,12 @@
 
 namespace ItsJustVita\LaravelBfsg\Mcp;
 
+use Barryvdh\DomPDF\Facade\Pdf;
+use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
+use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Mcp\Server\McpServer;
 
 class BfsgMcpServer
@@ -27,10 +33,10 @@ class BfsgMcpServer
             'analyze_html',
             'Analyze raw HTML for WCAG/BFSG accessibility violations. Returns violations grouped by analyzer, compliance score, and grade.',
             function (string $html): string {
-                $bfsg = new \ItsJustVita\LaravelBfsg\Bfsg();
+                $bfsg = new Bfsg;
                 $violations = $bfsg->analyze($html);
 
-                $report = new \ItsJustVita\LaravelBfsg\Reports\ReportGenerator('inline-html', $violations);
+                $report = new ReportGenerator('inline-html', $violations);
                 $stats = $report->getStats();
 
                 return json_encode([
@@ -49,7 +55,7 @@ class BfsgMcpServer
             'analyze_url',
             'Fetch a URL and analyze its HTML for WCAG/BFSG accessibility violations.',
             function (string $url, bool $verify_ssl = false): string {
-                $response = \Illuminate\Support\Facades\Http::withOptions(['verify' => $verify_ssl])
+                $response = Http::withOptions(['verify' => $verify_ssl])
                     ->timeout(30)
                     ->withUserAgent('BFSG-MCP/2.0')
                     ->get($url);
@@ -59,10 +65,10 @@ class BfsgMcpServer
                 }
 
                 $html = $response->body();
-                $bfsg = new \ItsJustVita\LaravelBfsg\Bfsg();
+                $bfsg = new Bfsg;
                 $violations = $bfsg->analyze($html);
 
-                $report = new \ItsJustVita\LaravelBfsg\Reports\ReportGenerator($url, $violations);
+                $report = new ReportGenerator($url, $violations);
                 $stats = $report->getStats();
 
                 return json_encode([
@@ -82,7 +88,7 @@ class BfsgMcpServer
             'check_contrast',
             'Check the contrast ratio between a foreground and background color. Returns ratio and WCAG AA/AAA pass/fail status.',
             function (string $foreground, string $background): string {
-                $analyzer = new \ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer();
+                $analyzer = new ContrastAnalyzer;
                 $ratio = $analyzer->calculateContrastRatio($foreground, $background);
 
                 if ($ratio === null) {
@@ -93,7 +99,7 @@ class BfsgMcpServer
                     'foreground' => $foreground,
                     'background' => $background,
                     'ratio' => round($ratio, 2),
-                    'ratio_formatted' => number_format($ratio, 2) . ':1',
+                    'ratio_formatted' => number_format($ratio, 2).':1',
                     'aa_normal' => $ratio >= 4.5,
                     'aa_large' => $ratio >= 3.0,
                     'aaa_normal' => $ratio >= 7.0,
@@ -145,7 +151,7 @@ class BfsgMcpServer
             'get_history',
             'Retrieve stored accessibility check reports from the database. Optionally filter by URL.',
             function (string $url = '', int $limit = 20): string {
-                $query = \ItsJustVita\LaravelBfsg\Models\BfsgReport::query()->latest();
+                $query = BfsgReport::query()->latest();
 
                 if ($url !== '') {
                     $query->forUrl($url);
@@ -177,7 +183,7 @@ class BfsgMcpServer
             'get_report',
             'Get a single stored accessibility report with all its violations.',
             function (int $report_id): string {
-                $report = \ItsJustVita\LaravelBfsg\Models\BfsgReport::with('violations')->find($report_id);
+                $report = BfsgReport::with('violations')->find($report_id);
 
                 if (! $report) {
                     throw new \InvalidArgumentException("Report #{$report_id} not found.");
@@ -214,14 +220,14 @@ class BfsgMcpServer
             function (string $url, string $format = 'json', bool $save = false, bool $verify_ssl = false): string {
                 $validFormats = ['json', 'html', 'markdown', 'pdf'];
                 if (! in_array($format, $validFormats)) {
-                    throw new \InvalidArgumentException("Invalid format: {$format}. Use one of: " . implode(', ', $validFormats));
+                    throw new \InvalidArgumentException("Invalid format: {$format}. Use one of: ".implode(', ', $validFormats));
                 }
 
-                if ($format === 'pdf' && ! class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+                if ($format === 'pdf' && ! class_exists(Pdf::class)) {
                     throw new \InvalidArgumentException('PDF format requires barryvdh/laravel-dompdf. Install with: composer require barryvdh/laravel-dompdf');
                 }
 
-                $response = \Illuminate\Support\Facades\Http::withOptions(['verify' => $verify_ssl])
+                $response = Http::withOptions(['verify' => $verify_ssl])
                     ->timeout(30)
                     ->withUserAgent('BFSG-MCP/2.0')
                     ->get($url);
@@ -230,10 +236,10 @@ class BfsgMcpServer
                     throw new \InvalidArgumentException("Failed to fetch URL: {$url} (HTTP {$response->status()})");
                 }
 
-                $bfsg = new \ItsJustVita\LaravelBfsg\Bfsg();
+                $bfsg = new Bfsg;
                 $violations = $bfsg->analyze($response->body());
 
-                $reportGenerator = new \ItsJustVita\LaravelBfsg\Reports\ReportGenerator($url, $violations);
+                $reportGenerator = new ReportGenerator($url, $violations);
                 $stats = $reportGenerator->getStats();
 
                 $reportContent = $reportGenerator->setFormat($format)->generate();
@@ -255,7 +261,7 @@ class BfsgMcpServer
                 }
 
                 if ($save) {
-                    $dbReport = \ItsJustVita\LaravelBfsg\Models\BfsgReport::create([
+                    $dbReport = BfsgReport::create([
                         'url' => $url,
                         'total_violations' => $stats['total_issues'],
                         'score' => $stats['compliance_score'],

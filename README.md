@@ -186,6 +186,44 @@ php artisan bfsg:check https://example.com/dashboard --session="laravel_session=
 php artisan bfsg:check https://example.com/dashboard --auth --sanctum --email=user@example.com
 ```
 
+## MCP Server
+
+Laravel BFSG includes a built-in MCP (Model Context Protocol) server that allows AI assistants like Claude to directly run accessibility checks.
+
+### Setup
+
+Start the MCP server:
+
+```bash
+php artisan bfsg:mcp-server
+```
+
+Add to your Claude Code MCP configuration (`.claude/settings.json` or project settings):
+
+```json
+{
+  "mcpServers": {
+    "bfsg": {
+      "command": "php",
+      "args": ["artisan", "bfsg:mcp-server"],
+      "cwd": "/path/to/your/laravel-project"
+    }
+  }
+}
+```
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `analyze_html` | Analyze raw HTML for accessibility violations |
+| `analyze_url` | Fetch and analyze a URL |
+| `check_contrast` | Check contrast ratio between two colors |
+| `list_analyzers` | List all 16 analyzers with enabled status |
+| `get_history` | Retrieve stored accessibility reports |
+| `get_report` | Get a single report with all violations |
+| `generate_report` | Analyze URL and generate formatted report (JSON/HTML/Markdown/PDF) |
+
 ### Programmatic Usage
 
 ```php

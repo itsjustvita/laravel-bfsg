@@ -17,7 +17,7 @@ class BfsgMcpServerTest extends TestCase
 
     protected function defineDatabaseMigrations(): void
     {
-        $this->loadMigrationsFrom(__DIR__ . '/../../database/migrations');
+        $this->loadMigrationsFrom(__DIR__.'/../../database/migrations');
     }
 
     // --- analyze_html logic ---
@@ -26,7 +26,7 @@ class BfsgMcpServerTest extends TestCase
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($html);
 
         $report = new ReportGenerator('inline-html', $violations);
@@ -41,16 +41,16 @@ class BfsgMcpServerTest extends TestCase
     public function test_analyze_html_clean_html_returns_perfect_score(): void
     {
         $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page</title></head><body>'
-            . '<header><nav><a href="#main">Skip</a></nav></header>'
-            . '<main id="main"><h1>Title</h1>'
-            . '<img src="test.jpg" alt="Description">'
-            . '<form aria-label="Contact"><label for="email">Email</label>'
-            . '<input type="email" id="email" name="email" autocomplete="email"></form>'
-            . '<a href="/about">Learn more about us</a>'
-            . '<div aria-live="polite"></div>'
-            . '</main><footer><p>Footer</p></footer></body></html>';
+            .'<header><nav><a href="#main">Skip</a></nav></header>'
+            .'<main id="main"><h1>Title</h1>'
+            .'<img src="test.jpg" alt="Description">'
+            .'<form aria-label="Contact"><label for="email">Email</label>'
+            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
+            .'<a href="/about">Learn more about us</a>'
+            .'<div aria-live="polite"></div>'
+            .'</main><footer><p>Footer</p></footer></body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($html);
 
         $report = new ReportGenerator('inline-html', $violations);
@@ -75,7 +75,7 @@ class BfsgMcpServerTest extends TestCase
             ->timeout(30)
             ->get('https://example.com');
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($response->body());
 
         $this->assertNotEmpty($violations);
@@ -96,7 +96,7 @@ class BfsgMcpServerTest extends TestCase
 
     public function test_check_contrast_good_ratio(): void
     {
-        $analyzer = new ContrastAnalyzer();
+        $analyzer = new ContrastAnalyzer;
         $ratio = $analyzer->calculateContrastRatio('#000000', '#ffffff');
 
         $this->assertNotNull($ratio);
@@ -105,7 +105,7 @@ class BfsgMcpServerTest extends TestCase
 
     public function test_check_contrast_bad_ratio(): void
     {
-        $analyzer = new ContrastAnalyzer();
+        $analyzer = new ContrastAnalyzer;
         $ratio = $analyzer->calculateContrastRatio('#999999', '#aaaaaa');
 
         $this->assertNotNull($ratio);
@@ -114,7 +114,7 @@ class BfsgMcpServerTest extends TestCase
 
     public function test_check_contrast_invalid_colors(): void
     {
-        $analyzer = new ContrastAnalyzer();
+        $analyzer = new ContrastAnalyzer;
         $ratio = $analyzer->calculateContrastRatio('not-a-color', '#ffffff');
 
         $this->assertNull($ratio);
@@ -179,7 +179,7 @@ class BfsgMcpServerTest extends TestCase
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($html);
         $reportGenerator = new ReportGenerator('https://example.com', $violations);
 
@@ -195,7 +195,7 @@ class BfsgMcpServerTest extends TestCase
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $bfsg = new Bfsg();
+        $bfsg = new Bfsg;
         $violations = $bfsg->analyze($html);
         $reportGenerator = new ReportGenerator('https://example.com', $violations);
         $stats = $reportGenerator->getStats();

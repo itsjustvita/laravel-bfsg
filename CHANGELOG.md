@@ -5,6 +5,13 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-31
+
+### Added
+- **MCP Server**: Built-in Model Context Protocol server with 7 accessibility analysis tools for AI assistant integration
+- `bfsg:mcp-server` Artisan command for stdio-based MCP server
+- Tools: analyze_html, analyze_url, check_contrast, list_analyzers, get_history, get_report, generate_report
+
 ## [2.0.0] - 2026-03-30
 
 ### Added

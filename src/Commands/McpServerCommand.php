@@ -13,7 +13,7 @@ class McpServerCommand extends Command
 
     public function handle(): int
     {
-        $mcpServer = new BfsgMcpServer();
+        $mcpServer = new BfsgMcpServer;
         $server = $mcpServer->create();
         $server->runStdio();
 
