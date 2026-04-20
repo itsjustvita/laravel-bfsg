@@ -1,7 +1,6 @@
 {
   "name": "itsjustvita/laravel-bfsg",
   "description": "Laravel Package für BFSG/WCAG Barrierefreiheit Compliance",
-  "version": "2.2.0",
   "keywords": [
     "laravel",
     "accessibility",
