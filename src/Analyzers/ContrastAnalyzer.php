@@ -28,6 +28,12 @@ class ContrastAnalyzer
 
     protected const WCAG_AA_LARGE = 3.0;
 
+    /** Hard cap — don't resolve contrast for more than this many text elements. */
+    protected const MAX_TEXT_ELEMENTS = 500;
+
+    /** Soft wall-clock budget (seconds). Stop analyzing once exceeded. */
+    protected const TIME_BUDGET_SECONDS = 5.0;
+
     public function analyze(DOMDocument $dom): array
     {
         $this->violations = [];
@@ -51,7 +57,17 @@ class ContrastAnalyzer
             return;
         }
 
+        $budgetDeadline = microtime(true) + self::TIME_BUDGET_SECONDS;
+        $processed = 0;
+
         foreach ($textElements as $element) {
+            if ($processed >= self::MAX_TEXT_ELEMENTS) {
+                break;
+            }
+            if (microtime(true) > $budgetDeadline) {
+                break;
+            }
+            $processed++;
             if (! $element instanceof \DOMElement) {
                 continue;
             }
