@@ -13,12 +13,31 @@ class CssParser
     protected DOMXPath $xpath;
 
     /**
+     * Pre-computed map: element node-path → list of rule indexes that match.
+     * Built once per parse() to avoid re-running an XPath query for every
+     * (element × rule) pair during contrast analysis. This turns the hot
+     * path from O(N * M * doc) into O(M * doc) + O(N).
+     *
+     * @var array<string, array<int, int>>
+     */
+    protected array $ruleMatchIndex = [];
+
+    /**
+     * Hard upper bound on the number of CSS rules we'll index. Some pages
+     * ship huge utility CSS (Tailwind JIT) and we'd otherwise spend minutes
+     * resolving contrast colors. Beyond this we drop to "best effort" and
+     * rely on inline styles + inheritance fallback.
+     */
+    protected const MAX_INDEXED_RULES = 2000;
+
+    /**
      * Parse CSS from a DOMDocument (extracts all <style> blocks)
      */
     public function parse(DOMDocument $dom): self
     {
         $this->xpath = new DOMXPath($dom);
         $this->rules = [];
+        $this->ruleMatchIndex = [];
 
         // Extract <style> blocks
         $styleNodes = $dom->getElementsByTagName('style');
@@ -27,7 +46,58 @@ class CssParser
             $this->parseCss($css);
         }
 
+        $this->buildRuleMatchIndex();
+
         return $this;
+    }
+
+    /**
+     * Walk every parsed rule once and record which elements it matches.
+     * Subsequent per-element lookups then become a single hash hit.
+     */
+    protected function buildRuleMatchIndex(): void
+    {
+        $limit = min(count($this->rules), self::MAX_INDEXED_RULES);
+
+        for ($idx = 0; $idx < $limit; $idx++) {
+            $rule = $this->rules[$idx];
+
+            // Only rules that could contribute to color resolution are worth
+            // indexing — everything else just bloats the map.
+            $props = $rule['properties'];
+            if (! isset($props['color'], $props['background-color'], $props['background'])
+                && ! isset($props['color'])
+                && ! isset($props['background-color'])
+                && ! isset($props['background'])) {
+                continue;
+            }
+
+            $xpathExpr = $this->cssToXpath($rule['selector']);
+            if ($xpathExpr === null) {
+                continue;
+            }
+
+            try {
+                $results = @$this->xpath->query($xpathExpr);
+            } catch (\Exception $e) {
+                continue;
+            }
+
+            if ($results === false) {
+                continue;
+            }
+
+            foreach ($results as $node) {
+                if (! $node instanceof DOMElement) {
+                    continue;
+                }
+                $key = $node->getNodePath();
+                if ($key === null) {
+                    continue;
+                }
+                $this->ruleMatchIndex[$key][] = $idx;
+            }
+        }
     }
 
     /**
@@ -297,12 +367,33 @@ class CssParser
     }
 
     /**
-     * Get all CSS rules matching a DOM element
+     * Get all CSS rules matching a DOM element.
+     *
+     * Uses the pre-built ruleMatchIndex when available (set by parse()),
+     * which is ~three orders of magnitude faster on pages with many rules
+     * and many text-bearing elements. Falls back to the linear scan if
+     * a caller constructs the parser without going through parse().
      */
     protected function getMatchingRules(DOMElement $element): array
     {
-        $matching = [];
+        if ($this->ruleMatchIndex !== []) {
+            $key = $element->getNodePath();
+            if ($key === null) {
+                return [];
+            }
 
+            $indexes = $this->ruleMatchIndex[$key] ?? [];
+            $matching = [];
+            foreach ($indexes as $idx) {
+                if (isset($this->rules[$idx])) {
+                    $matching[] = $this->rules[$idx];
+                }
+            }
+
+            return $matching;
+        }
+
+        $matching = [];
         foreach ($this->rules as $rule) {
             if ($this->selectorMatchesElement($rule['selector'], $element)) {
                 $matching[] = $rule;

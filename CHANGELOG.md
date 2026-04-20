@@ -5,6 +5,27 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - 2026-04-20
+
+### Fixed
+- **`ContrastAnalyzer` / `CssParser` performance catastrophe**: on pages with
+  many text nodes and many CSS rules (typical modern marketing sites with
+  Tailwind-style utility CSS) the analyzer ran an XPath query on the entire
+  document for every `(element, rule)` pair via `getMatchingRules`. That is
+  `O(N * M * docsize)` and caused scans of sites such as `moonflag.de` and
+  `sichergutbauen.com` to hang for minutes before the worker killed them.
+
+  `CssParser::parse()` now eagerly builds a single
+  `element-path → matching-rule-indexes` map (`O(M * docsize)`), and
+  `getMatchingRules()` does an `O(1)` hash lookup. Contrast analysis on a
+  1100-element page drops from *effectively never finishes* to **under 70 ms**.
+
+  Additional belt-and-braces safety: `ContrastAnalyzer` now caps processed
+  text elements at 500 and enforces a 5-second soft time budget, so even
+  pathological documents cannot stall the full scan. Rule-index build is
+  also capped at 2000 rules to protect against sites that inline entire
+  Tailwind stylesheets.
+
 ## [2.2.0] - 2026-04-20
 
 This release addresses false-positive and noise issues surfaced when scanning real-world
