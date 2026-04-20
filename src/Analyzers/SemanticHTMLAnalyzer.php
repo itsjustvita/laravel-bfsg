@@ -5,6 +5,37 @@ namespace ItsJustVita\LaravelBfsg\Analyzers;
 class SemanticHTMLAnalyzer
 {
     /**
+     * Classes that suggest a list is populated dynamically (JS widgets).
+     * When a <ul>/<ol> has one of these, empty-list checks are skipped.
+     */
+    protected const DYNAMIC_LIST_CLASS_HINTS = [
+        'carousel',
+        'swiper',
+        'slider',
+        'slick',
+        'owl',
+        'menu',
+        'dropdown',
+        'tabs',
+        'nav',
+        'pagination',
+        'tree',
+    ];
+
+    /**
+     * Roles that indicate a list is populated/controlled by JS.
+     */
+    protected const DYNAMIC_LIST_ROLES = [
+        'list',
+        'listbox',
+        'menu',
+        'tablist',
+        'menubar',
+        'navigation',
+        'tree',
+    ];
+
+    /**
      * Analyze semantic HTML structure
      */
     public function analyze(\DOMDocument $dom): array
@@ -20,7 +51,7 @@ class SemanticHTMLAnalyzer
                 'message' => 'No <main> landmark found',
                 'element' => 'main',
                 'suggestion' => 'Add a <main> element to identify the primary content',
-                'severity' => 'warning',
+                'type' => 'warning',
             ];
         } elseif ($mains->length > 1) {
             $issues[] = [
@@ -28,7 +59,7 @@ class SemanticHTMLAnalyzer
                 'message' => 'Multiple <main> elements found',
                 'element' => 'main',
                 'suggestion' => 'Use only one <main> element per page',
-                'severity' => 'error',
+                'type' => 'error',
             ];
         }
 
@@ -40,7 +71,7 @@ class SemanticHTMLAnalyzer
                 'message' => 'No <nav> landmark found',
                 'element' => 'nav',
                 'suggestion' => 'Use <nav> element to identify navigation regions',
-                'severity' => 'notice',
+                'type' => 'notice',
             ];
         }
 
@@ -61,7 +92,7 @@ class SemanticHTMLAnalyzer
                         'message' => '<section> element without heading or aria-label',
                         'element' => 'section',
                         'suggestion' => 'Add a heading or aria-label to <section> for screen reader navigation',
-                        'severity' => 'warning',
+                        'type' => 'warning',
                     ];
                 }
             }
@@ -78,7 +109,7 @@ class SemanticHTMLAnalyzer
                     'message' => sprintf('Excessive use of <div> elements (%.0f%% of all elements)', $divRatio * 100),
                     'element' => 'div',
                     'suggestion' => 'Consider using semantic HTML5 elements like <article>, <section>, <nav>, <aside>, <header>, <footer>',
-                    'severity' => 'notice',
+                    'type' => 'notice',
                 ];
             }
         }
@@ -93,7 +124,7 @@ class SemanticHTMLAnalyzer
                     'message' => '<button> with href attribute found',
                     'element' => 'button',
                     'suggestion' => 'Use <a> for navigation, <button> for actions',
-                    'severity' => 'error',
+                    'type' => 'error',
                 ];
             }
         }
@@ -110,7 +141,7 @@ class SemanticHTMLAnalyzer
                     'message' => '<a> element used as button (role="button")',
                     'element' => 'a',
                     'suggestion' => 'Use <button> element instead of <a role="button">',
-                    'severity' => 'warning',
+                    'type' => 'warning',
                 ];
             }
         }
@@ -128,7 +159,7 @@ class SemanticHTMLAnalyzer
                 'message' => 'No <header> landmark found',
                 'element' => 'header',
                 'suggestion' => 'Use <header> element to identify page or section headers',
-                'severity' => 'notice',
+                'type' => 'notice',
             ];
         }
 
@@ -138,7 +169,7 @@ class SemanticHTMLAnalyzer
                 'message' => 'No <footer> landmark found',
                 'element' => 'footer',
                 'suggestion' => 'Use <footer> element to identify page or section footers',
-                'severity' => 'notice',
+                'type' => 'notice',
             ];
         }
 
@@ -176,12 +207,15 @@ class SemanticHTMLAnalyzer
         foreach ($uls as $ul) {
             $lis = $xpath->query('./li', $ul);
             if ($lis->length === 0) {
+                if ($this->isLikelyDynamicList($ul)) {
+                    continue;
+                }
                 $issues[] = [
                     'rule' => 'WCAG 1.3.1',
-                    'message' => '<ul> element without <li> children',
+                    'message' => '<ul> element without <li> children (may be JS-populated)',
                     'element' => 'ul',
                     'suggestion' => 'Only use <ul> when you have list items',
-                    'severity' => 'error',
+                    'type' => 'notice',
                 ];
             }
         }
@@ -190,14 +224,51 @@ class SemanticHTMLAnalyzer
         foreach ($ols as $ol) {
             $lis = $xpath->query('./li', $ol);
             if ($lis->length === 0) {
+                if ($this->isLikelyDynamicList($ol)) {
+                    continue;
+                }
                 $issues[] = [
                     'rule' => 'WCAG 1.3.1',
-                    'message' => '<ol> element without <li> children',
+                    'message' => '<ol> element without <li> children (may be JS-populated)',
                     'element' => 'ol',
                     'suggestion' => 'Only use <ol> when you have list items',
-                    'severity' => 'error',
+                    'type' => 'notice',
                 ];
             }
         }
+    }
+
+    /**
+     * Heuristic: is this list likely populated/controlled by JavaScript?
+     * Avoids false positives on carousels, menus, dropdowns, tabs, etc.
+     */
+    protected function isLikelyDynamicList(\DOMElement $list): bool
+    {
+        // 1. Class hint (carousel, swiper, menu, dropdown, …)
+        $class = strtolower($list->getAttribute('class'));
+        if ($class !== '') {
+            foreach (self::DYNAMIC_LIST_CLASS_HINTS as $hint) {
+                if (str_contains($class, $hint)) {
+                    return true;
+                }
+            }
+        }
+
+        // 2. Any data-* attribute → likely driven by JS
+        if ($list->hasAttributes()) {
+            foreach ($list->attributes as $attr) {
+                if (str_starts_with($attr->nodeName, 'data-')) {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Role hint (listbox, menu, tablist, …)
+        $role = strtolower($list->getAttribute('role'));
+        if ($role !== '' && in_array($role, self::DYNAMIC_LIST_ROLES, true)) {
+            return true;
+        }
+
+        return false;
     }
 }

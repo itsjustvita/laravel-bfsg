@@ -19,7 +19,9 @@ class StatusMessageAnalyzerTest extends TestCase
         $violations = $result['issues'] ?? [];
 
         $this->assertCount(1, $violations);
-        $this->assertEquals('warning', $violations[0]['type']);
+        // Downgraded from 'warning' to 'notice' in v2.2.0 — firing on every page with forms
+        // was too noisy and created many false positives.
+        $this->assertEquals('notice', $violations[0]['type']);
         $this->assertEquals('WCAG 4.1.3', $violations[0]['rule']);
         $this->assertStringContainsString('no aria-live region', $violations[0]['message']);
     }
@@ -48,6 +50,21 @@ class StatusMessageAnalyzerTest extends TestCase
         $violations = $result['issues'] ?? [];
 
         $this->assertEmpty($violations);
+    }
+
+    public function test_v22_downgraded_severity_for_aria_live_is_notice(): void
+    {
+        // v2.2.0 Fix 9: was `warning`, now `notice` — too noisy otherwise.
+        $html = '<html><body><form><button type="submit">Submit</button></form></body></html>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new StatusMessageAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $this->assertCount(1, $violations);
+        $this->assertSame('notice', $violations[0]['type']);
     }
 
     public function test_no_issues_without_dynamic_content(): void

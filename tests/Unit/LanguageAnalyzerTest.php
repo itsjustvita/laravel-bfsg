@@ -83,6 +83,32 @@ class LanguageAnalyzerTest extends TestCase
         );
     }
 
+    public function test_all_findings_use_type_field_not_severity()
+    {
+        // v2.2.0 Fix 1: LanguageAnalyzer must emit `type` (not `severity`).
+        $result = $this->analyzeHtml('<html><body><p>Hello</p></body></html>');
+
+        $this->assertNotEmpty($result['issues']);
+        foreach ($result['issues'] as $issue) {
+            $this->assertArrayHasKey('type', $issue);
+            $this->assertArrayNotHasKey('severity', $issue);
+            $this->assertContains($issue['type'], ['error', 'warning', 'notice']);
+        }
+    }
+
+    public function test_missing_html_lang_is_error_not_critical()
+    {
+        // v2.2.0 Fix 1: `critical` canonicalised to `error` (no `critical` anywhere).
+        $result = $this->analyzeHtml('<html><body><p>Hello</p></body></html>');
+
+        $missing = collect($result['issues'])->first(
+            fn ($i) => str_contains($i['message'], 'Missing language attribute')
+        );
+
+        $this->assertNotNull($missing);
+        $this->assertSame('error', $missing['type']);
+    }
+
     public function test_empty_html_produces_lang_issues()
     {
         // Use a minimal document fragment without an html element

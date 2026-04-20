@@ -61,6 +61,7 @@ class LinkAnalyzerTest extends TestCase
 
     public function test_detects_new_window_links_without_warning()
     {
+        // Both issues apply (missing warning + missing rel) → combined into ONE finding (v2.2.0).
         $html = '<a href="https://example.com" target="_blank">External Site</a>';
         $dom = new DOMDocument;
         @$dom->loadHTML($html);
@@ -68,7 +69,9 @@ class LinkAnalyzerTest extends TestCase
         $results = $this->analyzer->analyze($dom);
 
         $this->assertNotEmpty($results['issues']);
-        $this->assertCount(2, $results['issues']); // Should detect both new window and missing rel
+        $this->assertCount(1, $results['issues'], 'Both warning+rel missing should be combined into 1 finding');
+        $this->assertStringContainsString('opens in new window without warning', $results['issues'][0]['message']);
+        $this->assertStringContainsString('rel="noopener noreferrer"', $results['issues'][0]['message']);
     }
 
     public function test_detects_file_downloads_without_indication()
@@ -96,6 +99,104 @@ class LinkAnalyzerTest extends TestCase
 
         $this->assertNotEmpty($results['issues']);
         $this->assertStringContainsString('URL used as link text', $results['issues'][0]['message']);
+    }
+
+    public function test_detects_german_non_descriptive_link_text()
+    {
+        // v2.2.0 Fix 5: German non-descriptive link text is now caught.
+        $html = '
+            <a href="/page1">hier klicken</a>
+            <a href="/page2">mehr erfahren</a>
+            <a href="/page3">weiterlesen</a>
+        ';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $results = $this->analyzer->analyze($dom);
+
+        $nonDescriptive = collect($results['issues'])->filter(
+            fn ($i) => str_contains($i['message'], 'Non-descriptive link text')
+        );
+
+        $this->assertGreaterThanOrEqual(3, $nonDescriptive->count());
+    }
+
+    public function test_detects_german_hier_klicken_as_non_descriptive()
+    {
+        // v2.2.0 Fix 5: "hier klicken" is the canonical German example.
+        $html = '<a href="/page">hier klicken</a>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $results = $this->analyzer->analyze($dom);
+
+        $nonDescriptive = collect($results['issues'])->first(
+            fn ($i) => str_contains($i['message'], "'hier klicken'")
+        );
+
+        $this->assertNotNull($nonDescriptive);
+        $this->assertSame('error', $nonDescriptive['type']);
+    }
+
+    public function test_combined_warning_and_rel_missing_yields_one_finding_per_link()
+    {
+        // v2.2.0 Fix 8: 3 bad links × 2 issues → now 3 findings (not 6).
+        $html = '
+            <a href="https://a.com" target="_blank">A</a>
+            <a href="https://b.com" target="_blank">B</a>
+            <a href="https://c.com" target="_blank">C</a>
+        ';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $results = $this->analyzer->analyze($dom);
+
+        // Filter for the combined-finding message only (avoid other checks like short text).
+        $combined = collect($results['issues'])->filter(
+            fn ($i) => str_contains($i['message'], 'without warning and lacks rel')
+        );
+
+        $this->assertCount(3, $combined, 'Each link should yield exactly one combined finding');
+    }
+
+    public function test_only_warning_missing_yields_solo_warning_finding()
+    {
+        // v2.2.0 Fix 8: warning missing but rel present → solo "new window" finding.
+        $html = '<a href="https://example.com" target="_blank" rel="noopener noreferrer">External Site</a>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $results = $this->analyzer->analyze($dom);
+
+        $newWindow = collect($results['issues'])->filter(
+            fn ($i) => $i['message'] === 'Link opens in new window without warning'
+        );
+        $security = collect($results['issues'])->filter(
+            fn ($i) => str_contains($i['message'], 'missing rel=')
+        );
+
+        $this->assertCount(1, $newWindow);
+        $this->assertCount(0, $security);
+    }
+
+    public function test_only_rel_missing_yields_solo_security_finding()
+    {
+        // v2.2.0 Fix 8: warning present but rel missing → solo security finding.
+        $html = '<a href="https://example.com" target="_blank">Open Example.com (opens in new window)</a>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $results = $this->analyzer->analyze($dom);
+
+        $newWindow = collect($results['issues'])->filter(
+            fn ($i) => $i['message'] === 'Link opens in new window without warning'
+        );
+        $security = collect($results['issues'])->filter(
+            fn ($i) => str_contains($i['message'], 'missing rel=')
+        );
+
+        $this->assertCount(0, $newWindow);
+        $this->assertCount(1, $security);
     }
 
     public function test_descriptive_links_pass()

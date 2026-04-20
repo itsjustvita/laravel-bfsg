@@ -33,7 +33,7 @@ class LanguageAnalyzer
                     'message' => 'Missing language attribute on html element',
                     'element' => '<html>',
                     'suggestion' => 'Add lang attribute to html element (e.g., lang="de" for German)',
-                    'severity' => 'critical',
+                    'type' => 'error',
                 ];
             } else {
                 // Validate language code
@@ -44,7 +44,7 @@ class LanguageAnalyzer
                         'message' => "Invalid language code: {$langAttr}",
                         'element' => '<html>',
                         'suggestion' => 'Use valid ISO 639-1 language code (e.g., "de", "en", "fr")',
-                        'severity' => 'error',
+                        'type' => 'error',
                     ];
                 }
             }
@@ -53,7 +53,7 @@ class LanguageAnalyzer
                 'rule' => 'WCAG 3.1.1, BFSG §3',
                 'message' => 'No html element found in document',
                 'suggestion' => 'Ensure document has proper html structure',
-                'severity' => 'critical',
+                'type' => 'error',
             ];
         }
 
@@ -79,7 +79,7 @@ class LanguageAnalyzer
                             'element' => $element->nodeName,
                             'content' => $snippet,
                             'suggestion' => 'Add lang attribute to elements with different language',
-                            'severity' => 'warning',
+                            'type' => 'warning',
                         ];
                     }
                 }
@@ -98,7 +98,7 @@ class LanguageAnalyzer
                         'message' => "Invalid language code: {$langAttr}",
                         'element' => '<'.$element->nodeName.'>',
                         'suggestion' => 'Use valid ISO 639-1 language code',
-                        'severity' => 'error',
+                        'type' => 'error',
                     ];
                 }
             }
@@ -116,7 +116,7 @@ class LanguageAnalyzer
                     'message' => 'Mismatched lang and xml:lang attributes',
                     'element' => '<'.$element->nodeName.'>',
                     'suggestion' => 'Ensure lang and xml:lang attributes have the same value',
-                    'severity' => 'warning',
+                    'type' => 'warning',
                 ];
             }
         }
@@ -125,7 +125,7 @@ class LanguageAnalyzer
             'issues' => $issues,
             'stats' => [
                 'total_issues' => count($issues),
-                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['severity'] ?? '') === 'critical')),
+                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['type'] ?? '') === 'error')),
                 'has_main_lang' => $htmlElements->length > 0 && ! empty($htmlElements->item(0)->getAttribute('lang')),
             ],
         ];

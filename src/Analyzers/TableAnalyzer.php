@@ -31,7 +31,7 @@ class TableAnalyzer
                     'message' => 'Table without caption found',
                     'element' => 'table',
                     'suggestion' => 'Add a <caption> element to describe the table content',
-                    'severity' => 'warning',
+                    'type' => 'warning',
                 ];
             }
 
@@ -46,7 +46,7 @@ class TableAnalyzer
                         'message' => 'Table header cell without scope attribute',
                         'element' => 'th',
                         'suggestion' => 'Add scope="col" or scope="row" to <th> elements',
-                        'severity' => 'error',
+                        'type' => 'error',
                     ];
                 } elseif (! in_array($scope, ['col', 'row', 'colgroup', 'rowgroup'])) {
                     $issues[] = [
@@ -54,7 +54,7 @@ class TableAnalyzer
                         'message' => "Invalid scope attribute value: {$scope}",
                         'element' => 'th',
                         'suggestion' => 'Use scope="col", scope="row", scope="colgroup", or scope="rowgroup"',
-                        'severity' => 'error',
+                        'type' => 'error',
                     ];
                 }
             }
@@ -68,7 +68,7 @@ class TableAnalyzer
                         'message' => 'Data table without header cells (<th>)',
                         'element' => 'table',
                         'suggestion' => 'Use <th> elements to mark header cells in data tables',
-                        'severity' => 'error',
+                        'type' => 'error',
                     ];
                 }
             }
@@ -91,7 +91,7 @@ class TableAnalyzer
                             'message' => "Table cell references non-existent header id: {$headerId}",
                             'element' => 'td',
                             'suggestion' => 'Ensure all header IDs referenced in headers attribute exist',
-                            'severity' => 'error',
+                            'type' => 'error',
                         ];
                     }
                 }
@@ -107,7 +107,7 @@ class TableAnalyzer
                         'message' => 'Layout table (role="presentation") should not contain <th> elements',
                         'element' => 'table',
                         'suggestion' => 'Remove <th> elements from layout tables or remove role="presentation"',
-                        'severity' => 'warning',
+                        'type' => 'warning',
                     ];
                 }
 
@@ -117,7 +117,7 @@ class TableAnalyzer
                         'message' => 'Layout table (role="presentation") should not contain <caption>',
                         'element' => 'table',
                         'suggestion' => 'Remove <caption> from layout tables or remove role="presentation"',
-                        'severity' => 'warning',
+                        'type' => 'warning',
                     ];
                 }
             }
@@ -130,7 +130,7 @@ class TableAnalyzer
                     'message' => 'Nested tables found (not recommended)',
                     'element' => 'table',
                     'suggestion' => 'Avoid nesting tables; consider restructuring the data',
-                    'severity' => 'warning',
+                    'type' => 'warning',
                 ];
             }
         }
@@ -140,7 +140,7 @@ class TableAnalyzer
             'stats' => [
                 'total_issues' => count($issues),
                 'tables_found' => $tables->length,
-                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['severity'] ?? '') === 'error')),
+                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['type'] ?? '') === 'error')),
             ],
         ];
     }

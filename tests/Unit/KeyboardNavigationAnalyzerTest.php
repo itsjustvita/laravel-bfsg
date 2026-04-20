@@ -121,8 +121,111 @@ class KeyboardNavigationAnalyzerTest extends TestCase
         $result = $analyzer->analyze($dom);
         $violations = $result['issues'] ?? [];
 
-        $linkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Link without href'));
+        $linkViolations = array_values(array_filter(
+            $violations,
+            fn ($v) => str_contains($v['message'], 'Link without href')
+        ));
         $this->assertCount(1, $linkViolations);
+        // v2.2.0 Fix 3: downgraded from `error` to `warning` — many modern <a> elements
+        // use tabindex+JS and ARE keyboard-accessible; we no longer treat all as broken.
+        $this->assertSame('warning', $linkViolations[0]['type']);
+    }
+
+    public function test_anchor_without_href_but_with_tabindex_and_keyboard_handler_is_accepted(): void
+    {
+        // v2.2.0 Fix 3: <a tabindex="0" onkeydown="..."> is keyboard-accessible.
+        $html = '<!DOCTYPE html><html><body>
+            <a tabindex="0" onkeydown="handleKey(event)" onclick="handleClick()">Interactive</a>
+        </body></html>';
+
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new KeyboardNavigationAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $linkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Link without href'));
+        $this->assertEmpty($linkViolations);
+    }
+
+    public function test_anchor_without_href_but_with_role_button_and_tabindex_is_accepted(): void
+    {
+        // v2.2.0 Fix 3: <a role="button" tabindex="0"> is a button-styled anchor.
+        $html = '<!DOCTYPE html><html><body>
+            <a role="button" tabindex="0">Button-styled anchor</a>
+        </body></html>';
+
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new KeyboardNavigationAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $linkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Link without href'));
+        $this->assertEmpty($linkViolations);
+    }
+
+    public function test_german_skip_link_zum_inhalt_is_recognized(): void
+    {
+        // v2.2.0 Fix 4: German "Zum Inhalt" must count as a skip link.
+        $html = '<!DOCTYPE html><html><body>
+            <a href="#main" class="skip-link">Zum Inhalt</a>
+            <nav>Navigation</nav>
+            <main id="main">Main content</main>
+        </body></html>';
+
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new KeyboardNavigationAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
+        $this->assertEmpty($skipLinkViolations);
+    }
+
+    public function test_german_skip_link_ueberspringen_is_recognized(): void
+    {
+        // v2.2.0 Fix 4: German "Überspringen" (with umlaut) must count.
+        // Prefix with UTF-8 BOM/meta so DOMDocument preserves the umlaut.
+        $html = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
+            <a href="#main">Navigation überspringen</a>
+            <nav>Navigation</nav>
+            <main id="main">Main content</main>
+        </body></html>';
+
+        $dom = new DOMDocument;
+        @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$html);
+
+        $analyzer = new KeyboardNavigationAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
+        $this->assertEmpty($skipLinkViolations);
+    }
+
+    public function test_german_skip_link_zur_navigation_is_recognized(): void
+    {
+        // v2.2.0 Fix 4: "Zur Navigation" is a common German skip-link label.
+        $html = '<!DOCTYPE html><html><body>
+            <a href="#nav">Zur Navigation</a>
+            <nav id="nav">Navigation</nav>
+            <main>Main content</main>
+        </body></html>';
+
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new KeyboardNavigationAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
+        $this->assertEmpty($skipLinkViolations);
     }
 
     public function test_detects_click_handlers_on_non_interactive_elements(): void

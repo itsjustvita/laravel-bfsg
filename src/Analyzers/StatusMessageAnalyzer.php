@@ -79,7 +79,7 @@ class StatusMessageAnalyzer
 
         if ($hasDynamicContent) {
             $this->violations[] = [
-                'type' => 'warning',
+                'type' => 'notice',
                 'rule' => 'WCAG 4.1.3',
                 'element' => 'body',
                 'message' => 'Page with interactive elements has no aria-live region for status messages',

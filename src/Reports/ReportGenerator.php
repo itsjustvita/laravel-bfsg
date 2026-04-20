@@ -138,7 +138,7 @@ class ReportGenerator
             $md .= '### '.ucfirst($category)." ({$this->stats['by_category'][$category]} issues)\n\n";
 
             foreach ($issues as $idx => $issue) {
-                $severity = $issue['severity'] ?? 'notice';
+                $severity = $issue['type'] ?? $issue['severity'] ?? 'notice';
                 $icon = $this->getSeverityIcon($severity);
 
                 $md .= "{$icon} **[{$issue['rule']}]** {$issue['message']}\n";
@@ -187,7 +187,7 @@ class ReportGenerator
             $byCategory[$category] = $count;
 
             foreach ($issues as $issue) {
-                $severity = $issue['severity'] ?? 'notice';
+                $severity = $issue['type'] ?? $issue['severity'] ?? 'notice';
                 match ($severity) {
                     'critical' => $critical++,
                     'error' => $errors++,

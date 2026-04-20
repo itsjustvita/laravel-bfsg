@@ -5,6 +5,57 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-20
+
+This release addresses false-positive and noise issues surfaced when scanning real-world
+German TYPO3 sites. Analyzer output is now more consistent, less noisy, and German-aware.
+
+### Fixed
+- **Field-name consistency across analyzers**: Four analyzers (`SemanticHTMLAnalyzer`,
+  `LanguageAnalyzer`, `TableAnalyzer`, `MediaAnalyzer`) previously emitted `severity`
+  while the other twelve emitted `type`. All sixteen analyzers now emit the `type`
+  key, so downstream consumers see correct severity values instead of silently
+  falling back to `notice`. The non-standard `severity: 'critical'` values have been
+  canonicalised to `type: 'error'` (the highest severity used elsewhere).
+- **ContrastAnalyzer XPath grouping bug**: The `light_gray_text` pattern's XPath
+  (`//*[@style and contains(...) or contains(...) or ...]`) was parsed with `or` at
+  a higher level than intended, which caused the selector to match beyond the
+  intended subtree. The `or` chain is now wrapped in parentheses.
+- **`ReportGenerator`, `CheckAccessibility` middleware, `BfsgCheckCommand`, MCP
+  `GenerateReport` tool**: all now read `type` first, falling back to `severity`
+  for backwards compatibility with anyone still emitting the legacy key.
+
+### Changed
+- **Empty `<ul>` / `<ol>` detection**: downgraded from `error` to `notice`, and skipped
+  entirely when the list carries a class/`data-*` attribute/role suggesting JS
+  population (carousel, swiper, slider, slick, owl, menu, dropdown, tabs, nav,
+  pagination, tree, listbox, tablist, menubar, navigation). Previously this rule
+  produced high-severity false positives on virtually every modern site.
+- **`<a>` without `href`** (KeyboardNavigationAnalyzer): downgraded from `error` to
+  `warning`; anchors with `tabindex="0"` plus either a keyboard handler
+  (`onkeydown` / `onkeyup` / `onkeypress`) or `role="button"` are now recognised
+  as keyboard-accessible and no longer flagged.
+- **StatusMessageAnalyzer**: the "page has interactive elements but no aria-live
+  region" finding has been downgraded from `warning` to `notice` to reduce noise.
+- **LinkAnalyzer external-link findings**: when an external `target="_blank"` link
+  both lacks a "new window" warning and lacks `rel="noopener noreferrer"`, the
+  analyzer now emits **one combined finding** (was two separate findings per link,
+  which inflated counts). Links missing only one of the two concerns still produce
+  their respective single finding.
+
+### Added
+- **German skip-link detection** (KeyboardNavigationAnalyzer): recognises
+  "Überspringen", "Zum Inhalt", "Zum Hauptinhalt", "Zur Navigation", "Zum Menü",
+  "Inhalt springen" in addition to the English patterns. Matching uses
+  `mb_stripos` to correctly handle umlauts.
+- **German non-descriptive link text** (LinkAnalyzer): `NON_DESCRIPTIVE_TEXTS`
+  extended with "hier klicken", "hier", "klicken", "mehr", "mehr erfahren",
+  "weiterlesen", "weiter", "lesen", "jetzt", "los", "herunterladen".
+- **German generic page titles** (PageTitleAnalyzer): `$genericTitles` extended
+  with "Startseite", "Willkommen", "Seite", "Dokument", "Unbenannt", "Neu",
+  "Beispiel".
+- 24 new unit tests covering every fix above (253 tests total, up from 229).
+
 ## [2.1.0] - 2026-03-31
 
 ### Added

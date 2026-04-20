@@ -100,6 +100,46 @@ class PageTitleAnalyzerTest extends TestCase
         $this->assertTrue($hasLengthWarning, 'Expected a warning about long title');
     }
 
+    public function test_detects_german_generic_title_startseite(): void
+    {
+        // v2.2.0 Fix 6: German "Startseite" is as generic as English "Home".
+        $html = '<html><head><title>Startseite</title></head><body><p>Hello</p></body></html>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new PageTitleAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $hasGenericWarning = false;
+        foreach ($violations as $v) {
+            if ($v['type'] === 'warning' && str_contains($v['message'], 'generic')) {
+                $hasGenericWarning = true;
+            }
+        }
+        $this->assertTrue($hasGenericWarning, 'Expected a warning about German generic title "Startseite"');
+    }
+
+    public function test_detects_german_generic_title_willkommen(): void
+    {
+        // v2.2.0 Fix 6: German "Willkommen" is a generic welcome page title.
+        $html = '<html><head><title>Willkommen</title></head><body><p>Hi</p></body></html>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $analyzer = new PageTitleAnalyzer;
+        $result = $analyzer->analyze($dom);
+        $violations = $result['issues'] ?? [];
+
+        $hasGenericWarning = false;
+        foreach ($violations as $v) {
+            if ($v['type'] === 'warning' && str_contains($v['message'], 'generic')) {
+                $hasGenericWarning = true;
+            }
+        }
+        $this->assertTrue($hasGenericWarning);
+    }
+
     public function test_accepts_good_descriptive_title(): void
     {
         $html = '<html><head><title>About Us - Company Name</title></head><body><p>Hello</p></body></html>';

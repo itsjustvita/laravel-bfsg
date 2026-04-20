@@ -107,6 +107,19 @@ class MediaAnalyzerTest extends TestCase
         $this->assertEmpty($result['issues']);
     }
 
+    public function test_all_findings_use_type_field_not_severity()
+    {
+        // v2.2.0 Fix 1: MediaAnalyzer must emit `type` (not `severity`).
+        $result = $this->analyzeHtml('<video src="video.mp4"></video>');
+
+        $this->assertNotEmpty($result['issues']);
+        foreach ($result['issues'] as $issue) {
+            $this->assertArrayHasKey('type', $issue);
+            $this->assertArrayNotHasKey('severity', $issue);
+            $this->assertContains($issue['type'], ['error', 'warning', 'notice']);
+        }
+    }
+
     public function test_detects_video_without_controls()
     {
         $result = $this->analyzeHtml('<video src="video.mp4"></video>');

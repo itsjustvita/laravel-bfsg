@@ -125,6 +125,38 @@ class TableAnalyzerTest extends TestCase
         );
     }
 
+    public function test_all_findings_use_type_field_not_severity()
+    {
+        // v2.2.0 Fix 1: TableAnalyzer must emit `type` (not `severity`).
+        $result = $this->analyzeHtml('
+            <table>
+                <tr><th>Name</th></tr>
+                <tr><td>Alice</td></tr>
+            </table>
+        ');
+
+        $this->assertNotEmpty($result['issues']);
+        foreach ($result['issues'] as $issue) {
+            $this->assertArrayHasKey('type', $issue);
+            $this->assertArrayNotHasKey('severity', $issue);
+            $this->assertContains($issue['type'], ['error', 'warning', 'notice']);
+        }
+    }
+
+    public function test_stats_critical_count_uses_type_field()
+    {
+        // v2.2.0 Fix 1: `stats.critical_issues` counter must read `type` key.
+        $result = $this->analyzeHtml('
+            <table>
+                <tr><th>Name</th></tr>
+                <tr><td>Alice</td></tr>
+            </table>
+        ');
+
+        // th without scope + data table without th-scope → at least 1 error-type finding.
+        $this->assertGreaterThan(0, $result['stats']['critical_issues']);
+    }
+
     public function test_html_without_tables_returns_empty_issues()
     {
         $result = $this->analyzeHtml('<html><body><p>No tables here</p></body></html>');

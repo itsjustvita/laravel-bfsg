@@ -134,6 +134,30 @@ class ContrastAnalyzerTest extends TestCase
         $this->assertNotEmpty($contrastIssues, 'Inherited colors should be marked as approximate');
     }
 
+    public function test_light_gray_text_xpath_only_matches_elements_with_style(): void
+    {
+        // v2.2.0 Fix 7: Previous XPath missed parens and matched arbitrarily because of
+        // precedence of `or` over `and`. With the fix, only elements whose @style actually
+        // contains #999/#aaa/#bbb/#ccc should be counted.
+        $html = '<html><body>
+            <p style="color: #999;">gray text</p>
+            <p>plain paragraph with no style</p>
+            <div>another plain div</div>
+        </body></html>';
+        $dom = new DOMDocument;
+        @$dom->loadHTML($html);
+
+        $results = $this->analyzer->analyze($dom);
+
+        $lightGray = collect($results['issues'])->first(
+            fn ($i) => str_contains($i['message'], 'Light gray text')
+        );
+
+        $this->assertNotNull($lightGray);
+        // The pattern matches 1 styled element — NOT the entire document tree.
+        $this->assertSame(1, $lightGray['count']);
+    }
+
     public function test_inline_overrides_css_for_contrast(): void
     {
         // CSS sets good contrast, but inline style overrides with bad contrast

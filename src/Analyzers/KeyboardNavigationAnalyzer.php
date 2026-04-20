@@ -21,6 +21,24 @@ class KeyboardNavigationAnalyzer
         'checkbox', 'radio', 'combobox', 'slider',
     ];
 
+    /**
+     * Skip link text patterns (matched case-insensitive via mb_stripos).
+     * English + German variants — extend for other languages as needed.
+     */
+    protected const SKIP_LINK_PATTERNS = [
+        // English
+        'skip',
+        'jump',
+        'main',
+        // German
+        'überspringen',
+        'zum inhalt',
+        'zum hauptinhalt',
+        'zur navigation',
+        'zum menü',
+        'inhalt springen',
+    ];
+
     public function analyze(DOMDocument $dom): array
     {
         $this->violations = [];
@@ -55,15 +73,18 @@ class KeyboardNavigationAnalyzer
 
         foreach ($firstLinks as $link) {
             $href = $link->getAttribute('href');
-            $text = strtolower(trim($link->textContent));
+            $text = trim($link->textContent);
 
-            // Common skip link patterns
-            if (strpos($href, '#') === 0 &&
-                (strpos($text, 'skip') !== false ||
-                 strpos($text, 'jump') !== false ||
-                 strpos($text, 'main') !== false)) {
-                $hasSkipLink = true;
-                break;
+            if (strpos($href, '#') !== 0) {
+                continue;
+            }
+
+            foreach (self::SKIP_LINK_PATTERNS as $pattern) {
+                // mb_stripos handles umlauts (ü, ö, ä) safely, case-insensitive.
+                if ($text !== '' && mb_stripos($text, $pattern) !== false) {
+                    $hasSkipLink = true;
+                    break 2;
+                }
             }
         }
 
@@ -168,10 +189,15 @@ class KeyboardNavigationAnalyzer
                     ];
                 }
 
-                // Check links without href
+                // Check links without href — many modern interactive <a> elements use
+                // tabindex="0" + keyboard handlers and ARE keyboard-accessible.
                 if ($element->nodeName === 'a' && ! $element->hasAttribute('href')) {
+                    if ($this->isKeyboardAccessibleAnchor($element)) {
+                        continue;
+                    }
+
                     $this->violations[] = [
-                        'type' => 'error',
+                        'type' => 'warning',
                         'rule' => 'WCAG 2.1.1',
                         'element' => 'a',
                         'message' => 'Link without href is not keyboard accessible',
@@ -181,6 +207,29 @@ class KeyboardNavigationAnalyzer
                 }
             }
         }
+    }
+
+    /**
+     * Is an <a> without href wired up to be keyboard-accessible?
+     * Accept: tabindex="0" + at least one keyboard handler, OR
+     *         tabindex="0" + role="button" (button-styled anchor).
+     */
+    protected function isKeyboardAccessibleAnchor(\DOMElement $anchor): bool
+    {
+        if ($anchor->getAttribute('tabindex') !== '0') {
+            return false;
+        }
+
+        $role = $anchor->getAttribute('role');
+        if ($role === 'button') {
+            return true;
+        }
+
+        $hasKeyboardHandler = $anchor->hasAttribute('onkeydown')
+            || $anchor->hasAttribute('onkeyup')
+            || $anchor->hasAttribute('onkeypress');
+
+        return $hasKeyboardHandler;
     }
 
     protected function checkPositiveTabindex(DOMXPath $xpath): void

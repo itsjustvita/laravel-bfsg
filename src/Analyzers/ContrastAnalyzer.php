@@ -117,7 +117,7 @@ class ContrastAnalyzer
         // Common problematic patterns
         $patterns = [
             'light_gray_text' => [
-                'selector' => '//*[@style and contains(@style, "#999") or contains(@style, "#aaa") or contains(@style, "#bbb") or contains(@style, "#ccc")]',
+                'selector' => '//*[@style and (contains(@style, "#999") or contains(@style, "#aaa") or contains(@style, "#bbb") or contains(@style, "#ccc"))]',
                 'message' => 'Light gray text may have insufficient contrast',
             ],
             'placeholder_styling' => [

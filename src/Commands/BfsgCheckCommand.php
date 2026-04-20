@@ -327,7 +327,7 @@ class BfsgCheckCommand extends Command
             foreach ($issues as $issue) {
                 $dbReport->violations()->create([
                     'analyzer' => $analyzer,
-                    'severity' => $issue['severity'] ?? 'notice',
+                    'severity' => $issue['type'] ?? $issue['severity'] ?? 'notice',
                     'message' => $issue['message'],
                     'element' => $issue['element'] ?? null,
                     'wcag_rule' => $issue['rule'] ?? null,

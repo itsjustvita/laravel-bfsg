@@ -9,8 +9,9 @@ class LinkAnalyzer
 {
     protected array $violations = [];
 
-    // Common non-descriptive link texts to avoid
+    // Common non-descriptive link texts to avoid (English + German).
     protected const NON_DESCRIPTIVE_TEXTS = [
+        // English
         'click here',
         'here',
         'read more',
@@ -25,6 +26,18 @@ class LinkAnalyzer
         'see more',
         'view more',
         'details',
+        // German
+        'hier klicken',
+        'hier',
+        'klicken',
+        'mehr',
+        'mehr erfahren',
+        'weiterlesen',
+        'weiter',
+        'lesen',
+        'jetzt',
+        'los',
+        'herunterladen',
     ];
 
     public function analyze(DOMDocument $dom): array
@@ -58,9 +71,9 @@ class LinkAnalyzer
         $links = $xpath->query('//a[@href]');
 
         foreach ($links as $link) {
-            $linkText = trim(strtolower($link->textContent));
+            $linkText = trim(mb_strtolower($link->textContent));
 
-            if (in_array($linkText, self::NON_DESCRIPTIVE_TEXTS)) {
+            if (in_array($linkText, self::NON_DESCRIPTIVE_TEXTS, true)) {
                 $this->violations[] = [
                     'type' => 'error',
                     'rule' => 'WCAG 2.4.4, 2.4.9',
@@ -176,6 +189,14 @@ class LinkAnalyzer
         }
     }
 
+    /**
+     * For external links with target="_blank", we check two concerns:
+     *   1. UX (WCAG 3.2.5): does the user know it opens in a new window?
+     *   2. Security: does the link have rel="noopener noreferrer"?
+     *
+     * Previously we emitted 2 findings when both were missing; now we combine
+     * into a single finding when both apply, to reduce count inflation.
+     */
     protected function checkNewWindowLinks(DOMXPath $xpath): void
     {
         $newWindowLinks = $xpath->query('//a[@target="_blank" or @target="blank"]');
@@ -184,8 +205,10 @@ class LinkAnalyzer
             $linkText = trim($link->textContent);
             $ariaLabel = $link->getAttribute('aria-label');
             $title = $link->getAttribute('title');
+            $rel = $link->getAttribute('rel');
+            $href = $link->getAttribute('href');
 
-            // Check if there's any indication that link opens in new window
+            // Is there any indication that this link opens in a new window?
             $hasWarning = (
                 stripos($linkText, 'new window') !== false ||
                 stripos($linkText, 'new tab') !== false ||
@@ -196,28 +219,45 @@ class LinkAnalyzer
                 stripos($title, 'new tab') !== false
             );
 
-            if (! $hasWarning) {
+            $missingWarning = ! $hasWarning;
+            $missingRel = (stripos($rel, 'noopener') === false || stripos($rel, 'noreferrer') === false);
+
+            if ($missingWarning && $missingRel) {
+                // Combined finding — both issues on one link.
+                $this->violations[] = [
+                    'type' => 'warning',
+                    'rule' => 'WCAG 3.2.5, Security',
+                    'element' => 'a',
+                    'message' => 'External link opens in new window without warning and lacks rel="noopener noreferrer"',
+                    'href' => $href,
+                    'linkText' => substr($linkText, 0, 50),
+                    'suggestion' => 'Add "(opens in new window)" to link text AND rel="noopener noreferrer" to the link',
+                    'auto_fixable' => true,
+                ];
+
+                continue;
+            }
+
+            if ($missingWarning) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'WCAG 3.2.5',
                     'element' => 'a',
                     'message' => 'Link opens in new window without warning',
-                    'href' => $link->getAttribute('href'),
+                    'href' => $href,
                     'linkText' => substr($linkText, 0, 50),
                     'suggestion' => 'Add "(opens in new window)" to link text or aria-label',
                     'auto_fixable' => true,
                 ];
             }
 
-            // Check for missing rel="noopener noreferrer" for security
-            $rel = $link->getAttribute('rel');
-            if (stripos($rel, 'noopener') === false || stripos($rel, 'noreferrer') === false) {
+            if ($missingRel) {
                 $this->violations[] = [
                     'type' => 'warning',
                     'rule' => 'Security Best Practice',
                     'element' => 'a',
                     'message' => 'External link missing rel="noopener noreferrer"',
-                    'href' => $link->getAttribute('href'),
+                    'href' => $href,
                     'suggestion' => 'Add rel="noopener noreferrer" for security',
                     'auto_fixable' => true,
                 ];

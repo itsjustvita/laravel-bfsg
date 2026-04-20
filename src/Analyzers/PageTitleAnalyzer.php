@@ -10,6 +10,7 @@ class PageTitleAnalyzer
     protected array $violations = [];
 
     protected array $genericTitles = [
+        // English
         'home',
         'untitled',
         'page',
@@ -18,6 +19,14 @@ class PageTitleAnalyzer
         'index',
         'test',
         'website',
+        // German
+        'startseite',
+        'willkommen',
+        'seite',
+        'dokument',
+        'unbenannt',
+        'neu',
+        'beispiel',
     ];
 
     public function analyze(DOMDocument $dom): array

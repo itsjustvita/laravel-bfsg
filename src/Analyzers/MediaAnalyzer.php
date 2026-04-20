@@ -63,7 +63,7 @@ class MediaAnalyzer
                 'message' => 'Video element without captions or subtitles',
                 'element' => 'video',
                 'suggestion' => 'Add <track kind="captions"> or <track kind="subtitles"> element for accessibility',
-                'severity' => 'error',
+                'type' => 'error',
             ];
         }
 
@@ -82,7 +82,7 @@ class MediaAnalyzer
                 'message' => 'Video without audio description track',
                 'element' => 'video',
                 'suggestion' => 'Consider adding <track kind="descriptions"> for visual content explanation',
-                'severity' => 'warning',
+                'type' => 'warning',
             ];
         }
 
@@ -93,7 +93,7 @@ class MediaAnalyzer
                 'message' => 'Video with autoplay enabled',
                 'element' => 'video',
                 'suggestion' => 'Remove autoplay attribute; let users control media playback',
-                'severity' => 'error',
+                'type' => 'error',
             ];
         }
 
@@ -104,7 +104,7 @@ class MediaAnalyzer
                 'message' => 'Video without controls attribute',
                 'element' => 'video',
                 'suggestion' => 'Add controls attribute to allow keyboard and mouse control',
-                'severity' => 'error',
+                'type' => 'error',
             ];
         }
     }
@@ -124,7 +124,7 @@ class MediaAnalyzer
                 'message' => 'Audio element without transcript reference',
                 'element' => 'audio',
                 'suggestion' => 'Provide a transcript and reference it with aria-describedby or link it nearby',
-                'severity' => 'warning',
+                'type' => 'warning',
             ];
         }
 
@@ -135,7 +135,7 @@ class MediaAnalyzer
                 'message' => 'Audio with autoplay enabled',
                 'element' => 'audio',
                 'suggestion' => 'Remove autoplay attribute; let users control audio playback',
-                'severity' => 'error',
+                'type' => 'error',
             ];
         }
 
@@ -146,7 +146,7 @@ class MediaAnalyzer
                 'message' => 'Audio without controls attribute',
                 'element' => 'audio',
                 'suggestion' => 'Add controls attribute to allow keyboard and mouse control',
-                'severity' => 'error',
+                'type' => 'error',
             ];
         }
     }
@@ -171,7 +171,7 @@ class MediaAnalyzer
                     'element' => 'iframe',
                     'src' => substr($src, 0, 50).'...',
                     'suggestion' => 'Add descriptive title attribute to iframe (e.g., "YouTube video: Tutorial title")',
-                    'severity' => 'error',
+                    'type' => 'error',
                 ];
             }
 
@@ -183,7 +183,7 @@ class MediaAnalyzer
                         'message' => 'YouTube iframe without captions enabled by default',
                         'element' => 'iframe',
                         'suggestion' => 'Add ?cc_load_policy=1 parameter to YouTube URL to enable captions',
-                        'severity' => 'warning',
+                        'type' => 'warning',
                     ];
                 }
             }

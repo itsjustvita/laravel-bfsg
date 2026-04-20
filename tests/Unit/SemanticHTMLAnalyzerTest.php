@@ -126,6 +126,85 @@ class SemanticHTMLAnalyzerTest extends TestCase
         $this->assertGreaterThanOrEqual(1, $listIssues->count(), 'Should detect ul/ol without li children');
     }
 
+    public function test_all_findings_use_type_field_not_severity()
+    {
+        // v2.2.0 Fix 1: this analyzer must emit `type` (not `severity`) to match the
+        // rest of the package. Downstream consumers read `type`.
+        $result = $this->analyzeHtml('<html><body><div>Content</div></body></html>');
+
+        $this->assertNotEmpty($result['issues']);
+        foreach ($result['issues'] as $issue) {
+            $this->assertArrayHasKey('type', $issue, 'Every finding must expose `type`');
+            $this->assertArrayNotHasKey('severity', $issue, '`severity` key must be gone');
+            $this->assertContains($issue['type'], ['error', 'warning', 'notice']);
+        }
+    }
+
+    public function test_empty_ul_with_carousel_class_is_not_flagged()
+    {
+        // v2.2.0 Fix 2: JS-populated lists must be skipped.
+        $result = $this->analyzeHtml('
+            <html><body>
+                <main><ul class="swiper-wrapper carousel"></ul></main>
+            </body></html>
+        ');
+
+        $ulIssues = collect($result['issues'])->filter(
+            fn ($i) => str_contains($i['message'], '<ul> element without')
+        );
+
+        $this->assertEmpty($ulIssues, 'JS-driven carousel <ul> should be skipped');
+    }
+
+    public function test_empty_ul_with_data_attribute_is_not_flagged()
+    {
+        // v2.2.0 Fix 2: any data-* attribute signals likely JS population.
+        $result = $this->analyzeHtml('
+            <html><body>
+                <main><ul data-slick="{}"></ul></main>
+            </body></html>
+        ');
+
+        $ulIssues = collect($result['issues'])->filter(
+            fn ($i) => str_contains($i['message'], '<ul> element without')
+        );
+
+        $this->assertEmpty($ulIssues, '<ul> with data-* attribute should be skipped');
+    }
+
+    public function test_empty_ul_with_listbox_role_is_not_flagged()
+    {
+        // v2.2.0 Fix 2: listbox/menu/tree roles signal JS population.
+        $result = $this->analyzeHtml('
+            <html><body>
+                <main><ul role="listbox"></ul></main>
+            </body></html>
+        ');
+
+        $ulIssues = collect($result['issues'])->filter(
+            fn ($i) => str_contains($i['message'], '<ul> element without')
+        );
+
+        $this->assertEmpty($ulIssues, '<ul role="listbox"> should be skipped');
+    }
+
+    public function test_plain_empty_ul_is_still_flagged_as_notice()
+    {
+        // v2.2.0 Fix 2: unhinted empty <ul> → notice (not error anymore).
+        $result = $this->analyzeHtml('
+            <html><body>
+                <main><ul></ul></main>
+            </body></html>
+        ');
+
+        $ulIssues = collect($result['issues'])->filter(
+            fn ($i) => str_contains($i['message'], '<ul> element without')
+        )->values();
+
+        $this->assertCount(1, $ulIssues);
+        $this->assertSame('notice', $ulIssues->first()['type']);
+    }
+
     public function test_proper_semantic_html_has_no_error_level_issues()
     {
         $result = $this->analyzeHtml('
@@ -147,7 +226,7 @@ class SemanticHTMLAnalyzerTest extends TestCase
         ');
 
         $errorIssues = collect($result['issues'])->filter(
-            fn ($i) => ($i['severity'] ?? '') === 'error'
+            fn ($i) => ($i['type'] ?? '') === 'error'
         );
 
         $this->assertEmpty($errorIssues, 'Proper semantic HTML should not produce error-level issues');
