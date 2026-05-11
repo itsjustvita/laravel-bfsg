@@ -130,36 +130,26 @@ class ContrastAnalyzer
 
     protected function checkProblematicPatterns(DOMXPath $xpath): void
     {
-        // Common problematic patterns
-        $patterns = [
-            'light_gray_text' => [
-                'selector' => '//*[@style and (contains(@style, "#999") or contains(@style, "#aaa") or contains(@style, "#bbb") or contains(@style, "#ccc"))]',
-                'message' => 'Light gray text may have insufficient contrast',
-            ],
-            'placeholder_styling' => [
-                'selector' => '//input[@placeholder]',
-                'message' => 'Placeholder text often has low contrast',
-            ],
-            'disabled_elements' => [
-                'selector' => '//*[@disabled]',
-                'message' => 'Disabled elements should still meet minimum contrast requirements',
-            ],
-        ];
+        // Wir flaggen nur Patterns, die WIRKLICH einen Kontrast-Verstoß
+        // anzeigen — hardcoded helle Grautöne als Inline-Style.
+        // Frühere Heuristiken (placeholder, disabled) waren reines Rauschen:
+        // jede Form mit placeholder-Attribut wurde geflagt, ohne dass die
+        // CSS-Farbe tatsächlich geprüft wurde. Das hat moderne Sites unfair
+        // bestraft.
+        $inlineGrayElements = $xpath->query(
+            '//*[@style and (contains(@style, "#999") or contains(@style, "#aaa") or contains(@style, "#bbb") or contains(@style, "#ccc"))]'
+        );
 
-        foreach ($patterns as $patternName => $pattern) {
-            $elements = $xpath->query($pattern['selector']);
-
-            if ($elements->length > 0) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 1.4.3',
-                    'element' => 'various',
-                    'message' => $pattern['message'],
-                    'count' => $elements->length,
-                    'suggestion' => 'Review and test contrast ratios for these elements',
-                    'auto_fixable' => false,
-                ];
-            }
+        if ($inlineGrayElements->length > 0) {
+            $this->violations[] = [
+                'type' => 'warning',
+                'rule' => 'WCAG 1.4.3',
+                'element' => 'various',
+                'message' => 'Inline-Style mit hellgrauer Schriftfarbe — Kontrast prüfen',
+                'count' => $inlineGrayElements->length,
+                'suggestion' => 'Mindestens 4.5:1 Kontrastverhältnis für Fließtext sicherstellen',
+                'auto_fixable' => false,
+            ];
         }
     }
 
