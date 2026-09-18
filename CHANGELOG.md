@@ -5,9 +5,21 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] - 2026-09-18
+
+Re-release of 2.2.3 with the CI matrix fix. The 2.2.3 tag was moved after Packagist had
+already indexed it, and Packagist keeps published stable versions immutable, so 2.2.3 is
+withdrawn there. Install 2.2.4.
+
+### Fixed
+- CI: the PHP 8.2 matrix job could never install PHPUnit 12 (requires PHP 8.3) and, with
+  `fail-fast`, cancelled the 8.3/8.4 jobs too. PHPUnit 11 is now allowed for that leg and the
+  matrix no longer fails fast.
+
 ## [2.2.3] - 2026-09-18
 
-Hotfix release. No new features, no breaking changes.
+Hotfix release, withdrawn on Packagist in favour of 2.2.4 (same fixes). No new features, no
+breaking changes.
 
 ### Fixed
 - **Middleware could break downloads and analyzed the wrong responses**: `CheckAccessibility`
