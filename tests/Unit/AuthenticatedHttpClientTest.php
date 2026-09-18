@@ -44,6 +44,60 @@ class AuthenticatedHttpClientTest extends TestCase
         });
     }
 
+    public function test_extracts_every_cookie_from_multiple_set_cookie_headers(): void
+    {
+        // Laravel sends XSRF-TOKEN and the session cookie as two Set-Cookie headers.
+        Http::fake([
+            'https://example.com/login' => Http::response('OK', 200, [
+                'Set-Cookie' => [
+                    'XSRF-TOKEN=xsrf-value; Path=/; SameSite=Lax',
+                    'laravel_session=session-value; Path=/; HttpOnly; SameSite=Lax',
+                ],
+            ]),
+            'https://example.com/dashboard' => Http::response('dashboard', 200),
+        ]);
+
+        $result = $this->client->authenticateWithCredentials('https://example.com/login', 'user@example.com', 'secret');
+
+        $this->assertTrue($result, 'Session cookie from the second Set-Cookie header must be recognised');
+
+        $this->client->fetchAuthenticatedUrl('https://example.com/dashboard');
+
+        Http::assertSent(function ($request) {
+            if ($request->url() !== 'https://example.com/dashboard') {
+                return false;
+            }
+
+            $cookie = $request->header('Cookie')[0] ?? '';
+
+            return str_contains($cookie, 'XSRF-TOKEN=xsrf-value')
+                && str_contains($cookie, 'laravel_session=session-value');
+        });
+    }
+
+    public function test_ssl_verification_setting_applies_to_every_request(): void
+    {
+        $verify = [];
+
+        Http::fake(function ($request, $options) use (&$verify) {
+            $verify[$request->url()] = $options['verify'] ?? true;
+
+            return Http::response('OK', 200, [
+                'Set-Cookie' => ['XSRF-TOKEN=x; Path=/', 'laravel_session=s; Path=/'],
+            ]);
+        });
+
+        $this->client->setVerifySsl(false);
+
+        $this->client->authenticateWithCredentials('https://self-signed.test/login', 'user@example.com', 'secret');
+        $this->client->authenticateWithSanctum('https://self-signed.test', 'user@example.com', 'secret');
+        $this->client->fetchAuthenticatedUrl('https://self-signed.test/dashboard');
+
+        $this->assertFalse($verify['https://self-signed.test/login']);
+        $this->assertFalse($verify['https://self-signed.test/sanctum/csrf-cookie']);
+        $this->assertFalse($verify['https://self-signed.test/dashboard']);
+    }
+
     // ─── JSON credential auth ───────────────────────────────────────────
 
     public function test_json_credential_auth_with_token_response(): void
@@ -327,6 +381,33 @@ class AuthenticatedHttpClientTest extends TestCase
                 && $request->method() === 'POST'
                 && $request->hasHeader('X-XSRF-TOKEN', 'csrf-token-value')
                 && $request->hasHeader('X-Requested-With', 'XMLHttpRequest');
+        });
+    }
+
+    public function test_sanctum_login_sends_csrf_and_session_cookies(): void
+    {
+        Http::fake([
+            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, [
+                'Set-Cookie' => [
+                    'XSRF-TOKEN=csrf-token-value; Path=/; SameSite=Lax',
+                    'laravel_session=pre-login-session; Path=/; HttpOnly',
+                ],
+            ]),
+            'https://app.example.com/login' => Http::response(['message' => 'ok'], 200),
+        ]);
+
+        $this->client->authenticateWithSanctum('https://app.example.com', 'user@example.com', 'password');
+
+        Http::assertSent(function ($request) {
+            if ($request->url() !== 'https://app.example.com/login') {
+                return false;
+            }
+
+            $cookie = $request->header('Cookie')[0] ?? '';
+
+            return $request->hasHeader('X-XSRF-TOKEN', 'csrf-token-value')
+                && str_contains($cookie, 'XSRF-TOKEN=csrf-token-value')
+                && str_contains($cookie, 'laravel_session=pre-login-session');
         });
     }
 

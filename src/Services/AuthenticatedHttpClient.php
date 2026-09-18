@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Services;
 
 use Exception;
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -15,6 +16,32 @@ class AuthenticatedHttpClient
     protected array $headers = [];
 
     protected ?string $sessionCookie = null;
+
+    protected bool $verifySsl = true;
+
+    /**
+     * Toggle TLS certificate verification for every request this client sends
+     */
+    public function setVerifySsl(bool $verifySsl): static
+    {
+        $this->verifySsl = $verifySsl;
+
+        return $this;
+    }
+
+    /**
+     * Base request carrying the settings shared by every call
+     */
+    protected function request(): PendingRequest
+    {
+        $request = Http::timeout(30);
+
+        if (! $this->verifySsl) {
+            $request = $request->withoutVerifying();
+        }
+
+        return $request;
+    }
 
     /**
      * Authenticate using email and password (or custom fields)
@@ -39,14 +66,14 @@ class AuthenticatedHttpClient
         $isJsonAuth = $customFieldNames['json_auth'] ?? false;
 
         if ($isJsonAuth) {
-            $response = Http::withHeaders([
+            $response = $this->request()->withHeaders([
                 'Accept' => 'application/json',
                 'X-Requested-With' => 'XMLHttpRequest',
-            ])->timeout(30)->post($loginUrl, $postData);
+            ])->post($loginUrl, $postData);
         } else {
-            $response = Http::asForm()->withHeaders([
+            $response = $this->request()->asForm()->withHeaders([
                 'Accept' => 'text/html,application/xhtml+xml',
-            ])->timeout(30)->post($loginUrl, $postData);
+            ])->post($loginUrl, $postData);
         }
 
         if ($response->failed() && $response->status() >= 500) {
@@ -142,10 +169,10 @@ class AuthenticatedHttpClient
         // First get CSRF token
         $csrfUrl = rtrim($apiUrl, '/').'/sanctum/csrf-cookie';
 
-        $csrfResponse = Http::withHeaders([
+        $csrfResponse = $this->request()->withHeaders([
             'Accept' => 'application/json',
             'X-Requested-With' => 'XMLHttpRequest',
-        ])->timeout(30)->get($csrfUrl);
+        ])->get($csrfUrl);
 
         $this->extractCookiesFromResponse($csrfResponse);
 
@@ -166,12 +193,12 @@ class AuthenticatedHttpClient
 
         $loginUrl = rtrim($apiUrl, '/').'/login';
 
-        $loginResponse = Http::withHeaders([
+        $loginResponse = $this->request()->withHeaders([
             'Accept' => 'application/json',
             'X-Requested-With' => 'XMLHttpRequest',
             'X-XSRF-TOKEN' => urldecode($xsrfToken),
             'Cookie' => $cookieHeader,
-        ])->timeout(30)->post($loginUrl, $loginData);
+        ])->post($loginUrl, $loginData);
 
         if ($loginResponse->failed()) {
             throw new Exception('Failed to authenticate with Sanctum');
@@ -195,7 +222,7 @@ class AuthenticatedHttpClient
      */
     public function fetchAuthenticatedUrl(string $url, bool $verifySsl = true): string
     {
-        $request = Http::withHeaders($this->headers)->timeout(30);
+        $request = $this->request()->withHeaders($this->headers);
 
         if (! $verifySsl) {
             $request = $request->withoutVerifying();
@@ -221,17 +248,9 @@ class AuthenticatedHttpClient
      */
     protected function extractCookiesFromResponse(Response $response): void
     {
-        $setCookieHeaders = $response->header('Set-Cookie');
-
-        if (empty($setCookieHeaders)) {
-            // Try getting all headers - some responses have multiple Set-Cookie headers
-            $headers = $response->headers();
-            $setCookieHeaders = $headers['Set-Cookie'] ?? [];
-        }
-
-        if (! is_array($setCookieHeaders)) {
-            $setCookieHeaders = [$setCookieHeaders];
-        }
+        // header() joins multiple Set-Cookie values with commas; the PSR-7
+        // response keeps them as separate header lines.
+        $setCookieHeaders = $response->toPsrResponse()->getHeader('Set-Cookie');
 
         foreach ($setCookieHeaders as $cookieString) {
             if (empty($cookieString)) {
