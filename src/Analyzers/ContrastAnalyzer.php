@@ -130,12 +130,11 @@ class ContrastAnalyzer
 
     protected function checkProblematicPatterns(DOMXPath $xpath): void
     {
-        // Wir flaggen nur Patterns, die WIRKLICH einen Kontrast-Verstoß
-        // anzeigen — hardcoded helle Grautöne als Inline-Style.
-        // Frühere Heuristiken (placeholder, disabled) waren reines Rauschen:
-        // jede Form mit placeholder-Attribut wurde geflagt, ohne dass die
-        // CSS-Farbe tatsächlich geprüft wurde. Das hat moderne Sites unfair
-        // bestraft.
+        // Only flag patterns that actually indicate a contrast problem:
+        // hard-coded light gray tones in inline styles.
+        // The former placeholder/disabled heuristics were pure noise: every
+        // form with a placeholder attribute was flagged without the CSS colour
+        // ever being checked, which penalised modern sites unfairly.
         $inlineGrayElements = $xpath->query(
             '//*[@style and (contains(@style, "#999") or contains(@style, "#aaa") or contains(@style, "#bbb") or contains(@style, "#ccc"))]'
         );
@@ -145,9 +144,9 @@ class ContrastAnalyzer
                 'type' => 'warning',
                 'rule' => 'WCAG 1.4.3',
                 'element' => 'various',
-                'message' => 'Inline-Style mit hellgrauer Schriftfarbe — Kontrast prüfen',
+                'message' => 'Light gray text may have insufficient contrast',
                 'count' => $inlineGrayElements->length,
-                'suggestion' => 'Mindestens 4.5:1 Kontrastverhältnis für Fließtext sicherstellen',
+                'suggestion' => 'Ensure a contrast ratio of at least 4.5:1 for body text',
                 'auto_fixable' => false,
             ];
         }

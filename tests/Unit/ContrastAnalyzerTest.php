@@ -47,16 +47,17 @@ class ContrastAnalyzerTest extends TestCase
         $this->assertStringContainsString('Light gray text', $results['issues'][0]['message']);
     }
 
-    public function test_detects_placeholder_contrast_issues()
+    public function test_bare_placeholder_and_disabled_elements_are_not_flagged()
     {
-        $html = '<input type="text" placeholder="Enter text here">';
+        // Regression guard for v2.2.2: the placeholder/disabled heuristics were
+        // removed because they flagged every form without checking any colour.
+        $html = '<form><input type="text" placeholder="Enter text here"><button disabled>Send</button></form>';
         $dom = new DOMDocument;
         @$dom->loadHTML($html);
 
         $results = $this->analyzer->analyze($dom);
 
-        $this->assertNotEmpty($results['issues']);
-        $this->assertStringContainsString('Placeholder text', $results['issues'][0]['message']);
+        $this->assertSame([], $results['issues']);
     }
 
     public function test_high_contrast_passes()
