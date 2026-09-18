@@ -157,7 +157,7 @@ php artisan bfsg:history
 php artisan bfsg:history --url=https://example.com
 
 # Show score trends over time
-php artisan bfsg:history --trends
+php artisan bfsg:history --trend
 
 # Cleanup reports older than 90 days
 php artisan bfsg:history --cleanup --days=90
@@ -451,7 +451,7 @@ php artisan bfsg:history
 php artisan bfsg:history --url=https://example.com
 
 # Show score trends
-php artisan bfsg:history --trends
+php artisan bfsg:history --trend
 
 # Cleanup old reports
 php artisan bfsg:history --cleanup --days=90

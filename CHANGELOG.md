@@ -5,6 +5,52 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.3] - 2026-09-18
+
+Hotfix release. No new features, no breaking changes.
+
+### Fixed
+- **Middleware could break downloads and analyzed the wrong responses**: `CheckAccessibility`
+  inspected every GET response whose Content-Type mentioned `text/html`, including redirects
+  (Symfony sets `text/html` on `RedirectResponse`), 404/500 pages, and streamed or binary
+  responses whose `getContent()` returns `false`. The latter ended in
+  `DOMDocument::loadHTML('')` throwing a `ValueError`, so file downloads behind the middleware
+  returned HTTP 500. The middleware now only analyzes successful, non-empty HTML page responses,
+  and wraps analysis in a `try/catch` so an analyzer failure is logged instead of surfacing to
+  the visitor. The hard-coded fallback for `bfsg.middleware.enabled` now matches the config
+  default (`false`).
+- **HTML and PDF reports rendered every finding as "notice"**: the report template still read the
+  legacy `severity` key although analyzers emit `type` since 2.2.0. The badge now follows `type`.
+- **UTF-8 pages without `<meta charset>` were decoded as ISO-8859-1**, which garbled every umlaut
+  and silently defeated the German skip-link, link-text and page-title patterns added in 2.2.0.
+  All `loadHTML()` call sites now go through a shared `HtmlLoader` that adds an encoding hint
+  for UTF-8 input without a declared charset and restores libxml's error handling afterwards.
+- **`Bfsg::analyze('')` threw `ValueError`**; blank input now yields an empty result.
+- **Sanctum login dropped the session cookie**: `Set-Cookie` headers were read via
+  `Response::header()`, which joins multiple cookies with commas, so only `XSRF-TOKEN` survived
+  and the login POST was answered with 419. Cookies are now read from the PSR-7 response.
+- **`--verify-ssl` only applied to the final page fetch**; login and CSRF requests always
+  verified, so `--auth` against a self-signed local HTTPS host failed at login.
+  `AuthenticatedHttpClient::setVerifySsl()` now applies to every request.
+- **`--jwt`, `--api-key` and `--api-key-header` were silently ignored** unless combined with
+  `--auth`, `--bearer` or `--session`.
+- **Login URL was built from the page URL instead of its origin**:
+  `bfsg:check https://example.com/dashboard --auth --login-url=/admin/login` posted to
+  `https://example.com/dashboard/admin/login`. The login URL (and Sanctum's `csrf-cookie`
+  endpoint) is now resolved against `scheme://host[:port]`, absolute `--login-url` values are
+  accepted, and the configured `bfsg.authentication.default_login_url` is honoured.
+- Two `ContrastAnalyzerTest` cases left red by 2.2.2 fixed; the light-gray heuristic message is
+  English again.
+- README: `bfsg:history --trends` corrected to `--trend`.
+
+## [2.2.2] - 2026-05-11
+
+### Fixed
+- **ContrastAnalyzer false positives**: the `placeholder` and `disabled` heuristics flagged every
+  input with a placeholder attribute and every disabled element as a WCAG 1.4.3 warning without
+  checking any actual colour. Both heuristics were removed; only the inline light-gray heuristic
+  (`#999`/`#aaa`/`#bbb`/`#ccc` in a `style` attribute) remains.
+
 ## [2.2.1] - 2026-04-20
 
 ### Fixed
