@@ -2,11 +2,16 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
+use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Middleware\CheckAccessibility;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use RuntimeException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class MiddlewareTest extends TestCase
 {
@@ -73,6 +78,86 @@ class MiddlewareTest extends TestCase
         $result = $middleware->handle($request, function () use ($response) {
             return $response;
         });
+
+        $this->assertFalse($result->headers->has('X-BFSG-Violations'));
+    }
+
+    public function test_skips_redirect_responses(): void
+    {
+        $request = Request::create('/test', 'GET');
+        $response = new RedirectResponse('/login');
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertFalse($result->headers->has('X-BFSG-Violations'));
+    }
+
+    public function test_skips_error_responses(): void
+    {
+        $request = Request::create('/missing', 'GET');
+        $response = new Response('<html><body><img src="test.jpg"></body></html>', 404, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertFalse($result->headers->has('X-BFSG-Violations'));
+    }
+
+    public function test_skips_streamed_responses(): void
+    {
+        $request = Request::create('/export', 'GET');
+        $response = new StreamedResponse(function () {
+            echo '<html><body><img src="test.jpg"></body></html>';
+        }, 200, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertSame($response, $result);
+        $this->assertFalse($result->headers->has('X-BFSG-Violations'));
+    }
+
+    public function test_skips_binary_file_responses(): void
+    {
+        $request = Request::create('/download', 'GET');
+        $response = new BinaryFileResponse(__FILE__, 200, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertSame($response, $result);
+        $this->assertFalse($result->headers->has('X-BFSG-Violations'));
+    }
+
+    public function test_skips_empty_response_bodies(): void
+    {
+        $request = Request::create('/empty', 'GET');
+        $response = new Response('', 200, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertSame($response, $result);
+        $this->assertFalse($result->headers->has('X-BFSG-Violations'));
+    }
+
+    public function test_analysis_failure_never_breaks_the_response(): void
+    {
+        Bfsg::shouldReceive('analyze')->once()->andThrow(new RuntimeException('analyzer exploded'));
+        Log::shouldReceive('error')->once()->withArgs(fn ($message) => str_contains($message, 'BFSG'));
+
+        $request = Request::create('/test', 'GET');
+        $response = new Response('<html><body><p>Hi</p></body></html>', 200, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertSame($response, $result);
+    }
+
+    public function test_middleware_is_disabled_when_config_key_is_missing(): void
+    {
+        config()->set('bfsg.middleware', ['ignored_paths' => []]);
+
+        $request = Request::create('/test', 'GET');
+        $response = new Response('<html><body><img src="test.jpg"></body></html>', 200, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
 
         $this->assertFalse($result->headers->has('X-BFSG-Violations'));
     }

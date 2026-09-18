@@ -7,6 +7,12 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\RedirectResponse;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
 
 class CheckAccessibility
 {
@@ -25,19 +31,29 @@ class CheckAccessibility
         // Get HTML content
         $html = $response->getContent();
 
-        // Analyze for accessibility
-        $violations = Bfsg::analyze($html);
+        if (! is_string($html) || trim($html) === '') {
+            return $response;
+        }
 
-        if (! empty($violations)) {
-            $this->handleViolations($request, $violations);
+        // The middleware must never break the page it inspects.
+        try {
+            $violations = Bfsg::analyze($html);
 
-            // Add violations to response headers for debugging
-            if (config('app.debug')) {
-                $response->headers->set(
-                    'X-BFSG-Violations',
-                    array_sum(array_map('count', $violations))
-                );
+            if (! empty($violations)) {
+                $this->handleViolations($request, $violations);
+
+                // Add violations to response headers for debugging
+                if (config('app.debug')) {
+                    $response->headers->set(
+                        'X-BFSG-Violations',
+                        array_sum(array_map('count', $violations))
+                    );
+                }
             }
+        } catch (Throwable $e) {
+            Log::error('BFSG: accessibility analysis failed for '.$request->fullUrl(), [
+                'exception' => $e,
+            ]);
         }
 
         return $response;
@@ -53,14 +69,28 @@ class CheckAccessibility
             return false;
         }
 
+        // Only full HTML page responses carry a body worth analyzing
+        if (! $response instanceof SymfonyResponse
+            || $response instanceof RedirectResponse
+            || $response instanceof JsonResponse
+            || $response instanceof StreamedResponse
+            || $response instanceof BinaryFileResponse) {
+            return false;
+        }
+
+        // Skip redirects, error pages and anything else that is not a 2xx page
+        if (! $response->isSuccessful()) {
+            return false;
+        }
+
         // Only check HTML responses
         $contentType = $response->headers->get('Content-Type', '');
         if (stripos($contentType, 'text/html') === false) {
             return false;
         }
 
-        // Skip if disabled
-        if (! config('bfsg.middleware.enabled', true)) {
+        // Skip if disabled (config default is false)
+        if (! config('bfsg.middleware.enabled', false)) {
             return false;
         }
 
