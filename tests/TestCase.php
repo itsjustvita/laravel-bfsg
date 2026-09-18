@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Tests;
 
 use Barryvdh\DomPDF\ServiceProvider;
+use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\BfsgServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
@@ -11,6 +12,8 @@ class TestCase extends Orchestra
     protected function setUp(): void
     {
         parent::setUp();
+
+        Http::preventStrayRequests();
     }
 
     protected function getPackageProviders($app)

@@ -52,8 +52,10 @@ class BfsgCheckCommand extends Command
         $this->newLine();
 
         try {
+            $this->httpClient->setVerifySsl($this->verifySsl());
+
             // Handle authentication if needed
-            if ($this->option('auth') || $this->option('bearer') || $this->option('session')) {
+            if ($this->usesAuthentication()) {
                 $this->handleAuthentication($url);
             }
 
@@ -94,8 +96,63 @@ class BfsgCheckCommand extends Command
         }
     }
 
-    protected function handleAuthentication(string $baseUrl): void
+    /**
+     * Whether any authentication option was given
+     */
+    protected function usesAuthentication(): bool
     {
+        foreach (['auth', 'bearer', 'jwt', 'api-key', 'session'] as $option) {
+            if ($this->option($option)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function verifySsl(): bool
+    {
+        return filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * scheme://host[:port] of the URL being checked
+     */
+    protected function originOf(string $url): string
+    {
+        $parts = parse_url($url);
+
+        if (empty($parts['scheme']) || empty($parts['host'])) {
+            throw new Exception("Invalid URL: {$url}");
+        }
+
+        $origin = $parts['scheme'].'://'.$parts['host'];
+
+        if (! empty($parts['port'])) {
+            $origin .= ':'.$parts['port'];
+        }
+
+        return $origin;
+    }
+
+    /**
+     * Resolve --login-url (absolute or relative to the origin), falling back to the configured default
+     */
+    protected function resolveLoginUrl(string $origin): string
+    {
+        $loginUrl = $this->option('login-url') ?: config('bfsg.authentication.default_login_url', '/login');
+
+        if (preg_match('#^https?://#i', $loginUrl)) {
+            return $loginUrl;
+        }
+
+        return $origin.'/'.ltrim($loginUrl, '/');
+    }
+
+    protected function handleAuthentication(string $url): void
+    {
+        $origin = $this->originOf($url);
+
         // JWT authentication
         if ($jwt = $this->option('jwt')) {
             $this->info('🔐 Authenticating with JWT token...');
@@ -152,7 +209,7 @@ class BfsgCheckCommand extends Command
 
             if ($this->option('sanctum')) {
                 // Sanctum authentication
-                $token = $this->httpClient->authenticateWithSanctum($baseUrl, $email, $password);
+                $token = $this->httpClient->authenticateWithSanctum($origin, $email, $password);
                 if ($token) {
                     $this->info('✅ Sanctum API token obtained');
                 } else {
@@ -160,9 +217,7 @@ class BfsgCheckCommand extends Command
                 }
             } else {
                 // Regular form authentication with custom field support
-                $loginUrl = $this->option('login-url')
-                    ? $baseUrl.'/'.ltrim($this->option('login-url'), '/')
-                    : $baseUrl.'/login';
+                $loginUrl = $this->resolveLoginUrl($origin);
 
                 $customFields = [];
                 if ($this->option('username-field')) {
@@ -200,10 +255,8 @@ class BfsgCheckCommand extends Command
     protected function fetchHtml(string $url): string
     {
         // Use authenticated client if we have authentication
-        if ($this->option('auth') || $this->option('bearer') || $this->option('session')) {
-            $verifySsl = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
-
-            return $this->httpClient->fetchAuthenticatedUrl($url, $verifySsl);
+        if ($this->usesAuthentication()) {
+            return $this->httpClient->fetchAuthenticatedUrl($url, $this->verifySsl());
         }
 
         // Check if this is a Herd domain and handle accordingly
@@ -216,9 +269,7 @@ class BfsgCheckCommand extends Command
         }
 
         // Otherwise use Http facade with SSL handling
-        $verifySSL = filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
-
-        $response = Http::withOptions(['verify' => $verifySSL])
+        $response = Http::withOptions(['verify' => $this->verifySsl()])
             ->timeout(30)
             ->withUserAgent('BFSG-Checker/2.0')
             ->get($url);
