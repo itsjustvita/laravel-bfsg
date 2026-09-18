@@ -16,6 +16,7 @@ use ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
+use ItsJustVita\LaravelBfsg\Services\HtmlLoader;
 
 class AnalyzeUrlCommand extends Command
 {
@@ -102,10 +103,7 @@ class AnalyzeUrlCommand extends Command
             $html = $response->body();
 
             // Convert to DOMDocument
-            $dom = new \DOMDocument;
-            libxml_use_internal_errors(true);
-            $dom->loadHTML($html);
-            libxml_clear_errors();
+            $dom = HtmlLoader::load($html);
 
             // Run analyzers
             $analyzers = [

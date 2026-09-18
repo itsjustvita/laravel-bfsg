@@ -2,9 +2,9 @@
 
 namespace ItsJustVita\LaravelBfsg;
 
-use DOMDocument;
 use Exception;
 use Illuminate\Support\Facades\Process;
+use ItsJustVita\LaravelBfsg\Services\HtmlLoader;
 
 class BrowserAnalyzer
 {
@@ -45,10 +45,7 @@ class BrowserAnalyzer
             $html = $this->getRenderedHtml($url);
 
             // Convert to DOMDocument for analysis
-            $dom = new DOMDocument;
-            libxml_use_internal_errors(true);
-            $dom->loadHTML($html);
-            libxml_clear_errors();
+            $dom = HtmlLoader::load($html);
 
             // Run all analyzers
             $results = [];

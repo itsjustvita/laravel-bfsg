@@ -25,6 +25,32 @@ class BfsgTest extends TestCase
         $this->assertArrayHasKey('links', $violations);
     }
 
+    public function test_returns_empty_array_for_blank_html(): void
+    {
+        $bfsg = new Bfsg;
+
+        $this->assertSame([], $bfsg->analyze(''));
+        $this->assertSame([], $bfsg->analyze("  \n  "));
+    }
+
+    public function test_recognises_german_skip_link_without_meta_charset(): void
+    {
+        // No <meta charset>: libxml would decode "Menü" as ISO-8859-1 and the
+        // German skip-link pattern from v2.2.0 would never match.
+        $html = '<html lang="de"><head><title>Startseite der Firma</title></head><body>'
+            .'<a href="#nav">Zum Menü</a>'
+            .'<nav id="nav"><a href="/kontakt">Kontakt aufnehmen</a></nav>'
+            .'<main><h1>Willkommen bei der Firma</h1></main>'
+            .'</body></html>';
+
+        $violations = (new Bfsg)->analyze($html);
+
+        $skipLinkFindings = collect($violations['keyboard'] ?? [])
+            ->filter(fn ($issue) => str_contains($issue['message'], 'skip link'));
+
+        $this->assertCount(0, $skipLinkFindings, 'German skip link must be recognised');
+    }
+
     public function test_returns_empty_array_for_accessible_html(): void
     {
         $html = '<!DOCTYPE html><html lang="en"><head><title>Contact Us - Our Company</title></head><body>

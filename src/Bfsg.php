@@ -18,6 +18,7 @@ use ItsJustVita\LaravelBfsg\Analyzers\PageTitleAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\StatusMessageAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
+use ItsJustVita\LaravelBfsg\Services\HtmlLoader;
 
 class Bfsg
 {
@@ -117,8 +118,11 @@ class Bfsg
     {
         $this->violations = [];
 
-        $dom = new \DOMDocument;
-        @$dom->loadHTML($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        if (trim($html) === '') {
+            return $this->violations;
+        }
+
+        $dom = HtmlLoader::load($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
 
         foreach ($this->analyzers as $name => $analyzer) {
             $results = $analyzer->analyze($dom);
