@@ -102,6 +102,39 @@ class ReportGeneratorTest extends TestCase
         $this->assertStringContainsString('Image missing alt attribute', $output);
     }
 
+    public function test_html_report_renders_severity_badge_from_type_key(): void
+    {
+        // Since v2.2.0 analyzers emit `type`, not `severity`. The badge must follow `type`.
+        $violations = [
+            'images' => [
+                [
+                    'type' => 'error',
+                    'rule' => 'WCAG 1.1.1',
+                    'message' => 'Image missing alt attribute',
+                    'element' => 'img',
+                    'suggestion' => 'Add an alt attribute',
+                ],
+            ],
+            'headings' => [
+                [
+                    'type' => 'warning',
+                    'rule' => 'WCAG 1.3.1',
+                    'message' => 'Heading hierarchy skipped',
+                    'element' => 'h3',
+                    'suggestion' => 'Use proper heading levels',
+                ],
+            ],
+        ];
+
+        $output = (new ReportGenerator('https://example.com', $violations))
+            ->setFormat('html')
+            ->generate();
+
+        $this->assertMatchesRegularExpression('/severity-badge error">\s*error/', $output);
+        $this->assertMatchesRegularExpression('/severity-badge warning">\s*warning/', $output);
+        $this->assertDoesNotMatchRegularExpression('/severity-badge notice">\s*notice/', $output);
+    }
+
     public function test_generates_markdown_report(): void
     {
         $generator = new ReportGenerator('https://example.com', $this->sampleViolations());

@@ -376,8 +376,8 @@
                         @foreach($issues as $issue)
                             <div class="issue">
                                 <div class="issue-header">
-                                    <span class="severity-badge {{ $issue['severity'] ?? 'notice' }}">
-                                        {{ $issue['severity'] ?? 'notice' }}
+                                    <span class="severity-badge {{ $issue['type'] ?? $issue['severity'] ?? 'notice' }}">
+                                        {{ $issue['type'] ?? $issue['severity'] ?? 'notice' }}
                                     </span>
                                     <div class="issue-content">
                                         <div class="rule-tag">{{ $issue['rule'] ?? 'BFSG' }}</div>
