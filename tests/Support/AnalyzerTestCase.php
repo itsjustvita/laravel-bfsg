@@ -43,6 +43,8 @@ abstract class AnalyzerTestCase extends TestCase
                 continue;
             }
 
+            $this->addToAssertionCount(1);
+
             return $violation;
         }
 
