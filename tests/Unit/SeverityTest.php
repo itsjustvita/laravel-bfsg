@@ -24,4 +24,11 @@ class SeverityTest extends TestCase
         $this->assertFalse(Severity::Notice->atLeast(Severity::Warning));
         $this->assertGreaterThan(Severity::Warning->rank(), Severity::Error->rank());
     }
+
+    public function test_label_is_translated(): void
+    {
+        $this->assertSame('Error', Severity::Error->label());
+        $this->assertSame('Warnung', Severity::Warning->label('de'));
+        $this->assertSame('Hinweis', Severity::Notice->label('de'));
+    }
 }

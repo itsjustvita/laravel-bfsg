@@ -1,0 +1,20 @@
+<?php
+
+return [
+    'severity' => ['error' => 'Fehler', 'warning' => 'Warnung', 'notice' => 'Hinweis'],
+    'title' => 'Barrierefreiheitsbericht',
+    'summary' => 'Zusammenfassung',
+    'score' => 'Konformitätswert',
+    'grade' => 'Note',
+    'total_issues' => 'Befunde gesamt',
+    'errors' => 'Fehler',
+    'warnings' => 'Warnungen',
+    'notices' => 'Hinweise',
+    'no_issues' => 'Keine Barrierefreiheitsprobleme gefunden.',
+    'element' => 'Element',
+    'suggestion' => 'Empfehlung',
+    'rule' => 'WCAG',
+    'generated_by' => 'Erstellt mit laravel-bfsg :version am :date',
+    'url' => 'URL',
+    'issues_found' => ':count Befunde gefunden',
+];

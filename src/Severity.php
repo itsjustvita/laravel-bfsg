@@ -30,4 +30,15 @@ enum Severity: string
     {
         return $this->rank() >= $other->rank();
     }
+
+    public function label(?string $locale = null): string
+    {
+        if (! function_exists('app') || ! app()->bound('translator')) {
+            return $this->value;
+        }
+
+        $text = app('translator')->get('bfsg::report.severity.'.$this->value, [], $locale);
+
+        return is_string($text) ? $text : $this->value;
+    }
 }

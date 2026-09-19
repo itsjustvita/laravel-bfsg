@@ -58,6 +58,11 @@ class BfsgServiceProvider extends ServiceProvider
                 __DIR__.'/../database/migrations' => database_path('migrations'),
             ], 'bfsg-migrations');
 
+            // Publish translations
+            $this->publishes([
+                __DIR__.'/../lang' => $this->app->langPath('vendor/bfsg'),
+            ], 'bfsg-lang');
+
             // Register commands
             $commands = [BfsgCheckCommand::class, AnalyzeUrlCommand::class, BfsgHistoryCommand::class];
 
@@ -73,6 +78,9 @@ class BfsgServiceProvider extends ServiceProvider
 
         // Load views
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'bfsg');
+
+        // Load translations
+        $this->loadTranslationsFrom(__DIR__.'/../lang', 'bfsg');
 
         // Register Blade components
         $this->loadViewComponentsAs('bfsg', [
