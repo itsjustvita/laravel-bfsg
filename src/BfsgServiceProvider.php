@@ -16,6 +16,7 @@ use ItsJustVita\LaravelBfsg\Mcp\Tools\GetHistory;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\GetReport;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\ListAnalyzers;
 use Laravel\Boost\BoostServiceProvider;
+use Laravel\Mcp\Server;
 
 class BfsgServiceProvider extends ServiceProvider
 {
@@ -58,12 +59,13 @@ class BfsgServiceProvider extends ServiceProvider
             ], 'bfsg-migrations');
 
             // Register commands
-            $this->commands([
-                BfsgCheckCommand::class,
-                AnalyzeUrlCommand::class,
-                BfsgHistoryCommand::class,
-                McpServerCommand::class,
-            ]);
+            $commands = [BfsgCheckCommand::class, AnalyzeUrlCommand::class, BfsgHistoryCommand::class];
+
+            if (class_exists(Server::class)) {
+                $commands[] = McpServerCommand::class;
+            }
+
+            $this->commands($commands);
         }
 
         // Load migrations
@@ -78,7 +80,7 @@ class BfsgServiceProvider extends ServiceProvider
         ]);
 
         // Auto-register MCP tools with Laravel Boost if available
-        if (class_exists(BoostServiceProvider::class)) {
+        if (class_exists(BoostServiceProvider::class) && class_exists(Server::class)) {
             $this->app->booted(function () {
                 $tools = config('boost.mcp.tools.include', []);
                 $bfsgTools = [

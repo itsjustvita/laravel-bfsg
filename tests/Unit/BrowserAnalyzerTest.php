@@ -36,7 +36,7 @@ class BrowserAnalyzerTest extends TestCase
 
     public function test_can_set_custom_analyzers()
     {
-        $customAnalyzer = $this->createMock(HeadingAnalyzer::class);
+        $customAnalyzer = $this->createStub(HeadingAnalyzer::class);
 
         $result = $this->analyzer->setAnalyzers([$customAnalyzer]);
 
@@ -45,7 +45,7 @@ class BrowserAnalyzerTest extends TestCase
 
     public function test_can_add_analyzer()
     {
-        $customAnalyzer = $this->createMock(HeadingAnalyzer::class);
+        $customAnalyzer = $this->createStub(HeadingAnalyzer::class);
 
         $result = $this->analyzer->addAnalyzer($customAnalyzer);
 
@@ -73,9 +73,7 @@ class BrowserAnalyzerTest extends TestCase
 
     public function test_generates_summary_correctly()
     {
-        $mockAnalyzer = $this->getMockBuilder(BrowserAnalyzer::class)
-            ->onlyMethods(['analyzeUrl'])
-            ->getMock();
+        $mockAnalyzer = $this->createStub(BrowserAnalyzer::class);
 
         $mockResults = [
             'success' => true,
