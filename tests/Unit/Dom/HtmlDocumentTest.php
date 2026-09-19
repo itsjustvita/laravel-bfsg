@@ -61,12 +61,12 @@ class HtmlDocumentTest extends TestCase
 
     public function test_query_returns_elements_only_and_swallows_invalid_xpath(): void
     {
-        $doc = HtmlDocument::fromHtml('<html><body><p id="a">t</p><p>u</p></body></html>');
+        $doc = HtmlDocument::fromHtml('<html><body><div><p id="a">t</p></div><p>u</p></body></html>');
 
         $this->assertCount(2, $doc->query('//p'));
         $this->assertSame([], $doc->query('//p[@id=\'unterminated'));
         $this->assertSame([], $doc->query('//p/text()'), 'text nodes are filtered out');
-        $this->assertCount(1, $doc->query('.//p', $doc->body()));
+        $this->assertCount(1, $doc->query('.//p', $doc->query('//div')[0]), 'context node scopes the query');
     }
 
     public function test_id_index_and_duplicates(): void
