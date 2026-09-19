@@ -1,6 +1,6 @@
 <?php
 
-namespace ItsJustVita\LaravelBfsg\Services;
+namespace ItsJustVita\LaravelBfsg\Css;
 
 use DOMDocument;
 use DOMElement;

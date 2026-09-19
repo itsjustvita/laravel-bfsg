@@ -1,8 +1,8 @@
 <?php
 
-namespace ItsJustVita\LaravelBfsg\Tests\Unit;
+namespace ItsJustVita\LaravelBfsg\Tests\Unit\Css;
 
-use ItsJustVita\LaravelBfsg\Services\CssParser;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class CssParserTest extends TestCase

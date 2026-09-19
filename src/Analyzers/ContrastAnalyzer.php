@@ -4,7 +4,7 @@ namespace ItsJustVita\LaravelBfsg\Analyzers;
 
 use DOMDocument;
 use DOMXPath;
-use ItsJustVita\LaravelBfsg\Services\CssParser;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 
 class ContrastAnalyzer
 {
