@@ -2,93 +2,90 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
 
-class ContrastAnalyzerTest extends TestCase
+class ContrastAnalyzerTest extends AnalyzerTestCase
 {
-    protected ContrastAnalyzer $analyzer;
-
-    protected function setUp(): void
+    protected function analyzer(): Analyzer
     {
-        parent::setUp();
-        $this->analyzer = new ContrastAnalyzer;
+        return new ContrastAnalyzer;
     }
 
-    public function test_detects_low_contrast_text()
+    public function test_detects_low_contrast_text(): void
     {
         $html = '
             <p style="color: #999; background-color: #fff;">Low contrast text</p>
             <p style="color: #aaa; background-color: #fff;">Very low contrast</p>
         ';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
 
-        $results = $this->analyzer->analyze($dom);
+        $violations = $this->analyze($html);
 
-        $this->assertNotEmpty($results['issues']);
-
-        $contrastIssues = collect($results['issues'])->filter(
-            fn ($i) => str_contains($i['message'], 'Insufficient contrast ratio')
-        );
-        $this->assertNotEmpty($contrastIssues, 'Should detect low contrast from inline styles');
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p', severity: Severity::Error);
+        $this->assertSame('1.4.3', $violation->rule);
+        $this->assertViolationCount($violations, 'contrast.insufficient', 2);
     }
 
-    public function test_detects_light_gray_text()
+    public function test_detects_light_gray_text(): void
     {
         $html = '<p style="color: #ccc;">Light gray text</p>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
 
-        $results = $this->analyzer->analyze($dom);
+        $violations = $this->analyze($html);
 
-        $this->assertNotEmpty($results['issues']);
-        $this->assertStringContainsString('Light gray text', $results['issues'][0]['message']);
+        $this->assertViolationCount($violations, 'contrast.light_gray_inline', 1);
+        $this->assertHasViolation($violations, 'contrast.light_gray_inline', element: 'p', severity: Severity::Warning);
     }
 
-    public function test_bare_placeholder_and_disabled_elements_are_not_flagged()
+    public function test_bare_placeholder_and_disabled_elements_are_not_flagged(): void
     {
         // Regression guard for v2.2.2: the placeholder/disabled heuristics were
         // removed because they flagged every form without checking any colour.
         $html = '<form><input type="text" placeholder="Enter text here"><button disabled>Send</button></form>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
 
-        $results = $this->analyzer->analyze($dom);
-
-        $this->assertSame([], $results['issues']);
+        $this->assertSame([], $this->analyze($html));
     }
 
-    public function test_high_contrast_passes()
+    public function test_high_contrast_passes(): void
     {
         $html = '
             <p style="color: #000; background-color: #fff;">High contrast black on white</p>
             <p style="color: #fff; background-color: #000;">High contrast white on black</p>
         ';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
 
-        $results = $this->analyzer->analyze($dom);
-
-        // Should not flag high contrast text
-        $issueCount = count($results['issues']);
-        $this->assertEquals(0, $issueCount);
+        $this->assertSame([], $this->analyze($html));
     }
 
-    public function test_calculates_contrast_ratio_correctly()
+    public function test_calculates_contrast_ratio_correctly(): void
     {
         $html = '<p style="color: #767676; background-color: #ffffff;">4.54:1 contrast ratio</p>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
 
-        $results = $this->analyzer->analyze($dom);
+        // 4.54:1 passes WCAG AA for normal text.
+        $this->assertNoViolation($this->analyze($html), 'contrast.insufficient');
+    }
 
-        // This should pass WCAG AA (4.5:1 minimum) - filter to only contrast ratio issues
-        $contrastIssues = collect($results['issues'])->filter(
-            fn ($i) => str_contains($i['rule'] ?? '', '1.4.3') && str_contains($i['message'] ?? '', 'Insufficient')
-        );
-        $this->assertEmpty($contrastIssues);
+    public function test_ratio_and_required_params_are_reported(): void
+    {
+        $html = '<p style="color: #ccc; background-color: #ffffff;">Light gray on white</p>';
+
+        $violations = $this->analyze($html);
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p', severity: Severity::Error);
+        $this->assertSame('1.61', $violation->params['ratio']);
+        $this->assertSame(4.5, $violation->params['required']);
+        $this->assertSame('Light gray on white', $violation->params['content']);
+        $this->assertSame(1.61, $violation->meta['ratio']);
+    }
+
+    public function test_large_text_uses_the_lower_requirement(): void
+    {
+        $html = '<h1 style="color: #949494; background-color: #ffffff;">Heading</h1>';
+
+        $violations = $this->analyze($html);
+
+        // #949494 on white is ~3.1:1 — enough for large text, not for body text.
+        $this->assertNoViolation($violations, 'contrast.insufficient');
     }
 
     public function test_detects_low_contrast_from_css_classes(): void
@@ -96,13 +93,7 @@ class ContrastAnalyzerTest extends TestCase
         $html = '<html><head><style>.muted { color: #999999; background-color: #aaaaaa; }</style></head>'
             .'<body><p class="muted" id="target">Hard to read text</p></body></html>';
 
-        $result = $this->analyzeHtml($html);
-
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'contrast') || str_contains($i['message'], 'Insufficient')
-            ),
-            'Should detect low contrast from CSS classes'
-        );
+        $this->assertHasViolation($this->analyze($html), 'contrast.insufficient', element: 'p#target.muted');
     }
 
     public function test_css_with_good_contrast_no_violation(): void
@@ -110,12 +101,7 @@ class ContrastAnalyzerTest extends TestCase
         $html = '<html><head><style>p { color: #000000; background-color: #ffffff; }</style></head>'
             .'<body><p>Perfectly readable text</p></body></html>';
 
-        $result = $this->analyzeHtml($html);
-
-        $contrastIssues = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['rule'] ?? '', '1.4.3') && str_contains($i['message'] ?? '', 'Insufficient')
-        );
-        $this->assertEmpty($contrastIssues, 'Good contrast should not produce WCAG 1.4.3 violations');
+        $this->assertNoViolation($this->analyze($html), 'contrast.insufficient');
     }
 
     public function test_inherited_color_marked_approximate(): void
@@ -123,40 +109,23 @@ class ContrastAnalyzerTest extends TestCase
         $html = '<html><head><style>.container { color: #cccccc; background-color: #dddddd; }</style></head>'
             .'<body><div class="container"><p id="target">Inherited poor contrast</p></div></body></html>';
 
-        $result = $this->analyzeHtml($html);
+        $violations = $this->analyze($html);
 
-        $approxIssues = collect($result['issues'])->filter(
-            fn ($i) => isset($i['approximate']) && $i['approximate'] === true
-        );
-        // Should have approximate flag since colors are inherited
-        $contrastIssues = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['message'] ?? '', 'approximate') || (isset($i['approximate']) && $i['approximate'])
-        );
-        $this->assertNotEmpty($contrastIssues, 'Inherited colors should be marked as approximate');
+        $this->assertTrue($this->assertHasViolation($violations, 'contrast.insufficient')->meta['approximate']);
     }
 
     public function test_light_gray_text_xpath_only_matches_elements_with_style(): void
     {
         // v2.2.0 Fix 7: Previous XPath missed parens and matched arbitrarily because of
         // precedence of `or` over `and`. With the fix, only elements whose @style actually
-        // contains #999/#aaa/#bbb/#ccc should be counted.
+        // contains #999/#aaa/#bbb/#ccc should be flagged — one per matched element.
         $html = '<html><body>
             <p style="color: #999;">gray text</p>
             <p>plain paragraph with no style</p>
             <div>another plain div</div>
         </body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
 
-        $results = $this->analyzer->analyze($dom);
-
-        $lightGray = collect($results['issues'])->first(
-            fn ($i) => str_contains($i['message'], 'Light gray text')
-        );
-
-        $this->assertNotNull($lightGray);
-        // The pattern matches 1 styled element — NOT the entire document tree.
-        $this->assertSame(1, $lightGray['count']);
+        $this->assertViolationCount($this->analyze($html), 'contrast.light_gray_inline', 1);
     }
 
     public function test_inline_overrides_css_for_contrast(): void
@@ -165,20 +134,15 @@ class ContrastAnalyzerTest extends TestCase
         $html = '<html><head><style>p { color: #000000; background-color: #ffffff; }</style></head>'
             .'<body><p style="color: #cccccc;">Overridden to low contrast</p></body></html>';
 
-        $result = $this->analyzeHtml($html);
-
-        // The inline color (#cccccc on white) has a ratio of about 1.6:1 - should be flagged
-        $contrastIssues = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['rule'] ?? '', '1.4.3') && str_contains($i['message'] ?? '', 'Insufficient')
-        );
-        $this->assertNotEmpty($contrastIssues, 'Inline override should be detected for contrast');
+        // The inline color (#cccccc on white) has a ratio of about 1.6:1 — should be flagged.
+        $this->assertHasViolation($this->analyze($html), 'contrast.insufficient', severity: Severity::Error);
     }
 
-    protected function analyzeHtml(string $html): array
+    public function test_calculate_contrast_ratio_helper_delegates_to_color(): void
     {
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $analyzer = new ContrastAnalyzer;
 
-        return $this->analyzer->analyze($dom);
+        $this->assertSame(21.0, $analyzer->calculateContrastRatio('#000000', '#ffffff'));
+        $this->assertNull($analyzer->calculateContrastRatio('not-a-color', '#ffffff'));
     }
 }

@@ -2,15 +2,18 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
-use DOMXPath;
+use ItsJustVita\LaravelBfsg\Css\Color;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class ContrastAnalyzer
+class ContrastAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    protected string $key = 'contrast';
 
-    protected CssParser $cssParser;
+    protected string $description = 'Colour contrast of text';
+
+    protected array $rules = ['1.4.3'];
 
     // WCAG AA and AAA contrast requirements
     protected const CONTRAST_REQUIREMENTS = [
@@ -34,28 +37,21 @@ class ContrastAnalyzer
     /** Soft wall-clock budget (seconds). Stop analyzing once exceeded. */
     protected const TIME_BUDGET_SECONDS = 5.0;
 
-    public function analyze(DOMDocument $dom): array
+    public function __construct(private ?CssParser $cssParser = null) {}
+
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
+        $this->cssParser ??= new CssParser;
+        $this->cssParser->parse($this->document->dom());
 
-        $this->cssParser = new CssParser;
-        $this->cssParser->parse($dom);
-
-        $this->checkCssColors($xpath, $dom);
-        $this->checkProblematicPatterns($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkCssColors($this->cssParser);
+        $this->checkProblematicPatterns();
     }
 
-    protected function checkCssColors(DOMXPath $xpath, DOMDocument $dom): void
+    protected function checkCssColors(CssParser $cssParser): void
     {
         // Query text-containing elements
-        $textElements = $xpath->query('//p | //span | //a | //h1 | //h2 | //h3 | //h4 | //h5 | //h6 | //li | //td | //th | //label | //button | //dt | //dd | //figcaption | //blockquote | //cite');
-
-        if ($textElements === false) {
-            return;
-        }
+        $textElements = $this->query('//p | //span | //a | //h1 | //h2 | //h3 | //h4 | //h5 | //h6 | //li | //td | //th | //label | //button | //dt | //dd | //figcaption | //blockquote | //cite');
 
         $budgetDeadline = microtime(true) + self::TIME_BUDGET_SECONDS;
         $processed = 0;
@@ -68,87 +64,66 @@ class ContrastAnalyzer
                 break;
             }
             $processed++;
-            if (! $element instanceof \DOMElement) {
-                continue;
-            }
 
             // Skip elements without text content
-            $text = trim($element->textContent);
+            $text = $this->text($element);
             if ($text === '') {
                 continue;
             }
 
-            $colors = $this->cssParser->getResolvedColors($element);
+            $colors = $cssParser->getResolvedColors($element);
 
-            $fgRgb = $this->colorToRgb($colors['color']);
-            $bgRgb = $this->colorToRgb($colors['backgroundColor']);
+            $foreground = Color::parse($colors['color']);
+            $background = Color::parse($colors['backgroundColor']);
 
-            if ($fgRgb === null || $bgRgb === null) {
+            if ($foreground === null || $background === null) {
                 continue;
             }
 
-            $ratio = $this->calculateContrastRatio($colors['color'], $colors['backgroundColor']);
+            $ratio = $foreground->contrastWith($background);
 
-            if ($ratio === null) {
+            // Large text has a lower requirement
+            $required = in_array(strtolower($element->tagName), ['h1', 'h2', 'h3', 'h4'], true)
+                ? self::WCAG_AA_LARGE
+                : self::WCAG_AA_NORMAL;
+
+            if ($ratio >= $required) {
                 continue;
             }
 
-            $requiredRatio = self::WCAG_AA_NORMAL;
-
-            // Check if large text (lower requirement)
-            $tagName = strtolower($element->tagName);
-            if (in_array($tagName, ['h1', 'h2', 'h3', 'h4'])) {
-                $requiredRatio = self::WCAG_AA_LARGE;
-            }
-
-            if ($ratio < $requiredRatio) {
-                $issue = [
-                    'type' => 'error',
-                    'severity' => 'error',
-                    'rule' => 'WCAG 1.4.3',
-                    'message' => sprintf(
-                        'Insufficient contrast ratio %.2f:1 (required %.1f:1) for text "%s" with color %s on background %s',
-                        $ratio,
-                        $requiredRatio,
-                        mb_substr($text, 0, 30),
-                        $colors['color'],
-                        $colors['backgroundColor']
-                    ),
-                    'element' => $tagName,
-                    'suggestion' => 'Increase the contrast between text color and background color to meet WCAG AA requirements.',
-                ];
-
-                if ($colors['approximate']) {
-                    $issue['approximate'] = true;
-                    $issue['message'] .= ' (approximate - colors may be inherited or defaulted)';
-                }
-
-                $this->violations[] = $issue;
-            }
+            $this->report(
+                'insufficient',
+                Severity::Error,
+                '1.4.3',
+                $element,
+                [
+                    'ratio' => number_format($ratio, 2),
+                    'required' => $required,
+                    'foreground' => $colors['color'],
+                    'background' => $colors['backgroundColor'],
+                    'content' => Text::truncate($text, 30),
+                ],
+                [
+                    'approximate' => (bool) $colors['approximate'],
+                    'ratio' => $ratio,
+                ],
+            );
         }
     }
 
-    protected function checkProblematicPatterns(DOMXPath $xpath): void
+    protected function checkProblematicPatterns(): void
     {
         // Only flag patterns that actually indicate a contrast problem:
         // hard-coded light gray tones in inline styles.
         // The former placeholder/disabled heuristics were pure noise: every
         // form with a placeholder attribute was flagged without the CSS colour
         // ever being checked, which penalised modern sites unfairly.
-        $inlineGrayElements = $xpath->query(
+        $inlineGrayElements = $this->query(
             '//*[@style and (contains(@style, "#999") or contains(@style, "#aaa") or contains(@style, "#bbb") or contains(@style, "#ccc"))]'
         );
 
-        if ($inlineGrayElements->length > 0) {
-            $this->violations[] = [
-                'type' => 'warning',
-                'rule' => 'WCAG 1.4.3',
-                'element' => 'various',
-                'message' => 'Light gray text may have insufficient contrast',
-                'count' => $inlineGrayElements->length,
-                'suggestion' => 'Ensure a contrast ratio of at least 4.5:1 for body text',
-                'auto_fixable' => false,
-            ];
+        foreach ($inlineGrayElements as $element) {
+            $this->report('light_gray_inline', Severity::Warning, '1.4.3', $element);
         }
     }
 
@@ -163,85 +138,16 @@ class ContrastAnalyzer
         return null;
     }
 
+    /** Kept for Mcp\Tools\CheckContrast; delegates to Css\Color. */
     public function calculateContrastRatio(string $color1, string $color2): ?float
     {
-        $rgb1 = $this->colorToRgb($color1);
-        $rgb2 = $this->colorToRgb($color2);
+        $first = Color::parse($color1);
+        $second = Color::parse($color2);
 
-        if (! $rgb1 || ! $rgb2) {
+        if ($first === null || $second === null) {
             return null;
         }
 
-        // Calculate relative luminance
-        $l1 = $this->getRelativeLuminance($rgb1);
-        $l2 = $this->getRelativeLuminance($rgb2);
-
-        // Calculate contrast ratio
-        $lighter = max($l1, $l2);
-        $darker = min($l1, $l2);
-
-        return ($lighter + 0.05) / ($darker + 0.05);
-    }
-
-    protected function colorToRgb(string $color): ?array
-    {
-        // Handle hex colors
-        if (preg_match('/^#?([a-f0-9]{6}|[a-f0-9]{3})$/i', $color, $matches)) {
-            $hex = $matches[1];
-
-            if (strlen($hex) === 3) {
-                $hex = $hex[0].$hex[0].$hex[1].$hex[1].$hex[2].$hex[2];
-            }
-
-            return [
-                'r' => hexdec(substr($hex, 0, 2)),
-                'g' => hexdec(substr($hex, 2, 2)),
-                'b' => hexdec(substr($hex, 4, 2)),
-            ];
-        }
-
-        // Handle rgb() colors
-        if (preg_match('/rgb\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i', $color, $matches)) {
-            return [
-                'r' => (int) $matches[1],
-                'g' => (int) $matches[2],
-                'b' => (int) $matches[3],
-            ];
-        }
-
-        // Handle named colors (simplified - only common ones)
-        $namedColors = [
-            'white' => [255, 255, 255],
-            'black' => [0, 0, 0],
-            'red' => [255, 0, 0],
-            'green' => [0, 128, 0],
-            'blue' => [0, 0, 255],
-            'gray' => [128, 128, 128],
-            'grey' => [128, 128, 128],
-        ];
-
-        $colorLower = strtolower($color);
-        if (isset($namedColors[$colorLower])) {
-            return [
-                'r' => $namedColors[$colorLower][0],
-                'g' => $namedColors[$colorLower][1],
-                'b' => $namedColors[$colorLower][2],
-            ];
-        }
-
-        return null;
-    }
-
-    protected function getRelativeLuminance(array $rgb): float
-    {
-        $rsRGB = $rgb['r'] / 255;
-        $gsRGB = $rgb['g'] / 255;
-        $bsRGB = $rgb['b'] / 255;
-
-        $r = $rsRGB <= 0.03928 ? $rsRGB / 12.92 : pow(($rsRGB + 0.055) / 1.055, 2.4);
-        $g = $gsRGB <= 0.03928 ? $gsRGB / 12.92 : pow(($gsRGB + 0.055) / 1.055, 2.4);
-        $b = $bsRGB <= 0.03928 ? $bsRGB / 12.92 : pow(($bsRGB + 0.055) / 1.055, 2.4);
-
-        return 0.2126 * $r + 0.7152 * $g + 0.0722 * $b;
+        return $first->contrastWith($second);
     }
 }
