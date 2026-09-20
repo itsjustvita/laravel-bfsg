@@ -59,4 +59,34 @@ return [
             'suggestion' => 'Ensure a contrast ratio of at least 4.5:1 for body text',
         ],
     ],
+    'aria' => [
+        'invalid_role' => [
+            'message' => 'Invalid ARIA role ":role"',
+            'suggestion' => 'Use a role defined in WAI-ARIA 1.2 or remove the attribute',
+        ],
+        'redundant_role' => [
+            'message' => 'Redundant ARIA role ":role" on <:tag>',
+            'suggestion' => 'Remove the role attribute; the element already has this role implicitly',
+        ],
+        'missing_required_state' => [
+            'message' => 'Role ":role" requires the :attribute attribute',
+            'suggestion' => 'Add :attribute and keep it in sync with the widget state',
+        ],
+        'hidden_focusable' => [
+            'message' => 'Focusable <:tag> is hidden from assistive technology with aria-hidden="true"',
+            'suggestion' => 'Remove aria-hidden, or also remove the element from the tab order (tabindex="-1")',
+        ],
+        'label_conflict' => [
+            'message' => 'Element has both aria-label and aria-labelledby',
+            'suggestion' => 'Keep one of the two; aria-labelledby takes precedence',
+        ],
+        'dangling_idref' => [
+            'message' => ':attribute references a non-existent id ":id"',
+            'suggestion' => 'Point :attribute to an existing element id',
+        ],
+        'unsupported_state' => [
+            'message' => 'ARIA state :attribute on <:tag> without a role that supports it',
+            'suggestion' => 'Add a suitable role or remove the state attribute',
+        ],
+    ],
 ];

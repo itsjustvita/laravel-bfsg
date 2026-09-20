@@ -2,13 +2,17 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
 use DOMElement;
-use DOMXPath;
+use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class AriaAnalyzer
+class AriaAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    protected string $key = 'aria';
+
+    protected string $description = 'ARIA roles, states and references';
+
+    protected array $rules = ['4.1.2', '1.3.1'];
 
     // Valid ARIA roles
     protected const VALID_ROLES = [
@@ -25,71 +29,49 @@ class AriaAnalyzer
         'textbox', 'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem',
     ];
 
-    // ARIA attributes that need validation
-    protected const ARIA_ATTRIBUTES = [
-        'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-required',
-        'aria-invalid', 'aria-hidden', 'aria-expanded', 'aria-checked',
-        'aria-selected', 'aria-disabled', 'aria-readonly', 'aria-live',
-        'aria-atomic', 'aria-relevant', 'aria-busy', 'aria-current',
-    ];
-
-    public function analyze(DOMDocument $dom): array
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
-
         // Check for invalid ARIA roles
-        $this->checkAriaRoles($xpath);
+        $this->checkAriaRoles();
 
         // Check for missing required ARIA attributes
-        $this->checkRequiredAriaAttributes($xpath);
+        $this->checkRequiredAriaAttributes();
 
         // Check for conflicting ARIA attributes
-        $this->checkConflictingAriaAttributes($xpath);
+        $this->checkConflictingAriaAttributes();
 
         // Check for proper ARIA labeling
-        $this->checkAriaLabeling($xpath);
+        $this->checkAriaLabeling();
 
         // Check for ARIA on non-interactive elements
-        $this->checkAriaOnNonInteractiveElements($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkAriaOnNonInteractiveElements();
     }
 
-    protected function checkAriaRoles(DOMXPath $xpath): void
+    protected function checkAriaRoles(): void
     {
-        $elementsWithRoles = $xpath->query('//*[@role]');
-
-        foreach ($elementsWithRoles as $element) {
+        foreach ($this->query('//*[@role]') as $element) {
             $role = $element->getAttribute('role');
 
             // Check for invalid role values
-            if (! in_array($role, self::VALID_ROLES)) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 4.1.2',
-                    'element' => $element->nodeName,
-                    'message' => "Invalid ARIA role: '{$role}'",
-                    'suggestion' => 'Use a valid ARIA role from the WAI-ARIA specification',
-                    'auto_fixable' => false,
-                ];
+            if (! in_array($role, self::VALID_ROLES, true)) {
+                $this->report('invalid_role', Severity::Error, '4.1.2', $element, ['role' => $role]);
             }
 
             // Check for redundant roles
             if ($this->isRedundantRole($element, $role)) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 4.1.2',
-                    'element' => $element->nodeName,
-                    'message' => "Redundant ARIA role '{$role}' on {$element->nodeName}",
-                    'suggestion' => 'Remove redundant role attribute',
-                    'auto_fixable' => true,
-                ];
+                $this->report(
+                    'redundant_role',
+                    Severity::Warning,
+                    '4.1.2',
+                    $element,
+                    ['role' => $role, 'tag' => Element::tag($element)],
+                    autoFixable: true,
+                );
             }
         }
     }
 
-    protected function checkRequiredAriaAttributes(DOMXPath $xpath): void
+    protected function checkRequiredAriaAttributes(): void
     {
         // Elements with specific roles that require certain ARIA attributes
         $roleRequirements = [
@@ -100,134 +82,92 @@ class AriaAnalyzer
         ];
 
         foreach ($roleRequirements as $role => $requiredAttrs) {
-            $elements = $xpath->query("//*[@role='{$role}']");
-
-            foreach ($elements as $element) {
+            foreach ($this->query('//*[@role='.$this->document->xpathLiteral($role).']') as $element) {
                 foreach ($requiredAttrs as $attr) {
-                    if (! $element->hasAttribute($attr)) {
-                        $this->violations[] = [
-                            'type' => 'error',
-                            'rule' => 'WCAG 4.1.2',
-                            'element' => $element->nodeName,
-                            'message' => "Role '{$role}' requires {$attr} attribute",
-                            'suggestion' => "Add {$attr} attribute to element with role='{$role}'",
-                            'auto_fixable' => false,
-                        ];
+                    if ($element->hasAttribute($attr)) {
+                        continue;
                     }
+
+                    $this->report(
+                        'missing_required_state',
+                        Severity::Error,
+                        '4.1.2',
+                        $element,
+                        ['role' => $role, 'attribute' => $attr],
+                    );
                 }
             }
         }
     }
 
-    protected function checkConflictingAriaAttributes(DOMXPath $xpath): void
+    protected function checkConflictingAriaAttributes(): void
     {
         // Check for aria-hidden on focusable elements
-        $focusableWithHidden = $xpath->query('//a[@aria-hidden="true"]|//button[@aria-hidden="true"]|//input[@aria-hidden="true"]|//select[@aria-hidden="true"]|//textarea[@aria-hidden="true"]');
+        $focusableWithHidden = $this->query('//a[@aria-hidden="true"]|//button[@aria-hidden="true"]|//input[@aria-hidden="true"]|//select[@aria-hidden="true"]|//textarea[@aria-hidden="true"]');
 
         foreach ($focusableWithHidden as $element) {
-            $this->violations[] = [
-                'type' => 'error',
-                'rule' => 'WCAG 4.1.2',
-                'element' => $element->nodeName,
-                'message' => 'Focusable element with aria-hidden="true"',
-                'suggestion' => 'Remove aria-hidden or make element non-focusable',
-                'auto_fixable' => false,
-            ];
+            $this->report('hidden_focusable', Severity::Error, '4.1.2', $element, ['tag' => Element::tag($element)]);
         }
 
         // Check for both aria-label and aria-labelledby
-        $elementsWithBothLabels = $xpath->query('//*[@aria-label and @aria-labelledby]');
-
-        foreach ($elementsWithBothLabels as $element) {
-            $this->violations[] = [
-                'type' => 'warning',
-                'rule' => 'WCAG 4.1.2',
-                'element' => $element->nodeName,
-                'message' => 'Element has both aria-label and aria-labelledby',
-                'suggestion' => 'Use either aria-label or aria-labelledby, not both',
-                'auto_fixable' => false,
-            ];
+        foreach ($this->query('//*[@aria-label and @aria-labelledby]') as $element) {
+            $this->report('label_conflict', Severity::Warning, '4.1.2', $element);
         }
     }
 
-    protected function checkAriaLabeling(DOMXPath $xpath): void
+    protected function checkAriaLabeling(): void
     {
-        // Check aria-labelledby references
-        $elementsWithLabelledby = $xpath->query('//*[@aria-labelledby]');
+        $this->checkIdReferences('aria-labelledby');
+        $this->checkIdReferences('aria-describedby');
+    }
 
-        foreach ($elementsWithLabelledby as $element) {
-            $ids = explode(' ', $element->getAttribute('aria-labelledby'));
+    /** Report every IDREF of $attribute that points at an id the document does not have. */
+    protected function checkIdReferences(string $attribute): void
+    {
+        $elementsById = $this->document->elementsById();
 
-            foreach ($ids as $id) {
-                $id = trim($id);
-                if (! empty($id)) {
-                    $referencedElement = $xpath->query("//*[@id='{$id}']");
-
-                    if ($referencedElement->length === 0) {
-                        $this->violations[] = [
-                            'type' => 'error',
-                            'rule' => 'WCAG 1.3.1, 4.1.2',
-                            'element' => $element->nodeName,
-                            'message' => "aria-labelledby references non-existent ID: '{$id}'",
-                            'suggestion' => 'Ensure the referenced ID exists in the document',
-                            'auto_fixable' => false,
-                        ];
-                    }
-                }
-            }
-        }
-
-        // Check aria-describedby references
-        $elementsWithDescribedby = $xpath->query('//*[@aria-describedby]');
-
-        foreach ($elementsWithDescribedby as $element) {
-            $ids = explode(' ', $element->getAttribute('aria-describedby'));
+        foreach ($this->query("//*[@{$attribute}]") as $element) {
+            $ids = preg_split('/\s+/', $element->getAttribute($attribute), -1, PREG_SPLIT_NO_EMPTY) ?: [];
 
             foreach ($ids as $id) {
-                $id = trim($id);
-                if (! empty($id)) {
-                    $referencedElement = $xpath->query("//*[@id='{$id}']");
-
-                    if ($referencedElement->length === 0) {
-                        $this->violations[] = [
-                            'type' => 'error',
-                            'rule' => 'WCAG 1.3.1, 4.1.2',
-                            'element' => $element->nodeName,
-                            'message' => "aria-describedby references non-existent ID: '{$id}'",
-                            'suggestion' => 'Ensure the referenced ID exists in the document',
-                            'auto_fixable' => false,
-                        ];
-                    }
+                if (isset($elementsById[$id])) {
+                    continue;
                 }
+
+                $this->report(
+                    'dangling_idref',
+                    Severity::Error,
+                    '1.3.1',
+                    $element,
+                    ['attribute' => $attribute, 'id' => $id],
+                    related: ['4.1.2'],
+                );
             }
         }
     }
 
-    protected function checkAriaOnNonInteractiveElements(DOMXPath $xpath): void
+    protected function checkAriaOnNonInteractiveElements(): void
     {
         // Check for interactive ARIA attributes on non-interactive elements
         $nonInteractiveElements = ['div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
         $interactiveAttributes = ['aria-pressed', 'aria-checked', 'aria-selected'];
+        $interactiveRoles = ['button', 'checkbox', 'link', 'menuitem', 'option', 'radio', 'switch', 'tab'];
 
         foreach ($nonInteractiveElements as $tagName) {
             foreach ($interactiveAttributes as $attr) {
-                $elements = $xpath->query("//{$tagName}[@{$attr}]");
-
-                foreach ($elements as $element) {
-                    // Check if element has an interactive role
-                    $role = $element->getAttribute('role');
-                    $interactiveRoles = ['button', 'checkbox', 'link', 'menuitem', 'option', 'radio', 'switch', 'tab'];
-
-                    if (! in_array($role, $interactiveRoles)) {
-                        $this->violations[] = [
-                            'type' => 'warning',
-                            'rule' => 'WCAG 4.1.2',
-                            'element' => $element->nodeName,
-                            'message' => "Interactive ARIA attribute '{$attr}' on non-interactive element",
-                            'suggestion' => 'Add an appropriate interactive role or remove the attribute',
-                            'auto_fixable' => false,
-                        ];
+                foreach ($this->query("//{$tagName}[@{$attr}]") as $element) {
+                    // Skip elements that carry an interactive role
+                    if (in_array($element->getAttribute('role'), $interactiveRoles, true)) {
+                        continue;
                     }
+
+                    $this->report(
+                        'unsupported_state',
+                        Severity::Warning,
+                        '4.1.2',
+                        $element,
+                        ['attribute' => $attr, 'tag' => $tagName],
+                    );
                 }
             }
         }
@@ -254,7 +194,7 @@ class AriaAnalyzer
             'section' => 'region',
         ];
 
-        $tagName = strtolower($element->nodeName);
+        $tagName = Element::tag($element);
 
         if (isset($implicitRoles[$tagName])) {
             if (is_array($implicitRoles[$tagName])) {

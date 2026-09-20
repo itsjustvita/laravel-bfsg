@@ -59,4 +59,34 @@ return [
             'suggestion' => 'Kontrastverhältnis von mindestens 4.5:1 für Fließtext sicherstellen',
         ],
     ],
+    'aria' => [
+        'invalid_role' => [
+            'message' => 'Ungültige ARIA-Rolle „:role“',
+            'suggestion' => 'Eine in WAI-ARIA 1.2 definierte Rolle verwenden oder das Attribut entfernen',
+        ],
+        'redundant_role' => [
+            'message' => 'Redundante ARIA-Rolle „:role“ auf <:tag>',
+            'suggestion' => 'role-Attribut entfernen; das Element hat diese Rolle bereits implizit',
+        ],
+        'missing_required_state' => [
+            'message' => 'Rolle „:role“ erfordert das Attribut :attribute',
+            'suggestion' => ':attribute ergänzen und mit dem Zustand des Widgets synchron halten',
+        ],
+        'hidden_focusable' => [
+            'message' => 'Fokussierbares <:tag> ist per aria-hidden="true" vor Hilfstechnologie verborgen',
+            'suggestion' => 'aria-hidden entfernen oder das Element zusätzlich aus der Tab-Reihenfolge nehmen (tabindex="-1")',
+        ],
+        'label_conflict' => [
+            'message' => 'Element hat sowohl aria-label als auch aria-labelledby',
+            'suggestion' => 'Eines der beiden Attribute behalten; aria-labelledby hat Vorrang',
+        ],
+        'dangling_idref' => [
+            'message' => ':attribute verweist auf eine nicht vorhandene id „:id“',
+            'suggestion' => ':attribute auf eine vorhandene Element-id zeigen lassen',
+        ],
+        'unsupported_state' => [
+            'message' => 'ARIA-Zustand :attribute auf <:tag> ohne unterstützende Rolle',
+            'suggestion' => 'Passende Rolle ergänzen oder das Zustandsattribut entfernen',
+        ],
+    ],
 ];
