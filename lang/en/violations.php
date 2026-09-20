@@ -27,4 +27,26 @@ return [
             'suggestion' => 'Add aria-required="true" or make the required state visible in the label',
         ],
     ],
+    'headings' => [
+        'skipped_level' => [
+            'message' => 'Heading level skipped: :to follows :from (":content")',
+            'suggestion' => 'Use heading levels in order without skipping (h1 → h2 → h3)',
+        ],
+        'missing_h1' => [
+            'message' => 'No h1 heading found on the page',
+            'suggestion' => 'Add exactly one h1 that names the main content of the page',
+        ],
+        'empty_heading' => [
+            'message' => 'Empty :level heading',
+            'suggestion' => 'Give the heading text, or remove it',
+        ],
+        'short_heading' => [
+            'message' => 'Very short heading text ":content"',
+            'suggestion' => 'Use a heading that describes the section it introduces',
+        ],
+        'multiple_h1' => [
+            'message' => 'Additional h1 heading #:index (":content")',
+            'suggestion' => 'Use one h1 per page and h2–h6 for sections',
+        ],
+    ],
 ];

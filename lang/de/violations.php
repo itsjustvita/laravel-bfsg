@@ -27,4 +27,26 @@ return [
             'suggestion' => 'aria-required="true" ergänzen oder den Pflichtstatus in der Beschriftung sichtbar machen',
         ],
     ],
+    'headings' => [
+        'skipped_level' => [
+            'message' => 'Überschriftenebene übersprungen: :to folgt auf :from („:content“)',
+            'suggestion' => 'Überschriftenebenen der Reihe nach verwenden (h1 → h2 → h3)',
+        ],
+        'missing_h1' => [
+            'message' => 'Keine h1-Überschrift auf der Seite',
+            'suggestion' => 'Genau eine h1 ergänzen, die den Hauptinhalt der Seite benennt',
+        ],
+        'empty_heading' => [
+            'message' => 'Leere :level-Überschrift',
+            'suggestion' => 'Überschrift mit Text füllen oder entfernen',
+        ],
+        'short_heading' => [
+            'message' => 'Sehr kurzer Überschriftentext „:content“',
+            'suggestion' => 'Überschrift verwenden, die den folgenden Abschnitt beschreibt',
+        ],
+        'multiple_h1' => [
+            'message' => 'Weitere h1-Überschrift Nr. :index („:content“)',
+            'suggestion' => 'Eine h1 pro Seite verwenden und h2–h6 für Abschnitte',
+        ],
+    ],
 ];

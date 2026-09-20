@@ -20,7 +20,7 @@ class TranslationCompletenessTest extends TestCase
                 continue; // not migrated yet
             }
 
-            preg_match_all("/->report\\(\\s*'([a-z_]+)'/", $source, $found);
+            preg_match_all("/->report\\(\\s*'([a-z0-9_]+)'/", $source, $found);
             $keys[$m[1]] = array_values(array_unique($found[1]));
         }
 
