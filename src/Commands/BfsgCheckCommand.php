@@ -63,7 +63,8 @@ class BfsgCheckCommand extends Command
             $html = $this->fetchHtml($url);
 
             // Analyze
-            $violations = Bfsg::analyze($html);
+            $result = Bfsg::analyze($html, ['url' => $url]);
+            $violations = $result->toArray()['violations'];
 
             // Handle output based on format
             $format = $this->option('format');
@@ -87,7 +88,7 @@ class BfsgCheckCommand extends Command
                 $this->saveResults($url, $violations);
             }
 
-            return empty($violations) ? Command::SUCCESS : Command::FAILURE;
+            return $result->count() === 0 ? Command::SUCCESS : Command::FAILURE;
 
         } catch (Exception $e) {
             $this->error('❌ Error: '.$e->getMessage());
@@ -304,14 +305,8 @@ class BfsgCheckCommand extends Command
                     if (isset($issue['element'])) {
                         $message .= " (Element: {$issue['element']})";
                     }
-                    if (isset($issue['src'])) {
-                        $message .= " (Source: {$issue['src']})";
-                    }
-                    if (isset($issue['href'])) {
-                        $message .= " (Link: {$issue['href']})";
-                    }
-                    if (isset($issue['content'])) {
-                        $message .= " (Content: {$issue['content']})";
+                    if (! empty($issue['snippet'])) {
+                        $message .= " ({$issue['snippet']})";
                     }
                 }
 
@@ -378,7 +373,7 @@ class BfsgCheckCommand extends Command
             foreach ($issues as $issue) {
                 $dbReport->violations()->create([
                     'analyzer' => $analyzer,
-                    'severity' => $issue['type'] ?? $issue['severity'] ?? 'notice',
+                    'severity' => $issue['severity'] ?? 'notice',
                     'message' => $issue['message'],
                     'element' => $issue['element'] ?? null,
                     'wcag_rule' => $issue['rule'] ?? null,

@@ -4,10 +4,13 @@ namespace ItsJustVita\LaravelBfsg\Reports;
 
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\View;
+use ItsJustVita\LaravelBfsg\AnalysisResult;
 
 class ReportGenerator
 {
     protected array $violations = [];
+
+    protected ?AnalysisResult $result = null;
 
     protected string $url = '';
 
@@ -17,11 +20,20 @@ class ReportGenerator
 
     /**
      * Create a new report generator
+     *
+     * @param  AnalysisResult|array<string, list<array>>  $violations
      */
-    public function __construct(string $url, array $violations)
+    public function __construct(string $url, AnalysisResult|array $violations)
     {
         $this->url = $url;
-        $this->violations = $violations;
+
+        if ($violations instanceof AnalysisResult) {
+            $this->result = $violations;
+            $this->violations = $violations->toArray()['violations'];
+        } else {
+            $this->violations = $violations;
+        }
+
         $this->calculateStats();
     }
 

@@ -37,17 +37,15 @@ class CheckAccessibility
 
         // The middleware must never break the page it inspects.
         try {
-            $violations = Bfsg::analyze($html);
+            $result = Bfsg::analyze($html, ['url' => $request->fullUrl()]);
 
-            if (! empty($violations)) {
+            if ($result->count() > 0) {
+                $violations = $result->toArray()['violations'];
                 $this->handleViolations($request, $violations);
 
                 // Add violations to response headers for debugging
                 if (config('app.debug')) {
-                    $response->headers->set(
-                        'X-BFSG-Violations',
-                        array_sum(array_map('count', $violations))
-                    );
+                    $response->headers->set('X-BFSG-Violations', (string) $result->count());
                 }
             }
         } catch (Throwable $e) {
@@ -149,7 +147,7 @@ class CheckAccessibility
 
         foreach ($violations as $issues) {
             foreach ($issues as $issue) {
-                match ($issue['type'] ?? $issue['severity'] ?? 'notice') {
+                match ($issue['severity'] ?? 'notice') {
                     'critical' => $critical++,
                     'error' => $errors++,
                     'warning' => $warnings++,
@@ -185,7 +183,7 @@ class CheckAccessibility
             foreach ($issues as $issue) {
                 $report->violations()->create([
                     'analyzer' => $analyzer,
-                    'severity' => $issue['type'] ?? $issue['severity'] ?? 'notice',
+                    'severity' => $issue['severity'] ?? 'notice',
                     'message' => $issue['message'],
                     'element' => $issue['element'] ?? null,
                     'wcag_rule' => $issue['rule'] ?? null,

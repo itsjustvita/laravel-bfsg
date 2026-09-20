@@ -4,19 +4,8 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
-use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\FormAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\ImageAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\LinkAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\MediaAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
-use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
+use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
-use ItsJustVita\LaravelBfsg\Services\HtmlLoader;
 
 class AnalyzeUrlCommand extends Command
 {
@@ -102,23 +91,7 @@ class AnalyzeUrlCommand extends Command
 
             $html = $response->body();
 
-            // Convert to DOMDocument
-            $dom = HtmlLoader::load($html);
-
-            // Run analyzers
-            $analyzers = [
-                'HeadingAnalyzer' => new HeadingAnalyzer,
-                'ImageAnalyzer' => new ImageAnalyzer,
-                'FormAnalyzer' => new FormAnalyzer,
-                'AriaAnalyzer' => new AriaAnalyzer,
-                'LinkAnalyzer' => new LinkAnalyzer,
-                'ContrastAnalyzer' => new ContrastAnalyzer,
-                'KeyboardNavigationAnalyzer' => new KeyboardNavigationAnalyzer,
-                'LanguageAnalyzer' => new LanguageAnalyzer,
-                'TableAnalyzer' => new TableAnalyzer,
-                'MediaAnalyzer' => new MediaAnalyzer,
-                'SemanticHTMLAnalyzer' => new SemanticHTMLAnalyzer,
-            ];
+            $analysis = app(Bfsg::class)->analyze($html, ['url' => $url]);
 
             $results = [
                 'success' => true,
@@ -127,8 +100,8 @@ class AnalyzeUrlCommand extends Command
                 'results' => [],
             ];
 
-            foreach ($analyzers as $name => $analyzer) {
-                $results['results'][$name] = $analyzer->analyze($dom);
+            foreach ($analysis->toArray()['violations'] as $key => $violations) {
+                $results['results'][$key] = ['issues' => $violations];
             }
 
             $results['summary'] = $this->calculateSummary($results['results']);
@@ -166,10 +139,10 @@ class AnalyzeUrlCommand extends Command
             $this->info("[{$analyzerName}] - ".count($issues).' issues');
 
             foreach (array_slice($issues, 0, 3) as $issue) {
-                $type = strtoupper($issue['type'] ?? 'NOTICE');
+                $type = strtoupper($issue['severity'] ?? 'NOTICE');
                 $message = $issue['message'];
 
-                switch ($issue['type'] ?? 'notice') {
+                switch ($issue['severity'] ?? 'notice') {
                     case 'error':
                         $this->error("  • [{$type}] {$message}");
                         break;
@@ -206,8 +179,8 @@ class AnalyzeUrlCommand extends Command
             if (isset($analyzerResults['issues'])) {
                 foreach ($analyzerResults['issues'] as $issue) {
                     $totalIssues++;
-                    $type = $issue['type'] ?? 'notice';
-                    $issuesByType[$type]++;
+                    $type = $issue['severity'] ?? 'notice';
+                    $issuesByType[$type] = ($issuesByType[$type] ?? 0) + 1;
                 }
             }
         }

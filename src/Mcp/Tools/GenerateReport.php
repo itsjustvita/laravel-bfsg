@@ -59,8 +59,7 @@ class GenerateReport extends Tool
             return Response::error("Failed to fetch URL: {$url} - {$e->getMessage()}");
         }
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($response->body());
+        $violations = app(Bfsg::class)->analyze($response->body())->toArray()['violations'];
 
         $reportGenerator = new ReportGenerator($url, $violations);
         $stats = $reportGenerator->getStats();
@@ -95,7 +94,7 @@ class GenerateReport extends Tool
                     foreach ($issues as $issue) {
                         $dbReport->violations()->create([
                             'analyzer' => $analyzer,
-                            'severity' => $issue['type'] ?? $issue['severity'] ?? 'notice',
+                            'severity' => $issue['severity'] ?? 'notice',
                             'message' => $issue['message'],
                             'element' => $issue['element'] ?? null,
                             'wcag_rule' => $issue['rule'] ?? null,

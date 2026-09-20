@@ -17,7 +17,7 @@ class BfsgTest extends TestCase
         </body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertArrayHasKey('images', $violations);
         $this->assertArrayHasKey('headings', $violations);
@@ -29,8 +29,8 @@ class BfsgTest extends TestCase
     {
         $bfsg = new Bfsg;
 
-        $this->assertSame([], $bfsg->analyze(''));
-        $this->assertSame([], $bfsg->analyze("  \n  "));
+        $this->assertCount(0, $bfsg->analyze(''));
+        $this->assertCount(0, $bfsg->analyze("  \n  "));
     }
 
     public function test_recognises_german_skip_link_without_meta_charset(): void
@@ -43,7 +43,7 @@ class BfsgTest extends TestCase
             .'<main><h1>Willkommen bei der Firma</h1></main>'
             .'</body></html>';
 
-        $violations = (new Bfsg)->analyze($html);
+        $violations = (new Bfsg)->analyze($html)->toArray()['violations'];
 
         $skipLinkFindings = collect($violations['keyboard'] ?? [])
             ->filter(fn ($issue) => str_contains($issue['message'], 'skip link'));
@@ -75,7 +75,7 @@ class BfsgTest extends TestCase
         </body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertEmpty($violations);
     }
@@ -99,17 +99,5 @@ class BfsgTest extends TestCase
 
         $this->assertTrue($bfsg->isAccessible($accessibleHtml));
         $this->assertFalse($bfsg->isAccessible($inaccessibleHtml));
-    }
-
-    public function test_can_get_violations_after_analysis(): void
-    {
-        $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
-
-        $bfsg = new Bfsg;
-        $bfsg->analyze($html);
-        $violations = $bfsg->getViolations();
-
-        $this->assertArrayHasKey('images', $violations);
-        $this->assertNotEmpty($violations['images']);
     }
 }

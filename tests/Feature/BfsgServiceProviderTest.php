@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
+use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
@@ -38,6 +39,11 @@ class BfsgServiceProviderTest extends TestCase
             'tables',
             'media',
             'semantic',
+            'page_title',
+            'input_purpose',
+            'focus',
+            'error_handling',
+            'status_messages',
         ];
 
         foreach ($expectedKeys as $key) {
@@ -59,6 +65,6 @@ class BfsgServiceProviderTest extends TestCase
 
         $result = \ItsJustVita\LaravelBfsg\Facades\Bfsg::analyze($html);
 
-        $this->assertIsArray($result);
+        $this->assertInstanceOf(AnalysisResult::class, $result);
     }
 }

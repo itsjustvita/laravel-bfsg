@@ -4,15 +4,16 @@ namespace ItsJustVita\LaravelBfsg;
 
 use Exception;
 use Illuminate\Support\Facades\Process;
-use ItsJustVita\LaravelBfsg\Services\HtmlLoader;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 
 class BrowserAnalyzer
 {
-    protected array $analyzers;
+    protected Bfsg $bfsg;
 
     protected array $options;
 
-    public function __construct(array $options = [])
+    public function __construct(array $options = [], ?Bfsg $bfsg = null)
     {
         $this->options = array_merge([
             'timeout' => 30000,
@@ -21,15 +22,7 @@ class BrowserAnalyzer
             'headless' => true,
         ], $options);
 
-        $this->analyzers = [
-            new Analyzers\HeadingAnalyzer,
-            new Analyzers\ImageAnalyzer,
-            new Analyzers\FormAnalyzer,
-            new Analyzers\AriaAnalyzer,
-            new Analyzers\LinkAnalyzer,
-            new Analyzers\ContrastAnalyzer,
-            new Analyzers\KeyboardNavigationAnalyzer,
-        ];
+        $this->bfsg = $bfsg ?? app(Bfsg::class);
     }
 
     /**
@@ -44,14 +37,12 @@ class BrowserAnalyzer
             // Get the fully rendered HTML from the browser
             $html = $this->getRenderedHtml($url);
 
-            // Convert to DOMDocument for analysis
-            $dom = HtmlLoader::load($html);
+            $document = HtmlDocument::fromHtml($html, ['ignoredSelectors' => config('bfsg.ignored_selectors', [])]);
+            $analysis = $this->bfsg->analyzeDocument($document, ['url' => $url]);
 
-            // Run all analyzers
             $results = [];
-            foreach ($this->analyzers as $analyzer) {
-                $analyzerName = class_basename($analyzer);
-                $results[$analyzerName] = $analyzer->analyze($dom);
+            foreach ($analysis->toArray()['violations'] as $key => $violations) {
+                $results[$key] = ['issues' => $violations];
             }
 
             return [
@@ -190,8 +181,8 @@ JS;
             if (isset($analyzerResults['issues'])) {
                 foreach ($analyzerResults['issues'] as $issue) {
                     $totalIssues++;
-                    $type = $issue['type'] ?? 'notice';
-                    $issuesByType[$type]++;
+                    $type = $issue['severity'] ?? 'notice';
+                    $issuesByType[$type] = ($issuesByType[$type] ?? 0) + 1;
                 }
             }
         }
@@ -209,7 +200,11 @@ JS;
      */
     public function setAnalyzers(array $analyzers): self
     {
-        $this->analyzers = $analyzers;
+        $this->bfsg = $this->bfsg->only([]);
+
+        foreach ($analyzers as $analyzer) {
+            $this->addAnalyzer($analyzer);
+        }
 
         return $this;
     }
@@ -219,7 +214,9 @@ JS;
      */
     public function addAnalyzer($analyzer): self
     {
-        $this->analyzers[] = $analyzer;
+        $key = $analyzer instanceof Analyzer ? $analyzer->key() : strtolower(class_basename($analyzer));
+
+        $this->bfsg->register($key, $analyzer);
 
         return $this;
     }

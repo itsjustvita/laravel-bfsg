@@ -28,8 +28,7 @@ class AnalyzeHtml extends Tool
             return Response::error('The html parameter is required.');
         }
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = app(Bfsg::class)->analyze($html)->toArray()['violations'];
 
         $report = new ReportGenerator('inline-html', $violations);
         $stats = $report->getStats();

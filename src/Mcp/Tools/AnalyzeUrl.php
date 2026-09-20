@@ -44,8 +44,7 @@ class AnalyzeUrl extends Tool
             return Response::error("Failed to fetch URL: {$url} - {$e->getMessage()}");
         }
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($response->body());
+        $violations = app(Bfsg::class)->analyze($response->body())->toArray()['violations'];
 
         $report = new ReportGenerator($url, $violations);
         $stats = $report->getStats();

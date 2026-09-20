@@ -3,69 +3,79 @@
 return [
     /*
     |--------------------------------------------------------------------------
-    | BFSG Compliance Level
+    | Compliance level: 'AA' (BFSG requirement) or 'AAA' (stricter contrast)
     |--------------------------------------------------------------------------
-    |
-    | Defines the WCAG level: 'A', 'AA', or 'AAA'
-    | Default is 'AA' as required by BFSG
-    |
     */
     'compliance_level' => env('BFSG_LEVEL', 'AA'),
 
     /*
     |--------------------------------------------------------------------------
-    | Automatic Corrections
+    | Locale for violation messages and reports (null = app.locale). en and de ship with the package.
     |--------------------------------------------------------------------------
-    |
-    | When enabled, simple issues will be automatically fixed
-    |
     */
-    'auto_fix' => env('BFSG_AUTO_FIX', false),
+    'locale' => env('BFSG_LOCALE'),
 
     /*
     |--------------------------------------------------------------------------
-    | Active Checks
+    | Active analyzers (registry key => enabled)
     |--------------------------------------------------------------------------
-    |
-    | Defines which checks should be performed
-    |
     */
     'checks' => [
-        'images' => true,      // Alt text validation
-        'forms' => true,       // Form label checking
-        'headings' => true,    // Heading hierarchy
-        'contrast' => true,    // Color contrast ratios
-        'aria' => true,        // ARIA attributes
-        'links' => true,       // Link accessibility
-        'keyboard' => true,    // Keyboard navigation
-        'language' => true,    // Language attributes (BFSG §3 requirement)
-        'tables' => true,      // Table accessibility (captions, th, scope)
-        'media' => true,       // Video/Audio accessibility (captions, transcripts)
-        'semantic' => true,    // Semantic HTML structure (main, nav, article, etc.)
-        'page_title' => true,  // Page title validation (WCAG 2.4.2)
-        'input_purpose' => true, // Input purpose / autocomplete (WCAG 1.3.5)
-        'focus' => true,       // Focus indicator visibility (WCAG 2.4.7)
-        'error_handling' => true, // Form error handling (WCAG 3.3.1, 3.3.3)
-        'status_messages' => true, // Status messages / live regions (WCAG 4.1.3)
+        'images' => true,          // Alt text (WCAG 1.1.1)
+        'forms' => true,           // Form labels (4.1.2, 1.3.1)
+        'headings' => true,        // Heading hierarchy (1.3.1, 2.4.6)
+        'contrast' => true,        // Colour contrast (1.4.3)
+        'aria' => true,            // ARIA roles and states (4.1.2)
+        'links' => true,           // Link purpose (2.4.4)
+        'keyboard' => true,        // Keyboard access (2.1.1, 2.4.1, 2.4.3)
+        'language' => true,        // Language of page and parts (3.1.1, 3.1.2)
+        'tables' => true,          // Table structure (1.3.1)
+        'media' => true,           // Video/audio alternatives (1.2.x, 1.4.2)
+        'semantic' => true,        // Landmarks and structure (1.3.1, 2.4.1)
+        'page_title' => true,      // Page title (2.4.2)
+        'input_purpose' => true,   // Input purpose / autocomplete (1.3.5)
+        'focus' => true,           // Focus visibility (2.4.7)
+        'error_handling' => true,  // Error identification (3.3.1)
+        'status_messages' => true, // Status messages (4.1.3)
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Reporting
+    | CSS selectors removed from the DOM before analysis (third-party widgets etc.)
+    |--------------------------------------------------------------------------
+    */
+    'ignored_selectors' => [
+        '#chatbase-bubble-button',
+        '#chatbase-bubble-window',
+        '[data-chatbase]',
+        'script[src*="chatbase"]',
+        'iframe[src*="chatbase"]',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Score weights: score = max(0, round(100 - sum(weight per finding)))
+    |--------------------------------------------------------------------------
+    */
+    'scoring' => [
+        'weights' => ['error' => 5, 'warning' => 2, 'notice' => 0.5],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Reporting / persistence
     |--------------------------------------------------------------------------
     */
     'reporting' => [
-        'enabled' => env('BFSG_REPORTING', true),
-        'email' => env('BFSG_REPORT_EMAIL', null),
         'save_to_database' => env('BFSG_SAVE_TO_DB', false),
         'database' => [
-            'connection' => env('BFSG_DB_CONNECTION', null),
+            'connection' => env('BFSG_DB_CONNECTION'),
         ],
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Middleware Configuration
+    | Middleware (register with the `bfsg` alias; disabled by default)
     |--------------------------------------------------------------------------
     */
     'middleware' => [
@@ -75,38 +85,18 @@ return [
             'admin/*',
             'api/*',
             '_debugbar/*',
+            'livewire/*',
+            'telescope/*',
+            'horizon/*',
         ],
     ],
 
     /*
     |--------------------------------------------------------------------------
-    | Authentication Configuration
+    | Authentication defaults for bfsg:check
     |--------------------------------------------------------------------------
-    |
-    | Configure default authentication settings for the command line tool
-    |
     */
     'authentication' => [
         'default_login_url' => '/login',
-        'sanctum_enabled' => false,
-        'timeout' => 30,
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Ignored Selectors
-    |--------------------------------------------------------------------------
-    |
-    | CSS selectors for elements that should be removed from the DOM before
-    | accessibility analysis. Useful for third-party widgets, chat widgets,
-    | analytics scripts, etc.
-    |
-    */
-    'ignored_selectors' => [
-        '#chatbase-bubble-button',
-        '#chatbase-bubble-window',
-        '[data-chatbase]',
-        'script[src*="chatbase"]',
-        'iframe[src*="chatbase"]',
     ],
 ];

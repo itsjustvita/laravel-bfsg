@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg;
 
+use Illuminate\Contracts\Container\Container;
 use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\ErrorHandlingAnalyzer;
@@ -18,138 +19,174 @@ use ItsJustVita\LaravelBfsg\Analyzers\PageTitleAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\StatusMessageAnalyzer;
 use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
-use ItsJustVita\LaravelBfsg\Services\HtmlLoader;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 
 class Bfsg
 {
-    protected array $analyzers = [];
+    /** Registry key => analyzer class, in execution order. */
+    public const ANALYZERS = [
+        'images' => ImageAnalyzer::class,
+        'forms' => FormAnalyzer::class,
+        'headings' => HeadingAnalyzer::class,
+        'contrast' => ContrastAnalyzer::class,
+        'aria' => AriaAnalyzer::class,
+        'links' => LinkAnalyzer::class,
+        'keyboard' => KeyboardNavigationAnalyzer::class,
+        'language' => LanguageAnalyzer::class,
+        'tables' => TableAnalyzer::class,
+        'media' => MediaAnalyzer::class,
+        'semantic' => SemanticHTMLAnalyzer::class,
+        'page_title' => PageTitleAnalyzer::class,
+        'input_purpose' => InputPurposeAnalyzer::class,
+        'focus' => FocusAnalyzer::class,
+        'error_handling' => ErrorHandlingAnalyzer::class,
+        'status_messages' => StatusMessageAnalyzer::class,
+    ];
 
-    protected array $violations = [];
+    private Container $container;
 
-    public function __construct()
+    /** @var array<string, mixed> the `bfsg` config array */
+    private array $config;
+
+    /** @var array<string, object|string> key => instance or class name */
+    private array $analyzers = [];
+
+    /** @var array<string, object> resolved instances */
+    private array $instances = [];
+
+    /**
+     * @param  array<string, bool>|null  $checks  registry key => enabled (defaults to config bfsg.checks)
+     * @param  array<string, mixed>|null  $config  the bfsg config array (defaults to config('bfsg'))
+     */
+    public function __construct(?Container $container = null, ?array $checks = null, ?array $config = null)
     {
-        $this->registerDefaultAnalyzers();
+        $this->container = $container ?? \Illuminate\Container\Container::getInstance();
+        $this->config = $config ?? ($this->container->bound('config') ? (array) $this->container->make('config')->get('bfsg', []) : []);
+        $checks ??= $this->config['checks'] ?? [];
+
+        foreach (self::ANALYZERS as $key => $class) {
+            if ($checks[$key] ?? true) {
+                $this->analyzers[$key] = $class;
+            }
+        }
+    }
+
+    /** Register (or replace) an analyzer under a key. Legacy array-returning analyzers are accepted until Phase 1 Task 29. */
+    public function register(string $key, object|string $analyzer): static
+    {
+        $this->analyzers[$key] = $analyzer;
+        unset($this->instances[$key]);
+
+        return $this;
+    }
+
+    public function forget(string $key): static
+    {
+        unset($this->analyzers[$key], $this->instances[$key]);
+
+        return $this;
+    }
+
+    /** @param  list<string>  $keys */
+    public function only(array $keys): static
+    {
+        $clone = clone $this;
+        $clone->analyzers = array_intersect_key($clone->analyzers, array_flip($keys));
+        $clone->instances = array_intersect_key($clone->instances, array_flip($keys));
+
+        return $clone;
+    }
+
+    /** @param  list<string>  $keys */
+    public function except(array $keys): static
+    {
+        $clone = clone $this;
+        $clone->analyzers = array_diff_key($clone->analyzers, array_flip($keys));
+        $clone->instances = array_diff_key($clone->instances, array_flip($keys));
+
+        return $clone;
+    }
+
+    /** @return array<string, object> resolved analyzer instances in registry order */
+    public function analyzers(): array
+    {
+        $resolved = [];
+
+        foreach (array_keys($this->analyzers) as $key) {
+            $resolved[$key] = $this->resolve($key);
+        }
+
+        return $resolved;
     }
 
     /**
-     * Register the default analyzers
+     * @param  array{url?: ?string, locale?: ?string, ignoredSelectors?: list<string>, fragment?: ?bool}  $options
      */
-    protected function registerDefaultAnalyzers(): void
+    public function analyze(string $html, array $options = []): AnalysisResult
     {
-        // Get checks config if available, otherwise use defaults
-        $checks = [];
-        if (function_exists('config') && function_exists('app')) {
-            try {
-                $checks = config('bfsg.checks', []);
-            } catch (\Exception $e) {
-                // Config not available, use defaults
+        $document = HtmlDocument::fromHtml($html, [
+            'fragment' => $options['fragment'] ?? null,
+            'ignoredSelectors' => $options['ignoredSelectors'] ?? ($this->config['ignored_selectors'] ?? []),
+        ]);
+
+        return $this->analyzeDocument($document, $options);
+    }
+
+    /**
+     * @param  array{url?: ?string, locale?: ?string}  $options
+     */
+    public function analyzeDocument(HtmlDocument $document, array $options = []): AnalysisResult
+    {
+        $url = $options['url'] ?? null;
+        $locale = $options['locale'] ?? ($this->config['locale'] ?? null);
+
+        if ($document->isEmpty()) {
+            return new AnalysisResult([], [], $url, $locale);
+        }
+
+        $byAnalyzer = [];
+        $run = [];
+
+        foreach ($this->analyzers() as $key => $analyzer) {
+            $run[] = $key;
+
+            $violations = $analyzer instanceof Analyzer
+                ? $analyzer->analyze($document)
+                : $this->legacyViolations($key, $analyzer, $document);
+
+            if ($violations !== []) {
+                $byAnalyzer[$key] = array_values($violations);
             }
         }
 
-        if ($checks['images'] ?? true) {
-            $this->analyzers['images'] = new ImageAnalyzer;
-        }
-
-        if ($checks['forms'] ?? true) {
-            $this->analyzers['forms'] = new FormAnalyzer;
-        }
-
-        if ($checks['headings'] ?? true) {
-            $this->analyzers['headings'] = new HeadingAnalyzer;
-        }
-
-        if ($checks['contrast'] ?? true) {
-            $this->analyzers['contrast'] = new ContrastAnalyzer;
-        }
-
-        if ($checks['aria'] ?? true) {
-            $this->analyzers['aria'] = new AriaAnalyzer;
-        }
-
-        if ($checks['links'] ?? true) {
-            $this->analyzers['links'] = new LinkAnalyzer;
-        }
-
-        if ($checks['keyboard'] ?? true) {
-            $this->analyzers['keyboard'] = new KeyboardNavigationAnalyzer;
-        }
-
-        if ($checks['language'] ?? true) {
-            $this->analyzers['language'] = new LanguageAnalyzer;
-        }
-
-        if ($checks['tables'] ?? true) {
-            $this->analyzers['tables'] = new TableAnalyzer;
-        }
-
-        if ($checks['media'] ?? true) {
-            $this->analyzers['media'] = new MediaAnalyzer;
-        }
-
-        if ($checks['semantic'] ?? true) {
-            $this->analyzers['semantic'] = new SemanticHTMLAnalyzer;
-        }
-
-        if ($checks['page_title'] ?? true) {
-            $this->analyzers['page_title'] = new PageTitleAnalyzer;
-        }
-
-        if ($checks['input_purpose'] ?? true) {
-            $this->analyzers['input_purpose'] = new InputPurposeAnalyzer;
-        }
-
-        if ($checks['focus'] ?? true) {
-            $this->analyzers['focus'] = new FocusAnalyzer;
-        }
-
-        if ($checks['error_handling'] ?? true) {
-            $this->analyzers['error_handling'] = new ErrorHandlingAnalyzer;
-        }
-
-        if ($checks['status_messages'] ?? true) {
-            $this->analyzers['status_messages'] = new StatusMessageAnalyzer;
-        }
+        return new AnalysisResult($byAnalyzer, $run, $url, $locale);
     }
 
-    /**
-     * Analyze HTML for accessibility
-     */
-    public function analyze(string $html): array
-    {
-        $this->violations = [];
-
-        if (trim($html) === '') {
-            return $this->violations;
-        }
-
-        $dom = HtmlLoader::load($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-
-        foreach ($this->analyzers as $name => $analyzer) {
-            $results = $analyzer->analyze($dom);
-            // Extract issues from the result array
-            if (! empty($results['issues'])) {
-                $this->violations[$name] = $results['issues'];
-            }
-        }
-
-        return $this->violations;
-    }
-
-    /**
-     * Check if HTML is accessible
-     */
     public function isAccessible(string $html): bool
     {
-        $violations = $this->analyze($html);
+        return $this->analyze($html)->isAccessible();
+    }
 
-        return empty($violations);
+    private function resolve(string $key): object
+    {
+        if (! isset($this->instances[$key])) {
+            $entry = $this->analyzers[$key];
+            $this->instances[$key] = is_string($entry) ? $this->container->make($entry) : $entry;
+        }
+
+        return $this->instances[$key];
     }
 
     /**
-     * Get all violations
+     * Compatibility shim for analyzers that still return ['issues' => [...]]. Removed in Task 29.
+     *
+     * @return list<Violation>
      */
-    public function getViolations(): array
+    private function legacyViolations(string $key, object $analyzer, HtmlDocument $document): array
     {
-        return $this->violations;
+        $result = $analyzer->analyze($document->dom());
+
+        return array_map(fn (array $issue) => Violation::fromLegacy($key, $issue), $result['issues'] ?? []);
     }
 }

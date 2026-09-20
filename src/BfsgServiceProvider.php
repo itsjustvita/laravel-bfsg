@@ -15,6 +15,7 @@ use ItsJustVita\LaravelBfsg\Mcp\Tools\GenerateReport;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\GetHistory;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\GetReport;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\ListAnalyzers;
+use ItsJustVita\LaravelBfsg\Middleware\CheckAccessibility;
 use Laravel\Boost\BoostServiceProvider;
 use Laravel\Mcp\Server;
 
@@ -31,9 +32,10 @@ class BfsgServiceProvider extends ServiceProvider
         );
 
         // Register main class as singleton
-        $this->app->singleton('bfsg', function ($app) {
-            return new Bfsg;
+        $this->app->singleton(Bfsg::class, function ($app) {
+            return new Bfsg($app, $app['config']->get('bfsg.checks', []), $app['config']->get('bfsg', []));
         });
+        $this->app->alias(Bfsg::class, 'bfsg');
     }
 
     /**
@@ -81,6 +83,9 @@ class BfsgServiceProvider extends ServiceProvider
 
         // Load translations
         $this->loadTranslationsFrom(__DIR__.'/../lang', 'bfsg');
+
+        // Register the middleware alias
+        $this->app['router']->aliasMiddleware('bfsg', CheckAccessibility::class);
 
         // Register Blade components
         $this->loadViewComponentsAs('bfsg', [

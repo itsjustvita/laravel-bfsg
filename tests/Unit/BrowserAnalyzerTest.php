@@ -2,7 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use ItsJustVita\LaravelBfsg\Analyzers\HeadingAnalyzer;
+use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
@@ -36,20 +36,15 @@ class BrowserAnalyzerTest extends TestCase
 
     public function test_can_set_custom_analyzers()
     {
-        $customAnalyzer = $this->createStub(HeadingAnalyzer::class);
+        $custom = new class extends BaseAnalyzer
+        {
+            protected string $key = 'custom';
 
-        $result = $this->analyzer->setAnalyzers([$customAnalyzer]);
+            protected function inspect(): void {}
+        };
 
-        $this->assertSame($this->analyzer, $result);
-    }
-
-    public function test_can_add_analyzer()
-    {
-        $customAnalyzer = $this->createStub(HeadingAnalyzer::class);
-
-        $result = $this->analyzer->addAnalyzer($customAnalyzer);
-
-        $this->assertSame($this->analyzer, $result);
+        $this->assertSame($this->analyzer, $this->analyzer->setAnalyzers([$custom]));
+        $this->assertSame($this->analyzer, $this->analyzer->addAnalyzer($custom));
     }
 
     /**

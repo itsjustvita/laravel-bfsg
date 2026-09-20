@@ -64,7 +64,7 @@ class IntegrationTest extends TestCase
 HTML;
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         // Assert violations exist for key categories
         $this->assertArrayHasKey('images', $violations, 'Expected image violations for missing alt');
@@ -139,7 +139,7 @@ HTML;
 HTML;
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertEmpty($violations, 'Fully accessible HTML should produce no violations. Got: '.json_encode(array_keys($violations)));
     }
@@ -153,7 +153,7 @@ HTML;
 
         // Create a new Bfsg instance after config change to pick up the disabled check
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertArrayNotHasKey('images', $violations, 'Images check was disabled but still produced violations');
     }
@@ -167,7 +167,7 @@ HTML;
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Bad heading</h3></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $report = new ReportGenerator('https://example.com', $violations);
         $json = $report->setFormat('json')->generate();
@@ -207,7 +207,7 @@ HTML;
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         // Generate JSON report
         $jsonReport = new ReportGenerator('https://example.com', $violations);
@@ -233,7 +233,7 @@ HTML;
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $report = new ReportGenerator('https://example.com', $violations);
         $report->setFormat('json');
@@ -287,7 +287,7 @@ HTML;
 HTML;
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertArrayHasKey('contrast', $violations, 'Contrast violations should be detected');
 
@@ -295,7 +295,7 @@ HTML;
         $contrastViolations = $violations['contrast'];
         $foundCssContrast = false;
         foreach ($contrastViolations as $v) {
-            if (isset($v['rule']) && $v['rule'] === 'WCAG 1.4.3' && isset($v['severity']) && $v['severity'] === 'error') {
+            if (isset($v['rule']) && $v['rule'] === '1.4.3' && isset($v['severity']) && $v['severity'] === 'error') {
                 $foundCssContrast = true;
                 break;
             }
@@ -328,14 +328,14 @@ HTML;
 HTML;
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertArrayHasKey('contrast', $violations, 'Inherited color contrast violations should be detected');
 
         // Check that at least one violation has the approximate flag
         $hasApproximate = false;
         foreach ($violations['contrast'] as $v) {
-            if (isset($v['approximate']) && $v['approximate'] === true) {
+            if (($v['meta']['approximate'] ?? false) === true) {
                 $hasApproximate = true;
                 break;
             }
@@ -367,14 +367,14 @@ HTML;
 HTML;
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $this->assertArrayHasKey('contrast', $violations, 'Inline override should trigger contrast violation');
 
         // Find an error-severity contrast violation for WCAG 1.4.3
         $foundInlineOverride = false;
         foreach ($violations['contrast'] as $v) {
-            if (isset($v['rule']) && $v['rule'] === 'WCAG 1.4.3' && isset($v['severity']) && $v['severity'] === 'error') {
+            if (isset($v['rule']) && $v['rule'] === '1.4.3' && isset($v['severity']) && $v['severity'] === 'error') {
                 $foundInlineOverride = true;
                 break;
             }
@@ -431,7 +431,7 @@ HTML;
         $url = 'https://example.com/test';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         // Simulate what the command's saveResults method does
         $reportGenerator = new ReportGenerator($url, $violations);
@@ -500,7 +500,7 @@ HTML;
         // Since we can't easily capture raw output in Orchestra Testbench,
         // verify by running the pipeline directly
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $report = new ReportGenerator('http://example.com/page', $violations);
         $jsonOutput = $report->setFormat('json')->generate();
@@ -588,7 +588,7 @@ HTML;
 
         // Step 1: Analyze
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
         $this->assertNotEmpty($violations);
 
         // Step 2: Generate report

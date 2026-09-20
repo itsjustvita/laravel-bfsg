@@ -27,7 +27,7 @@ class BfsgMcpServerTest extends TestCase
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $report = new ReportGenerator('inline-html', $violations);
         $stats = $report->getStats();
@@ -51,7 +51,7 @@ class BfsgMcpServerTest extends TestCase
             .'</main><footer><p>Footer</p></footer></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
 
         $report = new ReportGenerator('inline-html', $violations);
         $stats = $report->getStats();
@@ -76,7 +76,7 @@ class BfsgMcpServerTest extends TestCase
             ->get('https://example.com');
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($response->body());
+        $violations = $bfsg->analyze($response->body())->toArray()['violations'];
 
         $this->assertNotEmpty($violations);
         $this->assertArrayHasKey('images', $violations);
@@ -180,7 +180,7 @@ class BfsgMcpServerTest extends TestCase
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
         $reportGenerator = new ReportGenerator('https://example.com', $violations);
 
         $json = $reportGenerator->setFormat('json')->generate();
@@ -196,7 +196,7 @@ class BfsgMcpServerTest extends TestCase
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
         $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html);
+        $violations = $bfsg->analyze($html)->toArray()['violations'];
         $reportGenerator = new ReportGenerator('https://example.com', $violations);
         $stats = $reportGenerator->getStats();
 
