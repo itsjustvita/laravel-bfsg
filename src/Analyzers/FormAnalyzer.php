@@ -2,132 +2,107 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
-use DOMXPath;
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class FormAnalyzer
+class FormAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    protected string $key = 'forms';
 
-    public function analyze(DOMDocument $dom): array
+    protected string $description = 'Labels and instructions for form controls';
+
+    protected array $rules = ['4.1.2', '1.3.1', '3.3.2'];
+
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
-
-        // Check for form inputs without labels
-        $this->checkInputsWithoutLabels($xpath);
-
-        // Check for forms without proper ARIA labels
-        $this->checkFormsAccessibility($xpath);
-
-        // Check for required fields without proper indication
-        $this->checkRequiredFields($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkInputsWithoutLabels();
+        $this->checkFormsAccessibility();
+        $this->checkRequiredFields();
     }
 
-    protected function checkInputsWithoutLabels(DOMXPath $xpath): void
+    protected function checkInputsWithoutLabels(): void
     {
-        // Find inputs without associated labels
-        $inputs = $xpath->query('//input[@type!="hidden" and @type!="submit" and @type!="button" and not(@aria-label) and not(@aria-labelledby)]');
+        $inputs = $this->query('//input[@type!="hidden" and @type!="submit" and @type!="button" and not(@aria-label) and not(@aria-labelledby)]');
 
         foreach ($inputs as $input) {
-            $id = $input->getAttribute('id');
-            $hasLabel = false;
-
-            if ($id) {
-                // Check if there's a label with matching 'for' attribute
-                $labels = $xpath->query("//label[@for='{$id}']");
-                $hasLabel = $labels->length > 0;
+            if ($this->hasAssociatedLabel($input)) {
+                continue;
             }
 
-            if (! $hasLabel) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 1.3.1, 3.3.2',
-                    'element' => 'input',
-                    'message' => 'Form input without associated label',
-                    'name' => $input->getAttribute('name') ?: 'unnamed',
-                    'suggestion' => 'Add a <label> element or aria-label attribute',
-                    'auto_fixable' => false,
-                ];
-            }
+            $this->report(
+                'control_missing_label',
+                Severity::Error,
+                '4.1.2',
+                $input,
+                ['name' => $this->controlName($input), 'type' => 'input'],
+                related: ['1.3.1', '3.3.2'],
+            );
         }
 
-        // Check textareas and selects as well
-        $this->checkOtherFormElements($xpath, 'textarea');
-        $this->checkOtherFormElements($xpath, 'select');
+        $this->checkOtherFormElements('textarea');
+        $this->checkOtherFormElements('select');
     }
 
-    protected function checkOtherFormElements(DOMXPath $xpath, string $element): void
+    protected function checkOtherFormElements(string $tag): void
     {
-        $elements = $xpath->query("//{$element}[not(@aria-label) and not(@aria-labelledby)]");
-
-        foreach ($elements as $elem) {
-            $id = $elem->getAttribute('id');
-            $hasLabel = false;
-
-            if ($id) {
-                $labels = $xpath->query("//label[@for='{$id}']");
-                $hasLabel = $labels->length > 0;
+        foreach ($this->query("//{$tag}[not(@aria-label) and not(@aria-labelledby)]") as $element) {
+            if ($this->hasAssociatedLabel($element)) {
+                continue;
             }
 
-            if (! $hasLabel) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 1.3.1, 3.3.2',
-                    'element' => $element,
-                    'message' => ucfirst($element).' without associated label',
-                    'name' => $elem->getAttribute('name') ?: 'unnamed',
-                    'suggestion' => 'Add a <label> element or aria-label attribute',
-                    'auto_fixable' => false,
-                ];
-            }
+            $this->report(
+                'control_missing_label',
+                Severity::Error,
+                '4.1.2',
+                $element,
+                ['name' => $this->controlName($element), 'type' => $tag],
+                related: ['1.3.1', '3.3.2'],
+            );
         }
     }
 
-    protected function checkFormsAccessibility(DOMXPath $xpath): void
+    protected function checkFormsAccessibility(): void
     {
-        // Check forms without aria-label or aria-labelledby
-        $forms = $xpath->query('//form[not(@aria-label) and not(@aria-labelledby)]');
-
-        foreach ($forms as $form) {
-            // Check if form has a heading or legend that could serve as label
-            $hasHeading = $xpath->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//legend', $form)->length > 0;
+        foreach ($this->query('//form[not(@aria-label) and not(@aria-labelledby)]') as $form) {
+            $hasHeading = $this->query('.//h1|.//h2|.//h3|.//h4|.//h5|.//h6|.//legend', $form) !== [];
 
             if (! $hasHeading) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 1.3.1',
-                    'element' => 'form',
-                    'message' => 'Form without descriptive label or heading',
-                    'suggestion' => 'Add aria-label to the form or include a heading/legend',
-                    'auto_fixable' => false,
-                ];
+                $this->report('form_missing_name', Severity::Warning, '1.3.1', $form);
             }
         }
     }
 
-    protected function checkRequiredFields(DOMXPath $xpath): void
+    protected function checkRequiredFields(): void
     {
-        // Check required fields without proper indication
-        $requiredInputs = $xpath->query('//input[@required]|//textarea[@required]|//select[@required]');
-
-        foreach ($requiredInputs as $input) {
-            $hasAriaRequired = $input->getAttribute('aria-required') === 'true';
-            $id = $input->getAttribute('id');
-
-            if (! $hasAriaRequired) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 3.3.2',
-                    'element' => $input->nodeName,
-                    'message' => 'Required field without aria-required attribute',
-                    'name' => $input->getAttribute('name') ?: 'unnamed',
-                    'suggestion' => 'Add aria-required="true" for better screen reader support',
-                    'auto_fixable' => true,
-                ];
+        foreach ($this->query('//input[@required]|//textarea[@required]|//select[@required]') as $field) {
+            if ($field->getAttribute('aria-required') === 'true') {
+                continue;
             }
+
+            $this->report(
+                'required_missing_aria_required',
+                Severity::Warning,
+                '3.3.2',
+                $field,
+                ['name' => $this->controlName($field)],
+            );
         }
+    }
+
+    protected function hasAssociatedLabel(DOMElement $control): bool
+    {
+        $id = $control->getAttribute('id');
+
+        if ($id === '') {
+            return false;
+        }
+
+        return $this->query('//label[@for='.$this->document->xpathLiteral($id).']') !== [];
+    }
+
+    protected function controlName(DOMElement $control): string
+    {
+        return $control->getAttribute('name')
+            ?: ($control->getAttribute('id') ?: 'unnamed');
     }
 }

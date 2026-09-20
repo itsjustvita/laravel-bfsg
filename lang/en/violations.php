@@ -13,4 +13,18 @@ return [
             'suggestion' => 'Verify the image is decorative; otherwise describe it in the alt attribute',
         ],
     ],
+    'forms' => [
+        'control_missing_label' => [
+            'message' => 'Form control ":name" (:type) has no associated label',
+            'suggestion' => 'Add a <label for="…">, wrap the control in a <label>, or use aria-label/aria-labelledby',
+        ],
+        'form_missing_name' => [
+            'message' => 'Form without descriptive label or heading',
+            'suggestion' => 'Add aria-label/aria-labelledby to the form or a heading that names it',
+        ],
+        'required_missing_aria_required' => [
+            'message' => 'Required field ":name" without aria-required attribute',
+            'suggestion' => 'Add aria-required="true" or make the required state visible in the label',
+        ],
+    ],
 ];

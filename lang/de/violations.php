@@ -13,4 +13,18 @@ return [
             'suggestion' => 'Prüfen, ob das Bild dekorativ ist; andernfalls den Inhalt im alt-Attribut beschreiben',
         ],
     ],
+    'forms' => [
+        'control_missing_label' => [
+            'message' => 'Formularfeld ":name" (:type) hat keine zugeordnete Beschriftung',
+            'suggestion' => '<label for="…"> ergänzen, das Feld in ein <label> einbetten oder aria-label/aria-labelledby verwenden',
+        ],
+        'form_missing_name' => [
+            'message' => 'Formular ohne beschreibende Bezeichnung oder Überschrift',
+            'suggestion' => 'aria-label/aria-labelledby am Formular oder eine benennende Überschrift ergänzen',
+        ],
+        'required_missing_aria_required' => [
+            'message' => 'Pflichtfeld ":name" ohne aria-required-Attribut',
+            'suggestion' => 'aria-required="true" ergänzen oder den Pflichtstatus in der Beschriftung sichtbar machen',
+        ],
+    ],
 ];
