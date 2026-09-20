@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
+use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\BrowserAnalyzer;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
@@ -34,17 +35,34 @@ class BrowserAnalyzerTest extends TestCase
         $this->assertInstanceOf(BrowserAnalyzer::class, $analyzer);
     }
 
-    public function test_can_set_custom_analyzers()
+    public function test_add_analyzer_registers_on_the_instance_only()
     {
-        $custom = new class extends BaseAnalyzer
+        $analyzer = new BrowserAnalyzer;
+        $custom = $this->customAnalyzer();
+
+        $this->assertSame($analyzer, $analyzer->addAnalyzer($custom));
+        $this->assertArrayHasKey('custom', $analyzer->bfsg()->analyzers());
+        $this->assertArrayNotHasKey('custom', app(Bfsg::class)->analyzers(), 'the container singleton must stay untouched');
+    }
+
+    public function test_set_analyzers_replaces_the_instance_registry()
+    {
+        $analyzer = new BrowserAnalyzer;
+        $custom = $this->customAnalyzer();
+
+        $this->assertSame($analyzer, $analyzer->setAnalyzers([$custom]));
+        $this->assertSame(['custom'], array_keys($analyzer->bfsg()->analyzers()));
+        $this->assertCount(16, app(Bfsg::class)->analyzers());
+    }
+
+    protected function customAnalyzer(): BaseAnalyzer
+    {
+        return new class extends BaseAnalyzer
         {
             protected string $key = 'custom';
 
             protected function inspect(): void {}
         };
-
-        $this->assertSame($this->analyzer, $this->analyzer->setAnalyzers([$custom]));
-        $this->assertSame($this->analyzer, $this->analyzer->addAnalyzer($custom));
     }
 
     /**

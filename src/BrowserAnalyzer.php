@@ -22,7 +22,15 @@ class BrowserAnalyzer
             'headless' => true,
         ], $options);
 
-        $this->bfsg = $bfsg ?? app(Bfsg::class);
+        $this->bfsg = ($bfsg ?? app(Bfsg::class))->except([]);
+    }
+
+    /**
+     * The analyzer registry owned by this instance
+     */
+    public function bfsg(): Bfsg
+    {
+        return $this->bfsg;
     }
 
     /**
