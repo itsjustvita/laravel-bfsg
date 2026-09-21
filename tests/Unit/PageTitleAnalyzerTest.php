@@ -2,154 +2,83 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\PageTitleAnalyzer;
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
 
-class PageTitleAnalyzerTest extends TestCase
+class PageTitleAnalyzerTest extends AnalyzerTestCase
 {
+    protected function analyzer(): Analyzer
+    {
+        return new PageTitleAnalyzer;
+    }
+
     public function test_detects_missing_title(): void
     {
-        $html = '<html><head></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head></head><body><p>Hello</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
+        $violation = $this->assertHasViolation($violations, 'page_title.missing_title', severity: Severity::Error);
+        $this->assertNull($violation->element);
+        $this->assertSame('2.4.2', $violation->rule);
         $this->assertCount(1, $violations);
-        $this->assertEquals('error', $violations[0]['type']);
-        $this->assertEquals('WCAG 2.4.2', $violations[0]['rule']);
-        $this->assertStringContainsString('missing', $violations[0]['message']);
     }
 
     public function test_detects_empty_title(): void
     {
-        $html = '<html><head><title></title></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head><title></title></head><body><p>Hello</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
+        $violation = $this->assertHasViolation($violations, 'page_title.empty_title', element: 'title', severity: Severity::Error);
+        $this->assertSame('2.4.2', $violation->rule);
         $this->assertCount(1, $violations);
-        $this->assertEquals('error', $violations[0]['type']);
-        $this->assertStringContainsString('empty', $violations[0]['message']);
     }
 
     public function test_detects_generic_title(): void
     {
-        $html = '<html><head><title>Home</title></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head><title>Home</title></head><body><p>Hello</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $this->assertNotEmpty($violations);
-        $hasGenericWarning = false;
-        foreach ($violations as $v) {
-            if ($v['type'] === 'warning' && str_contains($v['message'], 'generic')) {
-                $hasGenericWarning = true;
-            }
-        }
-        $this->assertTrue($hasGenericWarning, 'Expected a warning about generic title');
+        $violation = $this->assertHasViolation($violations, 'page_title.generic_title', element: 'title', severity: Severity::Warning);
+        $this->assertSame(['title' => 'Home'], $violation->params);
     }
 
     public function test_detects_too_short_title(): void
     {
-        $html = '<html><head><title>Ab</title></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head><title>Ab</title></head><body><p>Hello</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $this->assertNotEmpty($violations);
-        $hasLengthWarning = false;
-        foreach ($violations as $v) {
-            if ($v['type'] === 'warning' && str_contains($v['message'], 'too short')) {
-                $hasLengthWarning = true;
-            }
-        }
-        $this->assertTrue($hasLengthWarning, 'Expected a warning about short title');
+        $violation = $this->assertHasViolation($violations, 'page_title.short_title', element: 'title', severity: Severity::Warning);
+        $this->assertSame(['length' => 2], $violation->params);
+        $this->assertNoViolation($violations, 'page_title.long_title');
     }
 
     public function test_detects_too_long_title(): void
     {
         $longTitle = str_repeat('A very long page title ', 5);
-        $html = '<html><head><title>'.$longTitle.'</title></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head><title>'.$longTitle.'</title></head><body><p>Hello</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $this->assertNotEmpty($violations);
-        $hasLengthWarning = false;
-        foreach ($violations as $v) {
-            if ($v['type'] === 'warning' && str_contains($v['message'], 'too long')) {
-                $hasLengthWarning = true;
-            }
-        }
-        $this->assertTrue($hasLengthWarning, 'Expected a warning about long title');
+        $violation = $this->assertHasViolation($violations, 'page_title.long_title', element: 'title', severity: Severity::Warning);
+        $this->assertSame(['length' => 114], $violation->params);
+        $this->assertNoViolation($violations, 'page_title.short_title');
     }
 
     public function test_detects_german_generic_title_startseite(): void
     {
         // v2.2.0 Fix 6: German "Startseite" is as generic as English "Home".
-        $html = '<html><head><title>Startseite</title></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head><title>Startseite</title></head><body><p>Hello</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $hasGenericWarning = false;
-        foreach ($violations as $v) {
-            if ($v['type'] === 'warning' && str_contains($v['message'], 'generic')) {
-                $hasGenericWarning = true;
-            }
-        }
-        $this->assertTrue($hasGenericWarning, 'Expected a warning about German generic title "Startseite"');
+        $violation = $this->assertHasViolation($violations, 'page_title.generic_title', element: 'title', severity: Severity::Warning);
+        $this->assertSame(['title' => 'Startseite'], $violation->params);
     }
 
     public function test_detects_german_generic_title_willkommen(): void
     {
         // v2.2.0 Fix 6: German "Willkommen" is a generic welcome page title.
-        $html = '<html><head><title>Willkommen</title></head><body><p>Hi</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><head><title>Willkommen</title></head><body><p>Hi</p></body></html>');
 
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $hasGenericWarning = false;
-        foreach ($violations as $v) {
-            if ($v['type'] === 'warning' && str_contains($v['message'], 'generic')) {
-                $hasGenericWarning = true;
-            }
-        }
-        $this->assertTrue($hasGenericWarning);
+        $this->assertHasViolation($violations, 'page_title.generic_title', element: 'title', severity: Severity::Warning);
     }
 
     public function test_accepts_good_descriptive_title(): void
     {
-        $html = '<html><head><title>About Us - Company Name</title></head><body><p>Hello</p></body></html>';
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new PageTitleAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $this->assertEmpty($violations);
+        $this->assertSame([], $this->analyze('<html><head><title>About Us - Company Name</title></head><body><p>Hello</p></body></html>'));
     }
 }

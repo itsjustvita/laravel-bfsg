@@ -285,4 +285,26 @@ return [
             'suggestion' => 'Leere Listen entfernen oder mit Listeneinträgen füllen',
         ],
     ],
+    'page_title' => [
+        'missing_title' => [
+            'message' => 'Seite hat kein <title>-Element',
+            'suggestion' => '<title> im <head> ergänzen, das die Seite beschreibt',
+        ],
+        'empty_title' => [
+            'message' => '<title> der Seite ist leer',
+            'suggestion' => '<title> mit beschreibendem Text füllen',
+        ],
+        'generic_title' => [
+            'message' => 'Seitentitel „:title“ ist zu allgemein',
+            'suggestion' => 'Titel verwenden, der Seite und Website benennt, z. B. „Kontakt | Firma“',
+        ],
+        'short_title' => [
+            'message' => 'Seitentitel ist zu kurz (:length Zeichen)',
+            'suggestion' => 'Titel verwenden, der den Seiteninhalt benennt',
+        ],
+        'long_title' => [
+            'message' => 'Seitentitel ist zu lang (:length Zeichen)',
+            'suggestion' => 'Titel knapp halten; die wichtigsten Wörter zuerst',
+        ],
+    ],
 ];

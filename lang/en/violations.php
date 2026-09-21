@@ -285,4 +285,26 @@ return [
             'suggestion' => 'Remove empty lists or fill them with list items',
         ],
     ],
+    'page_title' => [
+        'missing_title' => [
+            'message' => 'Page has no <title> element',
+            'suggestion' => 'Add a <title> in <head> that describes the page',
+        ],
+        'empty_title' => [
+            'message' => 'Page <title> is empty',
+            'suggestion' => 'Give the <title> descriptive text',
+        ],
+        'generic_title' => [
+            'message' => 'Page title ":title" is too generic',
+            'suggestion' => 'Use a title that identifies the page and the site, e.g. "Contact | Acme"',
+        ],
+        'short_title' => [
+            'message' => 'Page title is too short (:length characters)',
+            'suggestion' => 'Use a title that identifies the page content',
+        ],
+        'long_title' => [
+            'message' => 'Page title is too long (:length characters)',
+            'suggestion' => 'Keep the title concise; put the most important words first',
+        ],
+    ],
 ];

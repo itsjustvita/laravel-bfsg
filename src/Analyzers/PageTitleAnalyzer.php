@@ -2,13 +2,23 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
-use DOMXPath;
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class PageTitleAnalyzer
+class PageTitleAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    private const MIN_LENGTH = 3;
 
+    private const MAX_LENGTH = 70;
+
+    protected string $key = 'page_title';
+
+    protected string $description = 'Page title';
+
+    protected array $rules = ['2.4.2'];
+
+    /** @var list<string> */
     protected array $genericTitles = [
         // English
         'home',
@@ -29,89 +39,48 @@ class PageTitleAnalyzer
         'beispiel',
     ];
 
-    public function analyze(DOMDocument $dom): array
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
-
-        $this->checkTitleExists($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkTitleExists();
     }
 
-    protected function checkTitleExists(DOMXPath $xpath): void
+    protected function checkTitleExists(): void
     {
-        $titles = $xpath->query('//title');
+        $title = $this->query('//title')[0] ?? null;
 
-        if ($titles->length === 0) {
-            $this->violations[] = [
-                'type' => 'error',
-                'rule' => 'WCAG 2.4.2',
-                'element' => 'title',
-                'message' => 'Page is missing a <title> element',
-                'suggestion' => 'Add a descriptive <title> element to the <head> section',
-                'auto_fixable' => false,
-            ];
+        if ($title === null) {
+            $this->report('missing_title', Severity::Error, '2.4.2');
 
             return;
         }
 
-        $title = $titles->item(0);
-        $titleText = trim($title->textContent);
+        $titleText = $this->text($title);
 
         if ($titleText === '') {
-            $this->violations[] = [
-                'type' => 'error',
-                'rule' => 'WCAG 2.4.2',
-                'element' => 'title',
-                'message' => 'Page <title> element is empty',
-                'suggestion' => 'Add descriptive text to the <title> element',
-                'auto_fixable' => false,
-            ];
+            $this->report('empty_title', Severity::Error, '2.4.2', $title);
 
             return;
         }
 
-        $this->checkGenericTitle($titleText);
-        $this->checkTitleLength($titleText);
+        $this->checkGenericTitle($title, $titleText);
+        $this->checkTitleLength($title, $titleText);
     }
 
-    protected function checkGenericTitle(string $titleText): void
+    protected function checkGenericTitle(DOMElement $title, string $titleText): void
     {
-        if (in_array(strtolower($titleText), $this->genericTitles, true)) {
-            $this->violations[] = [
-                'type' => 'warning',
-                'rule' => 'WCAG 2.4.2',
-                'element' => 'title',
-                'message' => "Page title \"{$titleText}\" is too generic",
-                'suggestion' => 'Use a descriptive title that identifies the page content and purpose',
-                'auto_fixable' => false,
-            ];
+        if (in_array(Text::lower($titleText), $this->genericTitles, true)) {
+            $this->report('generic_title', Severity::Warning, '2.4.2', $title, ['title' => $titleText]);
         }
     }
 
-    protected function checkTitleLength(string $titleText): void
+    protected function checkTitleLength(DOMElement $title, string $titleText): void
     {
-        $length = mb_strlen($titleText);
+        $length = Text::length($titleText);
 
-        if ($length < 3) {
-            $this->violations[] = [
-                'type' => 'warning',
-                'rule' => 'WCAG 2.4.2',
-                'element' => 'title',
-                'message' => "Page title is too short ({$length} characters)",
-                'suggestion' => 'Use a more descriptive title with at least 3 characters',
-                'auto_fixable' => false,
-            ];
-        } elseif ($length > 70) {
-            $this->violations[] = [
-                'type' => 'warning',
-                'rule' => 'WCAG 2.4.2',
-                'element' => 'title',
-                'message' => "Page title is too long ({$length} characters)",
-                'suggestion' => 'Keep the title under 70 characters for better usability',
-                'auto_fixable' => false,
-            ];
+        if ($length < self::MIN_LENGTH) {
+            $this->report('short_title', Severity::Warning, '2.4.2', $title, ['length' => $length]);
+        } elseif ($length > self::MAX_LENGTH) {
+            $this->report('long_title', Severity::Warning, '2.4.2', $title, ['length' => $length]);
         }
     }
 }
