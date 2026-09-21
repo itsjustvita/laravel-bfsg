@@ -4,12 +4,13 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
-use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\CheckContrast;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Models\BfsgViolation;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use Laravel\Mcp\Request;
 
 class BfsgMcpServerTest extends TestCase
 {
@@ -96,28 +97,36 @@ class BfsgMcpServerTest extends TestCase
 
     public function test_check_contrast_good_ratio(): void
     {
-        $analyzer = new ContrastAnalyzer;
-        $ratio = $analyzer->calculateContrastRatio('#000000', '#ffffff');
+        $payload = $this->checkContrast('#000000', '#ffffff');
 
-        $this->assertNotNull($ratio);
-        $this->assertGreaterThanOrEqual(21, $ratio);
+        $this->assertEqualsWithDelta(21.0, $payload['ratio'], 0.01);
+        $this->assertTrue($payload['aa_normal']);
+        $this->assertTrue($payload['aaa_normal']);
     }
 
     public function test_check_contrast_bad_ratio(): void
     {
-        $analyzer = new ContrastAnalyzer;
-        $ratio = $analyzer->calculateContrastRatio('#999999', '#aaaaaa');
+        $payload = $this->checkContrast('#999999', '#aaaaaa');
 
-        $this->assertNotNull($ratio);
-        $this->assertLessThan(4.5, $ratio);
+        $this->assertLessThan(4.5, $payload['ratio']);
+        $this->assertFalse($payload['aa_normal']);
     }
 
     public function test_check_contrast_invalid_colors(): void
     {
-        $analyzer = new ContrastAnalyzer;
-        $ratio = $analyzer->calculateContrastRatio('not-a-color', '#ffffff');
+        $response = (new CheckContrast)->handle(new Request(['foreground' => 'not-a-color', 'background' => '#ffffff']));
 
-        $this->assertNull($ratio);
+        $this->assertTrue($response->isError());
+    }
+
+    /** @return array<string, mixed> */
+    private function checkContrast(string $foreground, string $background): array
+    {
+        $response = (new CheckContrast)->handle(new Request(['foreground' => $foreground, 'background' => $background]));
+
+        $this->assertFalse($response->isError());
+
+        return json_decode((string) $response->content(), true);
     }
 
     // --- list_analyzers logic ---

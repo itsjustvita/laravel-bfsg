@@ -205,6 +205,8 @@ JS;
 
     /**
      * Set custom analyzers
+     *
+     * @param  list<Analyzer>  $analyzers
      */
     public function setAnalyzers(array $analyzers): self
     {
@@ -220,11 +222,9 @@ JS;
     /**
      * Add an analyzer
      */
-    public function addAnalyzer($analyzer): self
+    public function addAnalyzer(Analyzer $analyzer): self
     {
-        $key = $analyzer instanceof Analyzer ? $analyzer->key() : strtolower(class_basename($analyzer));
-
-        $this->bfsg->register($key, $analyzer);
+        $this->bfsg->register($analyzer->key(), $analyzer);
 
         return $this;
     }

@@ -3,7 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
+use ItsJustVita\LaravelBfsg\Css\Color;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Tool;
@@ -29,12 +29,14 @@ class CheckContrast extends Tool
             return Response::error('Both foreground and background parameters are required.');
         }
 
-        $analyzer = new ContrastAnalyzer;
-        $ratio = $analyzer->calculateContrastRatio($foreground, $background);
+        $first = Color::parse((string) $foreground);
+        $second = Color::parse((string) $background);
 
-        if ($ratio === null) {
+        if ($first === null || $second === null) {
             return Response::error('Could not calculate contrast ratio. Check that colors are valid (hex, rgb, or named colors).');
         }
+
+        $ratio = $first->contrastWith($second);
 
         return Response::json([
             'foreground' => $foreground,

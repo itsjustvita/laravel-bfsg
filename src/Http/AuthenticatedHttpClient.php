@@ -1,6 +1,6 @@
 <?php
 
-namespace ItsJustVita\LaravelBfsg\Services;
+namespace ItsJustVita\LaravelBfsg\Http;
 
 use Exception;
 use Illuminate\Http\Client\PendingRequest;

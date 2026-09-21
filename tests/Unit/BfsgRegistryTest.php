@@ -53,7 +53,7 @@ class BfsgRegistryTest extends TestCase
         $this->assertSame(['custom.always'], array_map(fn ($v) => $v->key, $result->all()));
     }
 
-    public function test_analyze_returns_analysis_result_and_wraps_legacy_analyzers(): void
+    public function test_analyze_returns_analysis_result(): void
     {
         $result = (new Bfsg)->analyze('<html><body><img src="x.jpg"></body></html>', ['url' => 'https://example.com/']);
 

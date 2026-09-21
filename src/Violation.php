@@ -27,49 +27,6 @@ final readonly class Violation implements JsonSerializable
         public bool $autoFixable = false,
     ) {}
 
-    /**
-     * Wrap a v2-style issue array. Removed once every analyzer extends BaseAnalyzer.
-     */
-    public static function fromLegacy(string $analyzer, array $issue): self
-    {
-        [$rule, $related, $tags] = self::splitLegacyRule($issue['rule'] ?? null);
-
-        $known = ['type', 'severity', 'rule', 'element', 'message', 'suggestion', 'auto_fixable'];
-
-        return new self(
-            analyzer: $analyzer,
-            key: $analyzer.'.legacy',
-            severity: Severity::fromLegacy($issue['type'] ?? $issue['severity'] ?? null),
-            rule: $rule,
-            params: [
-                'message' => (string) ($issue['message'] ?? ''),
-                'suggestion' => (string) ($issue['suggestion'] ?? ''),
-            ],
-            element: isset($issue['element']) ? (string) $issue['element'] : null,
-            meta: array_diff_key($issue, array_flip($known)),
-            related: $related,
-            tags: $tags,
-            autoFixable: (bool) ($issue['auto_fixable'] ?? false),
-        );
-    }
-
-    /** @return array{0: ?string, 1: list<string>, 2: list<string>} */
-    private static function splitLegacyRule(?string $rule): array
-    {
-        if ($rule === null || trim($rule) === '') {
-            return [null, [], []];
-        }
-
-        preg_match_all('/\b(\d\.\d\.\d{1,2})\b/', $rule, $matches);
-        $criteria = $matches[1];
-
-        if ($criteria === []) {
-            return [null, [], ['security']];
-        }
-
-        return [array_shift($criteria), array_values($criteria), []];
-    }
-
     public function message(?string $locale = null): string
     {
         return $this->translate('message', $locale);
@@ -113,10 +70,6 @@ final readonly class Violation implements JsonSerializable
 
     private function translate(string $part, ?string $locale): string
     {
-        if (str_ends_with($this->key, '.legacy')) {
-            return (string) ($this->params[$part] ?? '');
-        }
-
         $id = 'bfsg::violations.'.$this->key.'.'.$part;
 
         if (! function_exists('app') || ! app()->bound('translator')) {

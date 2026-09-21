@@ -49,10 +49,10 @@ class Bfsg
     /** @var array<string, mixed> the `bfsg` config array */
     private array $config;
 
-    /** @var array<string, object|string> key => instance or class name */
+    /** @var array<string, Analyzer|class-string<Analyzer>> key => instance or class name */
     private array $analyzers = [];
 
-    /** @var array<string, object> resolved instances */
+    /** @var array<string, Analyzer> resolved instances */
     private array $instances = [];
 
     /**
@@ -72,8 +72,12 @@ class Bfsg
         }
     }
 
-    /** Register (or replace) an analyzer under a key. Legacy array-returning analyzers are accepted until Phase 1 Task 29. */
-    public function register(string $key, object|string $analyzer): static
+    /**
+     * Register (or replace) an analyzer under a key.
+     *
+     * @param  Analyzer|class-string<Analyzer>  $analyzer
+     */
+    public function register(string $key, Analyzer|string $analyzer): static
     {
         $this->analyzers[$key] = $analyzer;
         unset($this->instances[$key]);
@@ -108,7 +112,7 @@ class Bfsg
         return $clone;
     }
 
-    /** @return array<string, object> resolved analyzer instances in registry order */
+    /** @return array<string, Analyzer> resolved analyzer instances in registry order */
     public function analyzers(): array
     {
         $resolved = [];
@@ -151,9 +155,7 @@ class Bfsg
         foreach ($this->analyzers() as $key => $analyzer) {
             $run[] = $key;
 
-            $violations = $analyzer instanceof Analyzer
-                ? $analyzer->analyze($document)
-                : $this->legacyViolations($key, $analyzer, $document);
+            $violations = $analyzer->analyze($document);
 
             if ($violations !== []) {
                 $byAnalyzer[$key] = array_values($violations);
@@ -168,7 +170,7 @@ class Bfsg
         return $this->analyze($html)->isAccessible();
     }
 
-    private function resolve(string $key): object
+    private function resolve(string $key): Analyzer
     {
         if (! isset($this->instances[$key])) {
             $entry = $this->analyzers[$key];
@@ -176,17 +178,5 @@ class Bfsg
         }
 
         return $this->instances[$key];
-    }
-
-    /**
-     * Compatibility shim for analyzers that still return ['issues' => [...]]. Removed in Task 29.
-     *
-     * @return list<Violation>
-     */
-    private function legacyViolations(string $key, object $analyzer, HtmlDocument $document): array
-    {
-        $result = $analyzer->analyze($document->dom());
-
-        return array_map(fn (array $issue) => Violation::fromLegacy($key, $issue), $result['issues'] ?? []);
     }
 }

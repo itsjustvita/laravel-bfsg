@@ -137,17 +137,4 @@ class ContrastAnalyzer extends BaseAnalyzer
 
         return null;
     }
-
-    /** Kept for Mcp\Tools\CheckContrast; delegates to Css\Color. */
-    public function calculateContrastRatio(string $color1, string $color2): ?float
-    {
-        $first = Color::parse($color1);
-        $second = Color::parse($color2);
-
-        if ($first === null || $second === null) {
-            return null;
-        }
-
-        return $first->contrastWith($second);
-    }
 }

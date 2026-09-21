@@ -8,15 +8,6 @@ enum Severity: string
     case Warning = 'warning';
     case Notice = 'notice';
 
-    public static function fromLegacy(?string $value): self
-    {
-        return match (strtolower(trim((string) $value))) {
-            'error', 'critical' => self::Error,
-            'warning' => self::Warning,
-            default => self::Notice,
-        };
-    }
-
     public function rank(): int
     {
         return match ($this) {

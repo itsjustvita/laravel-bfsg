@@ -1,10 +1,10 @@
 <?php
 
-namespace ItsJustVita\LaravelBfsg\Tests\Unit;
+namespace ItsJustVita\LaravelBfsg\Tests\Unit\Http;
 
 use Exception;
 use Illuminate\Support\Facades\Http;
-use ItsJustVita\LaravelBfsg\Services\AuthenticatedHttpClient;
+use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class AuthenticatedHttpClientTest extends TestCase

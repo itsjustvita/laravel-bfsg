@@ -78,35 +78,4 @@ class ViolationTest extends TestCase
         $this->assertFalse($array['auto_fixable']);
         $this->assertSame($array, json_decode(json_encode($this->violation(['related' => ['4.1.2'], 'tags' => ['best-practice'], 'meta' => ['approximate' => true]])), true));
     }
-
-    public function test_from_legacy_wraps_a_v2_issue_array(): void
-    {
-        $violation = Violation::fromLegacy('links', [
-            'type' => 'warning',
-            'rule' => 'WCAG 2.4.4, 4.1.2',
-            'element' => 'a',
-            'message' => 'Empty link without accessible text',
-            'suggestion' => 'Add link text',
-            'href' => '/x',
-            'auto_fixable' => false,
-        ]);
-
-        $this->assertSame('links', $violation->analyzer);
-        $this->assertSame('links.legacy', $violation->key);
-        $this->assertSame(Severity::Warning, $violation->severity);
-        $this->assertSame('2.4.4', $violation->rule);
-        $this->assertSame(['4.1.2'], $violation->related);
-        $this->assertSame('a', $violation->element);
-        $this->assertSame(['href' => '/x'], $violation->meta);
-        $this->assertSame('Empty link without accessible text', $violation->message());
-        $this->assertSame('Add link text', $violation->suggestion());
-    }
-
-    public function test_from_legacy_maps_non_wcag_rules_to_null_with_security_tag(): void
-    {
-        $violation = Violation::fromLegacy('links', ['type' => 'warning', 'rule' => 'Security Best Practice', 'message' => 'x']);
-
-        $this->assertNull($violation->rule);
-        $this->assertSame(['security'], $violation->tags);
-    }
 }

@@ -137,12 +137,4 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         // The inline color (#cccccc on white) has a ratio of about 1.6:1 — should be flagged.
         $this->assertHasViolation($this->analyze($html), 'contrast.insufficient', severity: Severity::Error);
     }
-
-    public function test_calculate_contrast_ratio_helper_delegates_to_color(): void
-    {
-        $analyzer = new ContrastAnalyzer;
-
-        $this->assertSame(21.0, $analyzer->calculateContrastRatio('#000000', '#ffffff'));
-        $this->assertNull($analyzer->calculateContrastRatio('not-a-color', '#ffffff'));
-    }
 }
