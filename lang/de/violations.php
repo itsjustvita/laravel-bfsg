@@ -93,6 +93,40 @@ return [
             'suggestion' => 'Dateityp und Größe im Linktext ergänzen, z. B. „Bericht (:type, 2 MB)“',
         ],
     ],
+    'keyboard' => [
+        'missing_skip_link' => [
+            'message' => 'Kein Sprunglink am Seitenanfang gefunden',
+            'suggestion' => 'Einen Link wie <a href="#main">Zum Hauptinhalt springen</a> als erstes fokussierbares Element ergänzen',
+        ],
+        'dialog_missing_aria_modal' => [
+            'message' => 'Dialog ohne aria-modal="true"',
+            'suggestion' => 'aria-modal="true" ergänzen und den Fokus im geöffneten Dialog steuern',
+        ],
+        'dialog_missing_name' => [
+            'message' => 'Dialog ohne zugänglichen Namen',
+            'suggestion' => 'aria-labelledby auf den Dialogtitel setzen oder aria-label ergänzen',
+        ],
+        'negative_tabindex_on_interactive' => [
+            'message' => 'Interaktives <:tag> aus der Tab-Reihenfolge entfernt (tabindex="-1")',
+            'suggestion' => 'tabindex="-1" entfernen, sofern der Fokus nicht per Script gesteuert wird',
+        ],
+        'anchor_not_focusable' => [
+            'message' => 'Anker ohne href ist nicht per Tastatur erreichbar',
+            'suggestion' => 'href ergänzen oder einen <button> mit Click-Handler verwenden',
+        ],
+        'positive_tabindex' => [
+            'message' => 'Positiver tabindex (:value) überschreibt die natürliche Fokusreihenfolge',
+            'suggestion' => 'tabindex="0" verwenden oder die Elemente im Quelltext umsortieren',
+        ],
+        'click_without_keyboard' => [
+            'message' => 'Nicht interaktives <:tag> mit Click-Handler ist nicht per Tastatur bedienbar',
+            'suggestion' => '<button> oder <a> verwenden oder tabindex="0", eine Rolle und einen Tastatur-Handler ergänzen',
+        ],
+        'mouse_only_handler' => [
+            'message' => '<:tag> hat Maus-Handler, aber kein Tastatur-Äquivalent',
+            'suggestion' => 'onfocus/onblur/onkeydown-Handler passend zu den Maus-Events ergänzen',
+        ],
+    ],
     'aria' => [
         'invalid_role' => [
             'message' => 'Ungültige ARIA-Rolle „:role“',

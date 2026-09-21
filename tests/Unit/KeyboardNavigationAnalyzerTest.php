@@ -2,12 +2,18 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\KeyboardNavigationAnalyzer;
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
 
-class KeyboardNavigationAnalyzerTest extends TestCase
+class KeyboardNavigationAnalyzerTest extends AnalyzerTestCase
 {
+    protected function analyzer(): Analyzer
+    {
+        return new KeyboardNavigationAnalyzer;
+    }
+
     public function test_detects_missing_skip_links(): void
     {
         $html = '<!DOCTYPE html><html><body>
@@ -15,15 +21,13 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <main>Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
+        $violation = $this->assertHasViolation($violations, 'keyboard.missing_skip_link', severity: Severity::Warning);
+        $this->assertNull($violation->element);
+        $this->assertSame('2.4.1', $violation->rule);
+        $this->assertFalse($violation->autoFixable);
         $this->assertCount(1, $violations);
-        $this->assertStringContainsString('No skip link found', $violations[0]['message']);
     }
 
     public function test_accepts_pages_with_skip_links(): void
@@ -34,16 +38,7 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <main id="main">Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        // Should not have skip link violation
-        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
-        $this->assertEmpty($skipLinkViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.missing_skip_link');
     }
 
     public function test_warns_about_positive_tabindex_values(): void
@@ -54,15 +49,27 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <button tabindex="3">Third</button>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
+        $violation = $this->assertHasViolation($violations, 'keyboard.positive_tabindex', element: 'button', severity: Severity::Warning);
+        $this->assertSame('2.4.3', $violation->rule);
+        $this->assertSame(['value' => 1], $violation->params);
+        $this->assertViolationCount($violations, 'keyboard.positive_tabindex', 3);
+    }
 
-        $tabindexViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'positive tabindex'));
-        $this->assertNotEmpty($tabindexViolations);
+    public function test_detects_negative_tabindex_on_interactive_elements(): void
+    {
+        $html = '<!DOCTYPE html><html><body>
+            <a href="#main">Skip to main content</a>
+            <button tabindex="-1">Hidden from tab order</button>
+        </body></html>';
+
+        $violations = $this->analyze($html);
+
+        $violation = $this->assertHasViolation($violations, 'keyboard.negative_tabindex_on_interactive', element: 'button', severity: Severity::Warning);
+        $this->assertSame('2.1.1', $violation->rule);
+        $this->assertSame(['tag' => 'button'], $violation->params);
+        $this->assertViolationCount($violations, 'keyboard.negative_tabindex_on_interactive', 1);
     }
 
     public function test_detects_modals_without_proper_focus_management(): void
@@ -74,16 +81,16 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
+        $missingModal = $this->assertHasViolation($violations, 'keyboard.dialog_missing_aria_modal', element: 'div', severity: Severity::Error);
+        $this->assertSame('2.1.2', $missingModal->rule);
 
-        // Should have violations for missing aria-modal and aria-label
-        $modalViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Modal'));
-        $this->assertCount(2, $modalViolations);
+        $missingName = $this->assertHasViolation($violations, 'keyboard.dialog_missing_name', element: 'div', severity: Severity::Error);
+        $this->assertSame('4.1.2', $missingName->rule);
+
+        $this->assertViolationCount($violations, 'keyboard.dialog_missing_aria_modal', 1);
+        $this->assertViolationCount($violations, 'keyboard.dialog_missing_name', 1);
     }
 
     public function test_accepts_properly_configured_modals(): void
@@ -95,16 +102,10 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        // Should not have modal violations
-        $modalViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Modal') || str_contains($v['message'], 'modal'));
-        $this->assertEmpty($modalViolations);
+        $this->assertNoViolation($violations, 'keyboard.dialog_missing_aria_modal');
+        $this->assertNoViolation($violations, 'keyboard.dialog_missing_name');
     }
 
     public function test_detects_links_without_href(): void
@@ -114,21 +115,14 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <a href="#">Valid link</a>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $linkViolations = array_values(array_filter(
-            $violations,
-            fn ($v) => str_contains($v['message'], 'Link without href')
-        ));
-        $this->assertCount(1, $linkViolations);
-        // v2.2.0 Fix 3: downgraded from `error` to `warning` — many modern <a> elements
-        // use tabindex+JS and ARE keyboard-accessible; we no longer treat all as broken.
-        $this->assertSame('warning', $linkViolations[0]['type']);
+        // v2.2.0 Fix 3: a warning, not an error — many modern <a> elements
+        // use tabindex+JS and ARE keyboard-accessible.
+        $violation = $this->assertHasViolation($violations, 'keyboard.anchor_not_focusable', element: 'a', severity: Severity::Warning);
+        $this->assertSame('2.1.1', $violation->rule);
+        $this->assertSame([], $violation->params);
+        $this->assertViolationCount($violations, 'keyboard.anchor_not_focusable', 1);
     }
 
     public function test_anchor_without_href_but_with_tabindex_and_keyboard_handler_is_accepted(): void
@@ -138,15 +132,7 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <a tabindex="0" onkeydown="handleKey(event)" onclick="handleClick()">Interactive</a>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $linkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Link without href'));
-        $this->assertEmpty($linkViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.anchor_not_focusable');
     }
 
     public function test_anchor_without_href_but_with_role_button_and_tabindex_is_accepted(): void
@@ -156,15 +142,7 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <a role="button" tabindex="0">Button-styled anchor</a>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $linkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'Link without href'));
-        $this->assertEmpty($linkViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.anchor_not_focusable');
     }
 
     public function test_german_skip_link_zum_inhalt_is_recognized(): void
@@ -176,36 +154,19 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <main id="main">Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
-        $this->assertEmpty($skipLinkViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.missing_skip_link');
     }
 
     public function test_german_skip_link_ueberspringen_is_recognized(): void
     {
         // v2.2.0 Fix 4: German "Überspringen" (with umlaut) must count.
-        // Prefix with UTF-8 BOM/meta so DOMDocument preserves the umlaut.
         $html = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
             <a href="#main">Navigation überspringen</a>
             <nav>Navigation</nav>
             <main id="main">Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML('<?xml encoding="utf-8" ?>'.$html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
-        $this->assertEmpty($skipLinkViolations);
+        $this->assertNoViolation($this->analyze('<?xml encoding="utf-8" ?>'.$html), 'keyboard.missing_skip_link');
     }
 
     public function test_german_skip_link_zur_navigation_is_recognized(): void
@@ -217,15 +178,7 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <main>Main content</main>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $skipLinkViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'skip link'));
-        $this->assertEmpty($skipLinkViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.missing_skip_link');
     }
 
     public function test_detects_click_handlers_on_non_interactive_elements(): void
@@ -236,15 +189,13 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             <button onclick="valid()">Valid button</button>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $clickViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'click handler'));
-        $this->assertCount(2, $clickViolations);
+        $violation = $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div', severity: Severity::Error);
+        $this->assertSame('2.1.1', $violation->rule);
+        $this->assertSame(['tag' => 'div'], $violation->params);
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'span', severity: Severity::Error);
+        $this->assertViolationCount($violations, 'keyboard.click_without_keyboard', 2);
     }
 
     public function test_accepts_non_interactive_elements_with_proper_keyboard_support(): void
@@ -255,16 +206,7 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        // Should not have violations for this properly configured element
-        $clickViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'click handler'));
-        $this->assertEmpty($clickViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.click_without_keyboard');
     }
 
     public function test_warns_about_mouse_only_event_handlers(): void
@@ -275,15 +217,12 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze($html);
 
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $mouseViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'mouse events'));
-        $this->assertCount(1, $mouseViolations);
+        $violation = $this->assertHasViolation($violations, 'keyboard.mouse_only_handler', element: 'div', severity: Severity::Warning);
+        $this->assertSame('2.1.1', $violation->rule);
+        $this->assertSame(['tag' => 'div'], $violation->params);
+        $this->assertViolationCount($violations, 'keyboard.mouse_only_handler', 1);
     }
 
     public function test_accepts_elements_with_both_mouse_and_keyboard_events(): void
@@ -294,14 +233,6 @@ class KeyboardNavigationAnalyzerTest extends TestCase
             </div>
         </body></html>';
 
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        $analyzer = new KeyboardNavigationAnalyzer;
-        $result = $analyzer->analyze($dom);
-        $violations = $result['issues'] ?? [];
-
-        $mouseViolations = array_filter($violations, fn ($v) => str_contains($v['message'], 'mouse events'));
-        $this->assertEmpty($mouseViolations);
+        $this->assertNoViolation($this->analyze($html), 'keyboard.mouse_only_handler');
     }
 }

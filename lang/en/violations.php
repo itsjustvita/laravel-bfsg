@@ -93,6 +93,40 @@ return [
             'suggestion' => 'Add the file type and size to the link text, e.g. "Report (:type, 2 MB)"',
         ],
     ],
+    'keyboard' => [
+        'missing_skip_link' => [
+            'message' => 'No skip link found at the beginning of the page',
+            'suggestion' => 'Add a link such as <a href="#main">Skip to main content</a> as the first focusable element',
+        ],
+        'dialog_missing_aria_modal' => [
+            'message' => 'Dialog without aria-modal="true"',
+            'suggestion' => 'Add aria-modal="true" and manage focus while the dialog is open',
+        ],
+        'dialog_missing_name' => [
+            'message' => 'Dialog without accessible name',
+            'suggestion' => 'Add aria-labelledby pointing to the dialog title, or aria-label',
+        ],
+        'negative_tabindex_on_interactive' => [
+            'message' => 'Interactive <:tag> removed from the tab order (tabindex="-1")',
+            'suggestion' => 'Remove tabindex="-1" unless focus is managed by a script',
+        ],
+        'anchor_not_focusable' => [
+            'message' => 'Anchor without href is not keyboard accessible',
+            'suggestion' => 'Add an href, or use a <button> with a click handler',
+        ],
+        'positive_tabindex' => [
+            'message' => 'Positive tabindex (:value) overrides the natural focus order',
+            'suggestion' => 'Use tabindex="0" or reorder the elements in the source',
+        ],
+        'click_without_keyboard' => [
+            'message' => 'Non-interactive <:tag> with click handler is not keyboard accessible',
+            'suggestion' => 'Use a <button> or <a>, or add tabindex="0", a role and a keyboard handler',
+        ],
+        'mouse_only_handler' => [
+            'message' => '<:tag> has mouse event handlers but no keyboard equivalent',
+            'suggestion' => 'Add onfocus/onblur/onkeydown handlers equivalent to the mouse events',
+        ],
+    ],
     'aria' => [
         'invalid_role' => [
             'message' => 'Invalid ARIA role ":role"',
