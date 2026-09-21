@@ -7,7 +7,7 @@ use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 
 /**
- * @method static \ItsJustVita\LaravelBfsg\Bfsg register(string $key, object|string $analyzer)
+ * @method static \ItsJustVita\LaravelBfsg\Bfsg register(string $key, \ItsJustVita\LaravelBfsg\Contracts\Analyzer|string $analyzer)
  * @method static \ItsJustVita\LaravelBfsg\Bfsg forget(string $key)
  * @method static \ItsJustVita\LaravelBfsg\Bfsg only(array $keys)
  * @method static \ItsJustVita\LaravelBfsg\Bfsg except(array $keys)

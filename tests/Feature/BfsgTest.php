@@ -46,7 +46,7 @@ class BfsgTest extends TestCase
         $violations = (new Bfsg)->analyze($html)->toArray()['violations'];
 
         $skipLinkFindings = collect($violations['keyboard'] ?? [])
-            ->filter(fn ($issue) => str_contains($issue['message'], 'skip link'));
+            ->filter(fn ($issue) => $issue['key'] === 'keyboard.missing_skip_link');
 
         $this->assertCount(0, $skipLinkFindings, 'German skip link must be recognised');
     }

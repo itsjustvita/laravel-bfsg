@@ -115,4 +115,15 @@ class HtmlDocumentTest extends TestCase
         $this->assertSame("'plain'", $doc->xpathLiteral('plain'));
         $this->assertSame('"it\'s"', $doc->xpathLiteral("it's"));
     }
+
+    public function test_xpath_literal_handles_values_with_both_quote_kinds(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body><label for="a&quot;b\'c">x</label></body></html>');
+        $value = 'a"b\'c';
+
+        $literal = $doc->xpathLiteral($value);
+
+        $this->assertStringStartsWith('concat(', $literal);
+        $this->assertCount(1, $doc->query('//label[@for='.$literal.']'));
+    }
 }
