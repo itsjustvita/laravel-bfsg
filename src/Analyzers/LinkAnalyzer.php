@@ -2,12 +2,21 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
-use DOMXPath;
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class LinkAnalyzer
+class LinkAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    private const MAX_TEXT = 50;
+
+    private const DOWNLOAD_EXTENSIONS = '/\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i';
+
+    protected string $key = 'links';
+
+    protected string $description = 'Link purpose and link behaviour';
+
+    protected array $rules = ['2.4.4', '4.1.2', '3.2.5'];
 
     // Common non-descriptive link texts to avoid (English + German).
     protected const NON_DESCRIPTIVE_TEXTS = [
@@ -40,169 +49,97 @@ class LinkAnalyzer
         'herunterladen',
     ];
 
-    public function analyze(DOMDocument $dom): array
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
-
-        // Check for non-descriptive link text
-        $this->checkNonDescriptiveLinks($xpath);
-
-        // Check for empty links
-        $this->checkEmptyLinks($xpath);
-
-        // Check for links without href
-        $this->checkLinksWithoutHref($xpath);
-
-        // Check for adjacent duplicate links
-        $this->checkAdjacentDuplicateLinks($xpath);
-
-        // Check for links opening in new window without warning
-        $this->checkNewWindowLinks($xpath);
-
-        // Check for link purpose clarity
-        $this->checkLinkPurposeClarity($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkNonDescriptiveLinks();
+        $this->checkEmptyLinks();
+        $this->checkLinksWithoutHref();
+        $this->checkAdjacentDuplicateLinks();
+        $this->checkNewWindowLinks();
+        $this->checkLinkPurposeClarity();
     }
 
-    protected function checkNonDescriptiveLinks(DOMXPath $xpath): void
+    protected function checkNonDescriptiveLinks(): void
     {
-        $links = $xpath->query('//a[@href]');
+        foreach ($this->query('//a[@href]') as $link) {
+            $linkText = $this->text($link);
 
-        foreach ($links as $link) {
-            $linkText = trim(mb_strtolower($link->textContent));
-
-            if (in_array($linkText, self::NON_DESCRIPTIVE_TEXTS, true)) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 2.4.4, 2.4.9',
-                    'element' => 'a',
-                    'message' => "Non-descriptive link text: '{$linkText}'",
+            if (in_array(Text::lower($linkText), self::NON_DESCRIPTIVE_TEXTS, true)) {
+                $this->report('non_descriptive', Severity::Error, '2.4.4', $link, [
+                    'text' => $this->excerpt($linkText),
                     'href' => $link->getAttribute('href'),
-                    'suggestion' => 'Use descriptive text that explains the link destination or purpose',
-                    'auto_fixable' => false,
-                ];
+                ], related: ['2.4.9']);
             }
 
-            // Check for very short link text
-            if (strlen($linkText) > 0 && strlen($linkText) <= 2 && ! $link->hasAttribute('aria-label')) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 2.4.4',
-                    'element' => 'a',
-                    'message' => "Very short link text: '{$linkText}'",
+            // Very short link text without an accessible name of its own.
+            if (Text::length($linkText) > 0 && Text::length($linkText) <= 2 && ! $link->hasAttribute('aria-label')) {
+                $this->report('non_descriptive', Severity::Warning, '2.4.4', $link, [
+                    'text' => $this->excerpt($linkText),
                     'href' => $link->getAttribute('href'),
-                    'suggestion' => 'Consider using more descriptive text or adding aria-label',
-                    'auto_fixable' => false,
-                ];
+                ]);
             }
         }
     }
 
-    protected function checkEmptyLinks(DOMXPath $xpath): void
+    protected function checkEmptyLinks(): void
     {
-        $emptyLinks = $xpath->query('//a[@href and not(text()) and not(*)]');
-
-        foreach ($emptyLinks as $link) {
-            // Check if link has aria-label or title
+        foreach ($this->query('//a[@href and not(text()) and not(*)]') as $link) {
             if (! $link->hasAttribute('aria-label') && ! $link->hasAttribute('title')) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 2.4.4, 4.1.2',
-                    'element' => 'a',
-                    'message' => 'Empty link without accessible text',
+                $this->report('missing_name', Severity::Error, '2.4.4', $link, [
                     'href' => $link->getAttribute('href'),
-                    'suggestion' => 'Add link text, aria-label, or title attribute',
-                    'auto_fixable' => false,
-                ];
+                ], related: ['4.1.2']);
             }
         }
 
-        // Check for links with only images but no alt text
-        $imageLinks = $xpath->query('//a[@href]/img[not(@alt) or @alt=""]');
-
-        foreach ($imageLinks as $img) {
+        // Links whose only content is an image without alternative text.
+        foreach ($this->query('//a[@href]/img[not(@alt) or @alt=""]') as $img) {
             $link = $img->parentNode;
 
-            // Check if link has other text content
-            $textContent = trim(str_replace($img->textContent, '', $link->textContent));
+            if (! $link instanceof DOMElement) {
+                continue;
+            }
 
-            if (empty($textContent) && ! $link->hasAttribute('aria-label')) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 2.4.4, 1.1.1',
-                    'element' => 'a',
-                    'message' => 'Link with image lacking alternative text',
+            if ($this->text($link) === '' && ! $link->hasAttribute('aria-label')) {
+                $this->report('missing_name', Severity::Error, '2.4.4', $link, [
                     'href' => $link->getAttribute('href'),
-                    'suggestion' => 'Add alt text to image or aria-label to link',
-                    'auto_fixable' => false,
-                ];
+                ], meta: ['reason' => 'image_without_alt'], related: ['1.1.1']);
             }
         }
     }
 
-    protected function checkLinksWithoutHref(DOMXPath $xpath): void
+    protected function checkLinksWithoutHref(): void
     {
-        $linksWithoutHref = $xpath->query('//a[not(@href)]');
-
-        foreach ($linksWithoutHref as $link) {
-            $this->violations[] = [
-                'type' => 'warning',
-                'rule' => 'WCAG 2.4.4',
-                'element' => 'a',
-                'message' => 'Anchor element without href attribute',
-                'content' => substr(trim($link->textContent), 0, 50),
-                'suggestion' => 'Add href attribute or use a different element',
-                'auto_fixable' => false,
-            ];
+        foreach ($this->query('//a[not(@href)]') as $link) {
+            $this->report('missing_href', Severity::Warning, '2.4.4', $link, [
+                'text' => $this->excerpt($this->text($link)),
+            ]);
         }
     }
 
-    protected function checkAdjacentDuplicateLinks(DOMXPath $xpath): void
+    protected function checkAdjacentDuplicateLinks(): void
     {
-        $links = $xpath->query('//a[@href]');
         $previousHref = null;
-        $previousText = null;
 
-        foreach ($links as $link) {
-            $currentHref = $link->getAttribute('href');
-            $currentText = trim($link->textContent);
+        foreach ($this->query('//a[@href]') as $link) {
+            $href = $link->getAttribute('href');
 
-            if ($previousHref === $currentHref && ! empty($currentHref)) {
-                // Check if links are adjacent (siblings)
-                if ($link->previousSibling && $link->previousSibling->nodeName === 'a') {
-                    $this->violations[] = [
-                        'type' => 'warning',
-                        'rule' => 'WCAG 2.4.4',
-                        'element' => 'a',
-                        'message' => 'Adjacent duplicate links to same destination',
-                        'href' => $currentHref,
-                        'suggestion' => 'Combine duplicate links or differentiate their purposes',
-                        'auto_fixable' => false,
-                    ];
-                }
+            if ($href !== '' && $href === $previousHref && $link->previousSibling?->nodeName === 'a') {
+                $this->report('adjacent_duplicate', Severity::Warning, '2.4.4', $link, ['href' => $href]);
             }
 
-            $previousHref = $currentHref;
-            $previousText = $currentText;
+            $previousHref = $href;
         }
     }
 
     /**
-     * For external links with target="_blank", we check two concerns:
+     * For links with target="_blank" two independent concerns are reported:
      *   1. UX (WCAG 3.2.5): does the user know it opens in a new window?
-     *   2. Security: does the link have rel="noopener noreferrer"?
-     *
-     * Previously we emitted 2 findings when both were missing; now we combine
-     * into a single finding when both apply, to reduce count inflation.
+     *   2. Security: does the link carry rel="noopener noreferrer"?
      */
-    protected function checkNewWindowLinks(DOMXPath $xpath): void
+    protected function checkNewWindowLinks(): void
     {
-        $newWindowLinks = $xpath->query('//a[@target="_blank" or @target="blank"]');
-
-        foreach ($newWindowLinks as $link) {
-            $linkText = trim($link->textContent);
+        foreach ($this->query('//a[@target="_blank" or @target="blank"]') as $link) {
+            $linkText = $this->text($link);
             $ariaLabel = $link->getAttribute('aria-label');
             $title = $link->getAttribute('title');
             $rel = $link->getAttribute('rel');
@@ -219,97 +156,57 @@ class LinkAnalyzer
                 stripos($title, 'new tab') !== false
             );
 
-            $missingWarning = ! $hasWarning;
-            $missingRel = (stripos($rel, 'noopener') === false || stripos($rel, 'noreferrer') === false);
-
-            if ($missingWarning && $missingRel) {
-                // Combined finding — both issues on one link.
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 3.2.5, Security',
-                    'element' => 'a',
-                    'message' => 'External link opens in new window without warning and lacks rel="noopener noreferrer"',
+            if (! $hasWarning) {
+                $this->report('new_window_unannounced', Severity::Warning, '3.2.5', $link, [
                     'href' => $href,
-                    'linkText' => substr($linkText, 0, 50),
-                    'suggestion' => 'Add "(opens in new window)" to link text AND rel="noopener noreferrer" to the link',
-                    'auto_fixable' => true,
-                ];
-
-                continue;
+                    'text' => $this->excerpt($linkText),
+                ]);
             }
 
-            if ($missingWarning) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 3.2.5',
-                    'element' => 'a',
-                    'message' => 'Link opens in new window without warning',
+            if (stripos($rel, 'noopener') === false || stripos($rel, 'noreferrer') === false) {
+                $this->report('missing_noopener', Severity::Warning, null, $link, [
                     'href' => $href,
-                    'linkText' => substr($linkText, 0, 50),
-                    'suggestion' => 'Add "(opens in new window)" to link text or aria-label',
-                    'auto_fixable' => true,
-                ];
-            }
-
-            if ($missingRel) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'Security Best Practice',
-                    'element' => 'a',
-                    'message' => 'External link missing rel="noopener noreferrer"',
-                    'href' => $href,
-                    'suggestion' => 'Add rel="noopener noreferrer" for security',
-                    'auto_fixable' => true,
-                ];
+                ], tags: ['security'], autoFixable: true);
             }
         }
     }
 
-    protected function checkLinkPurposeClarity(DOMXPath $xpath): void
+    protected function checkLinkPurposeClarity(): void
     {
-        $links = $xpath->query('//a[@href]');
-
-        foreach ($links as $link) {
+        foreach ($this->query('//a[@href]') as $link) {
             $href = $link->getAttribute('href');
-            $linkText = trim($link->textContent);
+            $linkText = $this->text($link);
 
-            // Check for URL as link text
             if (filter_var($linkText, FILTER_VALIDATE_URL)) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 2.4.4',
-                    'element' => 'a',
-                    'message' => 'URL used as link text',
+                $this->report('url_as_text', Severity::Warning, '2.4.4', $link, [
                     'href' => $href,
-                    'linkText' => substr($linkText, 0, 50),
-                    'suggestion' => 'Use descriptive text instead of URL',
-                    'auto_fixable' => false,
-                ];
+                    'text' => $this->excerpt($linkText),
+                ]);
             }
 
-            // Check for file download links without indication
-            if (preg_match('/\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i', $href)) {
-                $hasFileIndication = (
-                    stripos($linkText, 'pdf') !== false ||
-                    stripos($linkText, 'download') !== false ||
-                    stripos($linkText, 'document') !== false ||
-                    stripos($linkText, 'file') !== false
-                );
+            if (preg_match(self::DOWNLOAD_EXTENSIONS, $href) !== 1) {
+                continue;
+            }
 
-                if (! $hasFileIndication) {
-                    $fileType = strtoupper(pathinfo($href, PATHINFO_EXTENSION));
-                    $this->violations[] = [
-                        'type' => 'warning',
-                        'rule' => 'WCAG 2.4.4',
-                        'element' => 'a',
-                        'message' => 'File download link without file type indication',
-                        'href' => $href,
-                        'linkText' => substr($linkText, 0, 50),
-                        'suggestion' => "Add file type and size info (e.g., 'Document ({$fileType}, 2MB)')",
-                        'auto_fixable' => false,
-                    ];
-                }
+            $hasFileIndication = (
+                stripos($linkText, 'pdf') !== false ||
+                stripos($linkText, 'download') !== false ||
+                stripos($linkText, 'document') !== false ||
+                stripos($linkText, 'file') !== false
+            );
+
+            if (! $hasFileIndication) {
+                $this->report('download_unannounced', Severity::Warning, '2.4.4', $link, [
+                    'href' => $href,
+                    'text' => $this->excerpt($linkText),
+                    'type' => strtoupper(pathinfo($href, PATHINFO_EXTENSION)),
+                ]);
             }
         }
+    }
+
+    protected function excerpt(string $text): string
+    {
+        return Text::truncate($text, self::MAX_TEXT);
     }
 }

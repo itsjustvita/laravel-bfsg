@@ -59,6 +59,40 @@ return [
             'suggestion' => 'Ensure a contrast ratio of at least 4.5:1 for body text',
         ],
     ],
+    'links' => [
+        'non_descriptive' => [
+            'message' => 'Non-descriptive link text ":text" (:href)',
+            'suggestion' => 'Use link text that describes the destination, or add an aria-label',
+        ],
+        'missing_name' => [
+            'message' => 'Link without accessible text (:href)',
+            'suggestion' => 'Add link text, an aria-label, or alt text on the image inside the link',
+        ],
+        'missing_href' => [
+            'message' => 'Anchor element without href attribute (":text")',
+            'suggestion' => 'Add an href, or use a <button> for actions',
+        ],
+        'adjacent_duplicate' => [
+            'message' => 'Adjacent duplicate links to :href',
+            'suggestion' => 'Merge adjacent links to the same destination into one link',
+        ],
+        'new_window_unannounced' => [
+            'message' => 'Link opens in a new window without warning (:href)',
+            'suggestion' => 'Add "(opens in new window)" to the link text or aria-label',
+        ],
+        'missing_noopener' => [
+            'message' => 'Link with target="_blank" lacks rel="noopener" (:href)',
+            'suggestion' => 'Add rel="noopener noreferrer" to links that open a new window',
+        ],
+        'url_as_text' => [
+            'message' => 'URL used as link text (:text)',
+            'suggestion' => 'Use descriptive text instead of the URL',
+        ],
+        'download_unannounced' => [
+            'message' => 'Download link without file type indication (:href)',
+            'suggestion' => 'Add the file type and size to the link text, e.g. "Report (:type, 2 MB)"',
+        ],
+    ],
     'aria' => [
         'invalid_role' => [
             'message' => 'Invalid ARIA role ":role"',

@@ -59,6 +59,40 @@ return [
             'suggestion' => 'Kontrastverhältnis von mindestens 4.5:1 für Fließtext sicherstellen',
         ],
     ],
+    'links' => [
+        'non_descriptive' => [
+            'message' => 'Nicht aussagekräftiger Linktext „:text“ (:href)',
+            'suggestion' => 'Linktext verwenden, der das Ziel beschreibt, oder ein aria-label ergänzen',
+        ],
+        'missing_name' => [
+            'message' => 'Link ohne zugänglichen Text (:href)',
+            'suggestion' => 'Linktext, aria-label oder Alternativtext für das Bild im Link ergänzen',
+        ],
+        'missing_href' => [
+            'message' => 'Anker-Element ohne href-Attribut („:text“)',
+            'suggestion' => 'href ergänzen oder für Aktionen einen <button> verwenden',
+        ],
+        'adjacent_duplicate' => [
+            'message' => 'Benachbarte doppelte Links zu :href',
+            'suggestion' => 'Benachbarte Links zum selben Ziel zu einem Link zusammenfassen',
+        ],
+        'new_window_unannounced' => [
+            'message' => 'Link öffnet ein neues Fenster ohne Hinweis (:href)',
+            'suggestion' => '„(öffnet in neuem Fenster)“ im Linktext oder aria-label ergänzen',
+        ],
+        'missing_noopener' => [
+            'message' => 'Link mit target="_blank" ohne rel="noopener" (:href)',
+            'suggestion' => 'rel="noopener noreferrer" bei Links ergänzen, die ein neues Fenster öffnen',
+        ],
+        'url_as_text' => [
+            'message' => 'URL als Linktext verwendet (:text)',
+            'suggestion' => 'Beschreibenden Text statt der URL verwenden',
+        ],
+        'download_unannounced' => [
+            'message' => 'Download-Link ohne Angabe des Dateityps (:href)',
+            'suggestion' => 'Dateityp und Größe im Linktext ergänzen, z. B. „Bericht (:type, 2 MB)“',
+        ],
+    ],
     'aria' => [
         'invalid_role' => [
             'message' => 'Ungültige ARIA-Rolle „:role“',
