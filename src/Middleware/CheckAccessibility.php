@@ -5,8 +5,9 @@ namespace ItsJustVita\LaravelBfsg\Middleware;
 use Closure;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
-use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\RedirectResponse;
@@ -40,8 +41,7 @@ class CheckAccessibility
             $result = Bfsg::analyze($html, ['url' => $request->fullUrl()]);
 
             if ($result->count() > 0) {
-                $violations = $result->toArray()['violations'];
-                $this->handleViolations($request, $violations);
+                $this->handleViolations($request, $result);
 
                 // Add violations to response headers for debugging
                 if (config('app.debug')) {
@@ -106,90 +106,36 @@ class CheckAccessibility
     /**
      * Handle found violations
      */
-    protected function handleViolations(Request $request, array $violations): void
+    protected function handleViolations(Request $request, AnalysisResult $result): void
     {
-        $totalViolations = array_sum(array_map('count', $violations));
         $url = $request->fullUrl();
 
         // Log violations
         if (config('bfsg.middleware.log_violations', true)) {
-            Log::warning("BFSG: {$totalViolations} accessibility violations found on {$url}", [
+            $counts = $result->countBySeverity();
+
+            Log::warning("BFSG: {$result->count()} accessibility violations found on {$url}", [
                 'url' => $url,
-                'violations' => $violations,
+                'errors' => $counts['error'],
+                'warnings' => $counts['warning'],
+                'notices' => $counts['notice'],
+                'violations' => $result->toArray()['violations'],
                 'user_id' => $request->user()?->id,
                 'ip' => $request->ip(),
             ]);
         }
 
-        // Send notification if configured
-        if (config('bfsg.reporting.enabled') && config('bfsg.reporting.email')) {
-            // This would send an email notification
-            // You can implement this based on your notification preferences
-        }
-
         // Store in database if configured
         if (config('bfsg.reporting.save_to_database')) {
-            $this->storeViolations($url, $violations);
+            $this->storeViolations($result);
         }
     }
 
     /**
-     * Store violations in database
+     * Store the analysis in the database
      */
-    protected function storeViolations(string $url, array $violations): void
+    protected function storeViolations(AnalysisResult $result): void
     {
-        $totalViolations = array_sum(array_map('count', $violations));
-
-        $critical = 0;
-        $errors = 0;
-        $warnings = 0;
-        $notices = 0;
-
-        foreach ($violations as $issues) {
-            foreach ($issues as $issue) {
-                match ($issue['severity'] ?? 'notice') {
-                    'critical' => $critical++,
-                    'error' => $errors++,
-                    'warning' => $warnings++,
-                    default => $notices++,
-                };
-            }
-        }
-
-        $score = max(0, min(100, (int) (100 - ($critical * 10 + $errors * 5 + $warnings * 2 + $notices * 0.5))));
-
-        $grade = match (true) {
-            $score >= 95 => 'A+',
-            $score >= 90 => 'A',
-            $score >= 85 => 'B+',
-            $score >= 80 => 'B',
-            $score >= 75 => 'C+',
-            $score >= 70 => 'C',
-            $score >= 60 => 'D',
-            default => 'F',
-        };
-
-        $report = BfsgReport::create([
-            'url' => $url,
-            'total_violations' => $totalViolations,
-            'score' => $score,
-            'grade' => $grade,
-            'metadata' => [
-                'compliance_level' => config('bfsg.compliance_level'),
-            ],
-        ]);
-
-        foreach ($violations as $analyzer => $issues) {
-            foreach ($issues as $issue) {
-                $report->violations()->create([
-                    'analyzer' => $analyzer,
-                    'severity' => $issue['severity'] ?? 'notice',
-                    'message' => $issue['message'],
-                    'element' => $issue['element'] ?? null,
-                    'wcag_rule' => $issue['rule'] ?? null,
-                    'suggestion' => $issue['suggestion'] ?? null,
-                ]);
-            }
-        }
+        app(ReportRepository::class)->store($result);
     }
 }

@@ -2,10 +2,9 @@
 
 namespace ItsJustVita\LaravelBfsg\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class BfsgReport extends Model
+class BfsgReport extends BfsgModel
 {
     protected $table = 'bfsg_reports';
 
@@ -19,7 +18,8 @@ class BfsgReport extends Model
 
     protected $casts = [
         'metadata' => 'array',
-        'score' => 'decimal:2',
+        'score' => 'float',
+        'total_violations' => 'integer',
     ];
 
     public function violations(): HasMany

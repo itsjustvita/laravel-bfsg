@@ -2,10 +2,9 @@
 
 namespace ItsJustVita\LaravelBfsg\Models;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class BfsgViolation extends Model
+class BfsgViolation extends BfsgModel
 {
     public $timestamps = false;
 
@@ -19,6 +18,10 @@ class BfsgViolation extends Model
         'element',
         'wcag_rule',
         'suggestion',
+    ];
+
+    protected $casts = [
+        'created_at' => 'datetime',
     ];
 
     public function report(): BelongsTo

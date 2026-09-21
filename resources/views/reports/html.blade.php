@@ -147,7 +147,6 @@
             margin-bottom: 5px;
         }
 
-        .summary-count.critical { color: #dc3545; }
         .summary-count.error { color: #fd7e14; }
         .summary-count.warning { color: #ffc107; }
         .summary-count.notice { color: #17a2b8; }
@@ -347,10 +346,6 @@
                 <div class="summary">
                     <h2>Issues by Severity</h2>
                     <div class="summary-grid">
-                        <div class="summary-item">
-                            <div class="summary-count critical">{{ $stats['critical'] }}</div>
-                            <div class="score-label">Critical</div>
-                        </div>
                         <div class="summary-item">
                             <div class="summary-count error">{{ $stats['errors'] }}</div>
                             <div class="score-label">Errors</div>

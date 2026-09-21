@@ -5,9 +5,10 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 use Exception;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
-use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Symfony\Component\Process\PhpExecutableFinder;
 use Symfony\Component\Process\Process;
@@ -85,7 +86,7 @@ class BfsgCheckCommand extends Command
 
             // Save to database if requested
             if ($this->option('save')) {
-                $this->saveResults($url, $violations);
+                $this->saveResults($result);
             }
 
             return $result->count() === 0 ? Command::SUCCESS : Command::FAILURE;
@@ -341,7 +342,7 @@ class BfsgCheckCommand extends Command
         $stats = $report->getStats();
         $this->newLine();
         $this->info("Compliance Score: {$stats['compliance_score']}% (Grade: {$stats['grade']})");
-        $this->info("Total Issues: {$stats['total_issues']} (Critical: {$stats['critical']}, Errors: {$stats['errors']}, Warnings: {$stats['warnings']})");
+        $this->info("Total Issues: {$stats['total_issues']} (Errors: {$stats['errors']}, Warnings: {$stats['warnings']}, Notices: {$stats['notices']})");
     }
 
     protected function outputPdf(array $violations, string $url): void
@@ -357,30 +358,9 @@ class BfsgCheckCommand extends Command
         $this->info("Total Issues: {$stats['total_issues']}");
     }
 
-    protected function saveResults(string $url, array $violations): void
+    protected function saveResults(AnalysisResult $result): void
     {
-        $report = new ReportGenerator($url, $violations);
-        $stats = $report->getStats();
-
-        $dbReport = BfsgReport::create([
-            'url' => $url,
-            'total_violations' => $stats['total_issues'],
-            'score' => $stats['compliance_score'],
-            'grade' => $stats['grade'],
-        ]);
-
-        foreach ($violations as $analyzer => $issues) {
-            foreach ($issues as $issue) {
-                $dbReport->violations()->create([
-                    'analyzer' => $analyzer,
-                    'severity' => $issue['severity'] ?? 'notice',
-                    'message' => $issue['message'],
-                    'element' => $issue['element'] ?? null,
-                    'wcag_rule' => $issue['rule'] ?? null,
-                    'suggestion' => $issue['suggestion'] ?? null,
-                ]);
-            }
-        }
+        $dbReport = app(ReportRepository::class)->store($result);
 
         $this->info("Results saved to database (Report #{$dbReport->id})");
     }

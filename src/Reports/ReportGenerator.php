@@ -133,7 +133,6 @@ class ReportGenerator
 
         $md .= "## Summary\n\n";
         $md .= "- **Total Issues:** {$this->stats['total_issues']}\n";
-        $md .= "- **Critical:** {$this->stats['critical']}\n";
         $md .= "- **Errors:** {$this->stats['errors']}\n";
         $md .= "- **Warnings:** {$this->stats['warnings']}\n";
         $md .= "- **Notices:** {$this->stats['notices']}\n\n";
@@ -186,61 +185,43 @@ class ReportGenerator
      */
     protected function calculateStats(): void
     {
-        $totalIssues = 0;
-        $critical = 0;
-        $errors = 0;
-        $warnings = 0;
-        $notices = 0;
+        $calculator = ScoreCalculator::fromConfig();
+
+        if ($this->result !== null) {
+            $this->stats = $calculator->stats($this->result);
+
+            return;
+        }
+
+        // Legacy array input: the retired `critical` bucket is counted as an error.
+        $counts = ['error' => 0, 'warning' => 0, 'notice' => 0];
         $byCategory = [];
 
         foreach ($this->violations as $category => $issues) {
-            $count = count($issues);
-            $totalIssues += $count;
-            $byCategory[$category] = $count;
+            $byCategory[$category] = count($issues);
 
             foreach ($issues as $issue) {
-                $severity = $issue['type'] ?? $issue['severity'] ?? 'notice';
-                match ($severity) {
-                    'critical' => $critical++,
-                    'error' => $errors++,
-                    'warning' => $warnings++,
-                    default => $notices++,
+                $bucket = match ($issue['type'] ?? $issue['severity'] ?? 'notice') {
+                    'critical', 'error' => 'error',
+                    'warning' => 'warning',
+                    default => 'notice',
                 };
+
+                $counts[$bucket]++;
             }
         }
 
-        // Calculate compliance score (0-100%)
-        // Simple formula: max(0, 100 - (critical * 10 + errors * 5 + warnings * 2 + notices * 0.5))
-        $score = 100 - ($critical * 10 + $errors * 5 + $warnings * 2 + $notices * 0.5);
-        $complianceScore = max(0, min(100, (int) $score));
+        $score = $calculator->score($counts);
 
         $this->stats = [
-            'total_issues' => $totalIssues,
-            'critical' => $critical,
-            'errors' => $errors,
-            'warnings' => $warnings,
-            'notices' => $notices,
+            'total_issues' => array_sum($byCategory),
+            'errors' => $counts['error'],
+            'warnings' => $counts['warning'],
+            'notices' => $counts['notice'],
             'by_category' => $byCategory,
-            'compliance_score' => $complianceScore,
-            'grade' => $this->getGrade($complianceScore),
+            'compliance_score' => $score,
+            'grade' => $calculator->grade($score, $counts['error']),
         ];
-    }
-
-    /**
-     * Get letter grade based on score
-     */
-    protected function getGrade(int $score): string
-    {
-        return match (true) {
-            $score >= 95 => 'A+',
-            $score >= 90 => 'A',
-            $score >= 85 => 'B+',
-            $score >= 80 => 'B',
-            $score >= 75 => 'C+',
-            $score >= 70 => 'C',
-            $score >= 60 => 'D',
-            default => 'F',
-        };
     }
 
     /**

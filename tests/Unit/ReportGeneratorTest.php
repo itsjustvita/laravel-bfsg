@@ -90,6 +90,10 @@ class ReportGeneratorTest extends TestCase
 
         $this->assertEquals('https://example.com', $data['meta']['url']);
         $this->assertEquals(2, $data['stats']['total_issues']);
+
+        // 1 error + 1 warning => 100 - 5 - 2 = 93; the error caps the grade at B.
+        $this->assertEquals(93, $data['stats']['compliance_score']);
+        $this->assertEquals('B', $data['stats']['grade']);
     }
 
     public function test_generates_html_report(): void
@@ -161,13 +165,15 @@ class ReportGeneratorTest extends TestCase
         $stats = $generator->getStats();
 
         $this->assertEquals(4, $stats['total_issues']);
-        $this->assertEquals(1, $stats['critical']);
-        $this->assertEquals(1, $stats['errors']);
+        $this->assertArrayNotHasKey('critical', $stats);
+        // The retired `critical` severity is counted as an error.
+        $this->assertEquals(2, $stats['errors']);
         $this->assertEquals(1, $stats['warnings']);
         $this->assertEquals(1, $stats['notices']);
 
-        // Score = 100 - (10 + 5 + 2 + 0.5) = 82.5, cast to int = 82
-        $this->assertEquals(82, $stats['compliance_score']);
+        // Score = round(100 - (2 * 5 + 2 + 0.5)) = round(87.5) = 88
+        $this->assertEquals(88, $stats['compliance_score']);
+        // 88 is a B+, but the two errors cap the grade at B.
         $this->assertEquals('B', $stats['grade']);
     }
 
@@ -197,8 +203,8 @@ class ReportGeneratorTest extends TestCase
         $generator = new ReportGenerator('https://example.com', $criticalViolations);
         $stats = $generator->getStats();
 
-        // Score = 100 - (15 * 10) = -50, clamped to 0
-        $this->assertEquals(0, $stats['compliance_score']);
+        // 15 criticals count as errors: score = 100 - (15 * 5) = 25
+        $this->assertEquals(25, $stats['compliance_score']);
         $this->assertEquals('F', $stats['grade']);
     }
 

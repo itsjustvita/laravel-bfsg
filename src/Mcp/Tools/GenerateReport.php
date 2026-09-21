@@ -6,7 +6,7 @@ use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Bfsg;
-use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -59,9 +59,9 @@ class GenerateReport extends Tool
             return Response::error("Failed to fetch URL: {$url} - {$e->getMessage()}");
         }
 
-        $violations = app(Bfsg::class)->analyze($response->body())->toArray()['violations'];
+        $analysis = app(Bfsg::class)->analyze($response->body(), ['url' => $url]);
 
-        $reportGenerator = new ReportGenerator($url, $violations);
+        $reportGenerator = new ReportGenerator($url, $analysis);
         $stats = $reportGenerator->getStats();
         $reportContent = $reportGenerator->setFormat($format)->generate();
 
@@ -83,27 +83,7 @@ class GenerateReport extends Tool
 
         if ($save) {
             try {
-                $dbReport = BfsgReport::create([
-                    'url' => $url,
-                    'total_violations' => $stats['total_issues'],
-                    'score' => $stats['compliance_score'],
-                    'grade' => $stats['grade'],
-                ]);
-
-                foreach ($violations as $analyzer => $issues) {
-                    foreach ($issues as $issue) {
-                        $dbReport->violations()->create([
-                            'analyzer' => $analyzer,
-                            'severity' => $issue['severity'] ?? 'notice',
-                            'message' => $issue['message'],
-                            'element' => $issue['element'] ?? null,
-                            'wcag_rule' => $issue['rule'] ?? null,
-                            'suggestion' => $issue['suggestion'] ?? null,
-                        ]);
-                    }
-                }
-
-                $result['report_id'] = $dbReport->id;
+                $result['report_id'] = app(ReportRepository::class)->store($analysis)->id;
             } catch (\Exception $e) {
                 $result['save_error'] = 'Failed to save to database: '.$e->getMessage();
             }
