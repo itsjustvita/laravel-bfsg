@@ -331,4 +331,14 @@ return [
             'suggestion' => 'Sichtbaren Fokusstil (outline, box-shadow oder border) für :selector ergänzen',
         ],
     ],
+    'error_handling' => [
+        'no_error_strategy' => [
+            'message' => 'Formular „:name“ mit Pflichtfeldern ohne erkennbare Fehlerbehandlung',
+            'suggestion' => 'Ungültige Felder mit aria-invalid kennzeichnen und den Fehlertext per aria-describedby oder aria-errormessage verknüpfen; Fehler mit role="alert" ankündigen',
+        ],
+        'css_only_error_indicators' => [
+            'message' => 'Formular „:name“ zeigt Fehler nur über CSS-Klassen an',
+            'suggestion' => 'aria-invalid="true" und aria-describedby an fehlerhaften Feldern ergänzen',
+        ],
+    ],
 ];

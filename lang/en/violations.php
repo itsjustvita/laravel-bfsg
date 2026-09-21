@@ -331,4 +331,14 @@ return [
             'suggestion' => 'Add a visible focus style (outline, box-shadow or border) for :selector',
         ],
     ],
+    'error_handling' => [
+        'no_error_strategy' => [
+            'message' => 'Form ":name" with required fields has no detectable error handling',
+            'suggestion' => 'Mark invalid fields with aria-invalid and link the error text via aria-describedby or aria-errormessage; announce errors with role="alert"',
+        ],
+        'css_only_error_indicators' => [
+            'message' => 'Form ":name" shows errors only through CSS classes',
+            'suggestion' => 'Add aria-invalid="true" and aria-describedby to fields with errors',
+        ],
+    ],
 ];
