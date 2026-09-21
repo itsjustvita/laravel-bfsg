@@ -2,46 +2,35 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\TableAnalyzer;
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
 
-class TableAnalyzerTest extends TestCase
+class TableAnalyzerTest extends AnalyzerTestCase
 {
-    protected TableAnalyzer $analyzer;
-
-    protected function setUp(): void
+    protected function analyzer(): Analyzer
     {
-        parent::setUp();
-        $this->analyzer = new TableAnalyzer;
+        return new TableAnalyzer;
     }
 
-    protected function analyzeHtml(string $html): array
+    public function test_detects_missing_caption_on_table(): void
     {
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
-
-        return $this->analyzer->analyze($dom);
-    }
-
-    public function test_detects_missing_caption_on_table()
-    {
-        $result = $this->analyzeHtml('
+        $violations = $this->analyze('
             <table>
                 <tr><th scope="col">Name</th></tr>
                 <tr><td>Alice</td></tr>
             </table>
         ');
 
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'without caption')),
-            'Should detect table without caption'
-        );
+        $violation = $this->assertHasViolation($violations, 'tables.missing_caption', element: 'table', severity: Severity::Warning);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame([], $violation->params);
     }
 
-    public function test_table_with_caption_has_no_caption_issues()
+    public function test_table_with_caption_has_no_caption_issues(): void
     {
-        $result = $this->analyzeHtml('
+        $violations = $this->analyze('
             <table>
                 <caption>User list</caption>
                 <tr><th scope="col">Name</th></tr>
@@ -49,16 +38,12 @@ class TableAnalyzerTest extends TestCase
             </table>
         ');
 
-        $captionIssues = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['message'], 'caption')
-        );
-
-        $this->assertEmpty($captionIssues, 'Table with caption should not produce caption issues');
+        $this->assertNoViolation($violations, 'tables.missing_caption');
     }
 
-    public function test_detects_missing_scope_on_th()
+    public function test_detects_missing_scope_on_th(): void
     {
-        $result = $this->analyzeHtml('
+        $violations = $this->analyze('
             <table>
                 <caption>Test</caption>
                 <tr><th>Name</th></tr>
@@ -66,15 +51,30 @@ class TableAnalyzerTest extends TestCase
             </table>
         ');
 
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'without scope')),
-            'Should detect th without scope attribute'
-        );
+        $violation = $this->assertHasViolation($violations, 'tables.th_missing_scope', element: 'th', severity: Severity::Error);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame(['content' => 'Name'], $violation->params);
     }
 
-    public function test_detects_table_without_header_cells()
+    public function test_detects_invalid_scope_value(): void
     {
-        $result = $this->analyzeHtml('
+        $violations = $this->analyze('
+            <table>
+                <caption>Test</caption>
+                <tr><th scope="all">Name</th></tr>
+                <tr><td>Alice</td></tr>
+            </table>
+        ');
+
+        $violation = $this->assertHasViolation($violations, 'tables.invalid_scope', element: 'th', severity: Severity::Error);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame(['value' => 'all'], $violation->params);
+        $this->assertNoViolation($violations, 'tables.th_missing_scope');
+    }
+
+    public function test_detects_table_without_header_cells(): void
+    {
+        $violations = $this->analyze('
             <table>
                 <caption>Test</caption>
                 <tr><td>Name</td><td>Age</td></tr>
@@ -82,15 +82,30 @@ class TableAnalyzerTest extends TestCase
             </table>
         ');
 
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'without header cells')),
-            'Should detect data table without th elements'
-        );
+        $violation = $this->assertHasViolation($violations, 'tables.missing_headers', element: 'table', severity: Severity::Error);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame([], $violation->params);
     }
 
-    public function test_detects_layout_table_with_semantic_elements()
+    public function test_detects_dangling_headers_reference(): void
     {
-        $result = $this->analyzeHtml('
+        $violations = $this->analyze('
+            <table>
+                <caption>Test</caption>
+                <tr><th id="name" scope="col">Name</th></tr>
+                <tr><td headers="name missing">Alice</td></tr>
+            </table>
+        ');
+
+        $violation = $this->assertHasViolation($violations, 'tables.dangling_headers_ref', element: 'td', severity: Severity::Error);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame(['id' => 'missing'], $violation->params);
+        $this->assertViolationCount($violations, 'tables.dangling_headers_ref', 1);
+    }
+
+    public function test_detects_layout_table_with_semantic_elements(): void
+    {
+        $violations = $this->analyze('
             <table role="presentation">
                 <caption>Layout caption</caption>
                 <tr><th>Header</th></tr>
@@ -98,16 +113,15 @@ class TableAnalyzerTest extends TestCase
             </table>
         ');
 
-        $layoutIssues = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['message'], 'Layout table') && str_contains($i['message'], 'role="presentation"')
-        );
-
-        $this->assertNotEmpty($layoutIssues, 'Should detect semantic elements in layout table');
+        $violation = $this->assertHasViolation($violations, 'tables.layout_table_with_semantics', element: 'table', severity: Severity::Warning);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame('th', $violation->params['found']);
+        $this->assertViolationCount($violations, 'tables.layout_table_with_semantics', 2);
     }
 
-    public function test_detects_nested_tables()
+    public function test_detects_nested_tables(): void
     {
-        $result = $this->analyzeHtml('
+        $violations = $this->analyze('
             <table>
                 <caption>Outer</caption>
                 <tr><th scope="col">Data</th></tr>
@@ -119,48 +133,15 @@ class TableAnalyzerTest extends TestCase
             </table>
         ');
 
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'Nested tables')),
-            'Should detect nested tables'
-        );
+        $violation = $this->assertHasViolation($violations, 'tables.nested_table', element: 'table', severity: Severity::Warning);
+        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertViolationCount($violations, 'tables.nested_table', 1);
     }
 
-    public function test_all_findings_use_type_field_not_severity()
+    public function test_html_without_tables_produces_no_violations(): void
     {
-        // v2.2.0 Fix 1: TableAnalyzer must emit `type` (not `severity`).
-        $result = $this->analyzeHtml('
-            <table>
-                <tr><th>Name</th></tr>
-                <tr><td>Alice</td></tr>
-            </table>
-        ');
+        $violations = $this->analyze('<html><body><p>No tables here</p></body></html>');
 
-        $this->assertNotEmpty($result['issues']);
-        foreach ($result['issues'] as $issue) {
-            $this->assertArrayHasKey('type', $issue);
-            $this->assertArrayNotHasKey('severity', $issue);
-            $this->assertContains($issue['type'], ['error', 'warning', 'notice']);
-        }
-    }
-
-    public function test_stats_critical_count_uses_type_field()
-    {
-        // v2.2.0 Fix 1: `stats.critical_issues` counter must read `type` key.
-        $result = $this->analyzeHtml('
-            <table>
-                <tr><th>Name</th></tr>
-                <tr><td>Alice</td></tr>
-            </table>
-        ');
-
-        // th without scope + data table without th-scope → at least 1 error-type finding.
-        $this->assertGreaterThan(0, $result['stats']['critical_issues']);
-    }
-
-    public function test_html_without_tables_returns_empty_issues()
-    {
-        $result = $this->analyzeHtml('<html><body><p>No tables here</p></body></html>');
-
-        $this->assertEmpty($result['issues']);
+        $this->assertSame([], $violations);
     }
 }

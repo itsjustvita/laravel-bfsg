@@ -179,4 +179,34 @@ return [
             'suggestion' => 'Für lang und xml:lang denselben Wert verwenden oder xml:lang entfernen',
         ],
     ],
+    'tables' => [
+        'missing_caption' => [
+            'message' => 'Datentabelle ohne Beschriftung',
+            'suggestion' => '<caption> ergänzen, die die Tabelle benennt, oder aria-label/aria-labelledby verwenden',
+        ],
+        'th_missing_scope' => [
+            'message' => 'Kopfzelle „:content“ ohne scope-Attribut',
+            'suggestion' => 'scope="col" oder scope="row" an Kopfzellen ergänzen',
+        ],
+        'invalid_scope' => [
+            'message' => 'Ungültiger scope-Wert „:value“',
+            'suggestion' => 'scope="col", "row", "colgroup" oder "rowgroup" verwenden',
+        ],
+        'missing_headers' => [
+            'message' => 'Datentabelle ohne Kopfzellen',
+            'suggestion' => 'Kopfzellen mit <th> (und scope) auszeichnen oder id/headers-Zuordnungen verwenden',
+        ],
+        'dangling_headers_ref' => [
+            'message' => 'Zelle verweist auf eine nicht vorhandene Kopfzellen-id „:id“',
+            'suggestion' => 'headers-Attribut auf vorhandene <th>-ids zeigen lassen',
+        ],
+        'layout_table_with_semantics' => [
+            'message' => 'Layout-Tabelle (role="presentation") enthält <:found>',
+            'suggestion' => 'Tabellensemantik aus Layout-Tabellen entfernen oder role="presentation" bei Datentabellen weglassen',
+        ],
+        'nested_table' => [
+            'message' => 'Verschachtelte Tabelle',
+            'suggestion' => 'Datentabellen nicht verschachteln; Struktur abflachen',
+        ],
+    ],
 ];
