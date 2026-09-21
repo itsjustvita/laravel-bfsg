@@ -209,4 +209,38 @@ return [
             'suggestion' => 'Datentabellen nicht verschachteln; Struktur abflachen',
         ],
     ],
+    'media' => [
+        'video_missing_captions' => [
+            'message' => 'Video ohne Untertitel (:src)',
+            'suggestion' => '<track kind="captions"> (oder subtitles) in der Sprache des Videos ergänzen',
+        ],
+        'video_missing_audio_description' => [
+            'message' => 'Video ohne Audiodeskription (:src)',
+            'suggestion' => 'Audiodeskriptionsspur oder eine beschriebene Alternativversion bereitstellen',
+        ],
+        'autoplay_with_audio' => [
+            'message' => '<:tag> startet automatisch',
+            'suggestion' => 'Medien mit Ton nicht automatisch abspielen; bei nötigem Autoplay stummschalten und eine Pause-Funktion anbieten',
+        ],
+        'video_missing_controls' => [
+            'message' => 'Video ohne Bedienelemente (:src)',
+            'suggestion' => 'controls-Attribut oder zugängliche eigene Bedienelemente ergänzen',
+        ],
+        'audio_missing_transcript' => [
+            'message' => 'Audio ohne Transkript-Verweis (:src)',
+            'suggestion' => 'Transkript bereitstellen und per aria-describedby oder neben dem Player verlinken',
+        ],
+        'audio_missing_controls' => [
+            'message' => 'Audio ohne Bedienelemente (:src)',
+            'suggestion' => 'controls-Attribut oder zugängliche eigene Bedienelemente ergänzen',
+        ],
+        'iframe_missing_title' => [
+            'message' => 'Medien-iframe ohne title (:src)',
+            'suggestion' => 'title-Attribut ergänzen, das den eingebetteten Inhalt beschreibt',
+        ],
+        'embedded_video_captions_unknown' => [
+            'message' => 'Eingebetteter Videoplayer ohne standardmäßig aktivierte Untertitel (:src)',
+            'suggestion' => 'Untertitel in der Embed-URL aktivieren (z. B. cc_load_policy=1) oder Verfügbarkeit prüfen',
+        ],
+    ],
 ];

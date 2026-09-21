@@ -209,4 +209,38 @@ return [
             'suggestion' => 'Avoid nesting data tables; flatten the structure',
         ],
     ],
+    'media' => [
+        'video_missing_captions' => [
+            'message' => 'Video without captions or subtitles (:src)',
+            'suggestion' => 'Add a <track kind="captions"> (or subtitles) in the language of the video',
+        ],
+        'video_missing_audio_description' => [
+            'message' => 'Video without audio description (:src)',
+            'suggestion' => 'Provide an audio description track or an alternative version with descriptions',
+        ],
+        'autoplay_with_audio' => [
+            'message' => '<:tag> plays automatically',
+            'suggestion' => 'Do not autoplay media with sound; if autoplay is needed, mute it and offer a pause control',
+        ],
+        'video_missing_controls' => [
+            'message' => 'Video without controls (:src)',
+            'suggestion' => 'Add the controls attribute or accessible custom controls',
+        ],
+        'audio_missing_transcript' => [
+            'message' => 'Audio without transcript reference (:src)',
+            'suggestion' => 'Provide a transcript and link it via aria-describedby or next to the player',
+        ],
+        'audio_missing_controls' => [
+            'message' => 'Audio without controls (:src)',
+            'suggestion' => 'Add the controls attribute or accessible custom controls',
+        ],
+        'iframe_missing_title' => [
+            'message' => 'Media iframe without title (:src)',
+            'suggestion' => 'Add a title attribute that describes the embedded content',
+        ],
+        'embedded_video_captions_unknown' => [
+            'message' => 'Embedded video player without captions enabled by default (:src)',
+            'suggestion' => 'Enable captions in the embed URL (e.g. cc_load_policy=1) or verify captions are available',
+        ],
+    ],
 ];

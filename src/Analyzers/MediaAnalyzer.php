@@ -2,191 +2,111 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-class MediaAnalyzer
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
+
+class MediaAnalyzer extends BaseAnalyzer
 {
-    /**
-     * Analyze video and audio elements for accessibility
-     */
-    public function analyze(\DOMDocument $dom): array
+    private const MAX_SRC = 60;
+
+    private const CAPTION_KINDS = ['captions', 'subtitles'];
+
+    private const MEDIA_HOSTS = '/(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com)/i';
+
+    private const YOUTUBE_HOSTS = '/(youtube\.com|youtu\.be)/i';
+
+    protected string $key = 'media';
+
+    protected string $description = 'Alternatives and controls for audio, video and embedded media';
+
+    protected array $rules = ['1.2.1', '1.2.2', '1.2.5', '1.4.2', '2.1.1', '4.1.2'];
+
+    protected function inspect(): void
     {
-        $issues = [];
-
-        // Analyze video elements
-        $videos = $dom->getElementsByTagName('video');
-        foreach ($videos as $video) {
-            $this->analyzeVideoElement($video, $issues);
+        foreach ($this->query('//video') as $video) {
+            $this->checkVideo($video);
         }
 
-        // Analyze audio elements
-        $audios = $dom->getElementsByTagName('audio');
-        foreach ($audios as $audio) {
-            $this->analyzeAudioElement($audio, $issues);
+        foreach ($this->query('//audio') as $audio) {
+            $this->checkAudio($audio);
         }
 
-        // Analyze iframe embeds (YouTube, Vimeo, etc.)
-        $iframes = $dom->getElementsByTagName('iframe');
-        foreach ($iframes as $iframe) {
-            $this->analyzeIframeElement($iframe, $issues);
+        foreach ($this->query('//iframe') as $iframe) {
+            $this->checkIframe($iframe);
         }
-
-        return [
-            'issues' => $issues,
-            'stats' => [
-                'total_issues' => count($issues),
-                'videos_found' => $videos->length,
-                'audios_found' => $audios->length,
-                'iframes_found' => $iframes->length,
-            ],
-        ];
     }
 
-    /**
-     * Analyze video element
-     */
-    protected function analyzeVideoElement(\DOMElement $video, array &$issues): void
+    protected function checkVideo(DOMElement $video): void
     {
-        // Check for captions/subtitles track
-        $tracks = $video->getElementsByTagName('track');
-        $hasCaptions = false;
+        $src = $this->mediaSource($video);
+        $tracks = $this->query('.//track', $video);
+        $kinds = array_map(fn (DOMElement $track) => $track->getAttribute('kind'), $tracks);
 
-        foreach ($tracks as $track) {
-            $kind = $track->getAttribute('kind');
-            if (in_array($kind, ['captions', 'subtitles'])) {
-                $hasCaptions = true;
-                break;
-            }
+        if (array_intersect($kinds, self::CAPTION_KINDS) === []) {
+            $this->report('video_missing_captions', Severity::Error, '1.2.2', $video, ['src' => $src]);
         }
 
-        if (! $hasCaptions) {
-            $issues[] = [
-                'rule' => 'WCAG 1.2.2, 1.2.4',
-                'message' => 'Video element without captions or subtitles',
-                'element' => 'video',
-                'suggestion' => 'Add <track kind="captions"> or <track kind="subtitles"> element for accessibility',
-                'type' => 'error',
-            ];
+        // Audio description is only demanded where the author already ships tracks.
+        if ($tracks !== [] && ! in_array('descriptions', $kinds, true)) {
+            $this->report('video_missing_audio_description', Severity::Warning, '1.2.5', $video, ['src' => $src]);
         }
 
-        // Check for audio description track
-        $hasAudioDescription = false;
-        foreach ($tracks as $track) {
-            if ($track->getAttribute('kind') === 'descriptions') {
-                $hasAudioDescription = true;
-                break;
-            }
-        }
-
-        if (! $hasAudioDescription && $tracks->length > 0) {
-            $issues[] = [
-                'rule' => 'WCAG 1.2.5 (Level AA)',
-                'message' => 'Video without audio description track',
-                'element' => 'video',
-                'suggestion' => 'Consider adding <track kind="descriptions"> for visual content explanation',
-                'type' => 'warning',
-            ];
-        }
-
-        // Check for autoplay
         if ($video->hasAttribute('autoplay')) {
-            $issues[] = [
-                'rule' => 'WCAG 1.4.2, 2.2.2',
-                'message' => 'Video with autoplay enabled',
-                'element' => 'video',
-                'suggestion' => 'Remove autoplay attribute; let users control media playback',
-                'type' => 'error',
-            ];
+            $this->report('autoplay_with_audio', Severity::Error, '1.4.2', $video, ['tag' => 'video'], related: ['2.2.2']);
         }
 
-        // Check for controls
         if (! $video->hasAttribute('controls')) {
-            $issues[] = [
-                'rule' => 'WCAG 2.1.1',
-                'message' => 'Video without controls attribute',
-                'element' => 'video',
-                'suggestion' => 'Add controls attribute to allow keyboard and mouse control',
-                'type' => 'error',
-            ];
+            $this->report('video_missing_controls', Severity::Error, '2.1.1', $video, ['src' => $src]);
         }
     }
 
-    /**
-     * Analyze audio element
-     */
-    protected function analyzeAudioElement(\DOMElement $audio, array &$issues): void
+    protected function checkAudio(DOMElement $audio): void
     {
-        // Check for transcript (usually linked nearby)
-        // Note: This is a simplified check - in reality, transcript might be in surrounding context
-        $hasTranscriptLink = $audio->hasAttribute('aria-describedby');
+        $src = $this->mediaSource($audio);
 
-        if (! $hasTranscriptLink) {
-            $issues[] = [
-                'rule' => 'WCAG 1.2.1',
-                'message' => 'Audio element without transcript reference',
-                'element' => 'audio',
-                'suggestion' => 'Provide a transcript and reference it with aria-describedby or link it nearby',
-                'type' => 'warning',
-            ];
+        // Simplified check: a transcript is only detectable via an explicit reference.
+        if (! $audio->hasAttribute('aria-describedby')) {
+            $this->report('audio_missing_transcript', Severity::Warning, '1.2.1', $audio, ['src' => $src]);
         }
 
-        // Check for autoplay
         if ($audio->hasAttribute('autoplay')) {
-            $issues[] = [
-                'rule' => 'WCAG 1.4.2',
-                'message' => 'Audio with autoplay enabled',
-                'element' => 'audio',
-                'suggestion' => 'Remove autoplay attribute; let users control audio playback',
-                'type' => 'error',
-            ];
+            $this->report('autoplay_with_audio', Severity::Error, '1.4.2', $audio, ['tag' => 'audio']);
         }
 
-        // Check for controls
         if (! $audio->hasAttribute('controls')) {
-            $issues[] = [
-                'rule' => 'WCAG 2.1.1',
-                'message' => 'Audio without controls attribute',
-                'element' => 'audio',
-                'suggestion' => 'Add controls attribute to allow keyboard and mouse control',
-                'type' => 'error',
-            ];
+            $this->report('audio_missing_controls', Severity::Error, '2.1.1', $audio, ['src' => $src]);
         }
     }
 
-    /**
-     * Analyze iframe embeds (YouTube, Vimeo, etc.)
-     */
-    protected function analyzeIframeElement(\DOMElement $iframe, array &$issues): void
+    protected function checkIframe(DOMElement $iframe): void
     {
         $src = $iframe->getAttribute('src');
 
-        // Check if it's a media iframe (YouTube, Vimeo, etc.)
-        $isMediaIframe = preg_match('/(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com)/i', $src);
-
-        if ($isMediaIframe) {
-            // Check for title attribute
-            $title = $iframe->getAttribute('title');
-            if (empty($title)) {
-                $issues[] = [
-                    'rule' => 'WCAG 2.4.1, 4.1.2',
-                    'message' => 'Media iframe without title attribute',
-                    'element' => 'iframe',
-                    'src' => substr($src, 0, 50).'...',
-                    'suggestion' => 'Add descriptive title attribute to iframe (e.g., "YouTube video: Tutorial title")',
-                    'type' => 'error',
-                ];
-            }
-
-            // Check for YouTube CC parameter
-            if (strpos($src, 'youtube.com') !== false || strpos($src, 'youtu.be') !== false) {
-                if (strpos($src, 'cc_load_policy=1') === false) {
-                    $issues[] = [
-                        'rule' => 'WCAG 1.2.2',
-                        'message' => 'YouTube iframe without captions enabled by default',
-                        'element' => 'iframe',
-                        'suggestion' => 'Add ?cc_load_policy=1 parameter to YouTube URL to enable captions',
-                        'type' => 'warning',
-                    ];
-                }
-            }
+        if (preg_match(self::MEDIA_HOSTS, $src) !== 1) {
+            return;
         }
+
+        if (trim($iframe->getAttribute('title')) === '') {
+            $this->report('iframe_missing_title', Severity::Error, '4.1.2', $iframe, [
+                'src' => Text::truncate($src, self::MAX_SRC),
+            ]);
+        }
+
+        if (preg_match(self::YOUTUBE_HOSTS, $src) === 1 && ! str_contains($src, 'cc_load_policy=1')) {
+            $this->report('embedded_video_captions_unknown', Severity::Warning, '1.2.2', $iframe, ['src' => $src]);
+        }
+    }
+
+    /** The src attribute, or the first <source> child's src; '' when neither is present. */
+    protected function mediaSource(DOMElement $media): string
+    {
+        $src = $media->getAttribute('src');
+
+        if ($src !== '') {
+            return $src;
+        }
+
+        return ($this->query('.//source', $media)[0] ?? null)?->getAttribute('src') ?? '';
     }
 }
