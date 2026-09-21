@@ -157,4 +157,26 @@ return [
             'suggestion' => 'Passende Rolle ergänzen oder das Zustandsattribut entfernen',
         ],
     ],
+    'language' => [
+        'missing_lang' => [
+            'message' => 'Das <html>-Element hat kein lang-Attribut',
+            'suggestion' => 'lang="de" (bzw. die Seitensprache) am <html>-Element ergänzen',
+        ],
+        'invalid_lang' => [
+            'message' => 'Ungültiger Sprachcode „:lang“',
+            'suggestion' => 'Einen BCP-47-Sprachcode wie „de“, „en-GB“ oder „de-AT“ verwenden',
+        ],
+        'no_html_element' => [
+            'message' => 'Kein <html>-Element im Dokument gefunden',
+            'suggestion' => 'Ein vollständiges HTML-Dokument mit <html lang="…"> als Wurzel bereitstellen',
+        ],
+        'possible_language_change' => [
+            'message' => 'Möglicher Sprachwechsel ohne lang-Attribut („:content“)',
+            'suggestion' => 'Text in anderer Sprache in ein Element mit lang-Attribut einbetten',
+        ],
+        'xml_lang_mismatch' => [
+            'message' => 'lang=":lang" und xml:lang=":xml_lang" weichen voneinander ab',
+            'suggestion' => 'Für lang und xml:lang denselben Wert verwenden oder xml:lang entfernen',
+        ],
+    ],
 ];

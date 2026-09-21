@@ -2,8 +2,20 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-class LanguageAnalyzer
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
+
+class LanguageAnalyzer extends BaseAnalyzer
 {
+    private const MAX_CONTENT = 50;
+
+    protected string $key = 'language';
+
+    protected string $description = 'Language of the page and of parts';
+
+    protected array $rules = ['3.1.1', '3.1.2'];
+
     /**
      * Valid ISO 639-1 language codes (most common ones)
      */
@@ -14,121 +26,101 @@ class LanguageAnalyzer
         'th', 'id', 'ms', 'fa', 'he', 'ur', 'bn', 'ta', 'te', 'mr',
     ];
 
-    /**
-     * Analyze language attributes in HTML
-     */
-    public function analyze(\DOMDocument $dom): array
+    protected function inspect(): void
     {
-        $issues = [];
+        $this->checkDocumentLanguage();
+        $this->checkLanguageChanges();
+        $this->checkLanguageCodes();
+        $this->checkXmlLang();
+    }
 
-        // Check for main lang attribute on html element
-        $htmlElements = $dom->getElementsByTagName('html');
-        if ($htmlElements->length > 0) {
-            $htmlElement = $htmlElements->item(0);
-            $langAttr = $htmlElement->getAttribute('lang');
+    /** Main lang attribute on the html element. */
+    protected function checkDocumentLanguage(): void
+    {
+        $html = $this->query('//html')[0] ?? null;
 
-            if (empty($langAttr)) {
-                $issues[] = [
-                    'rule' => 'WCAG 3.1.1, BFSG §3',
-                    'message' => 'Missing language attribute on html element',
-                    'element' => '<html>',
-                    'suggestion' => 'Add lang attribute to html element (e.g., lang="de" for German)',
-                    'type' => 'error',
-                ];
-            } else {
-                // Validate language code
-                $langCode = $this->extractLanguageCode($langAttr);
-                if (! $this->isValidLanguageCode($langCode)) {
-                    $issues[] = [
-                        'rule' => 'WCAG 3.1.1, BFSG §3',
-                        'message' => "Invalid language code: {$langAttr}",
-                        'element' => '<html>',
-                        'suggestion' => 'Use valid ISO 639-1 language code (e.g., "de", "en", "fr")',
-                        'type' => 'error',
-                    ];
-                }
-            }
-        } else {
-            $issues[] = [
-                'rule' => 'WCAG 3.1.1, BFSG §3',
-                'message' => 'No html element found in document',
-                'suggestion' => 'Ensure document has proper html structure',
-                'type' => 'error',
-            ];
+        if (! $html instanceof DOMElement) {
+            $this->report('no_html_element', Severity::Error, '3.1.1');
+
+            return;
         }
 
-        // Check for language changes in content
-        $xpath = new \DOMXPath($dom);
+        $langAttr = $html->getAttribute('lang');
 
-        // Find elements with potential foreign language content but no lang attribute
-        $textElements = $xpath->query('//p|//div|//span|//h1|//h2|//h3|//h4|//h5|//h6|//li|//td|//th');
+        if (trim($langAttr) === '') {
+            $this->report('missing_lang', Severity::Error, '3.1.1', $html);
 
-        foreach ($textElements as $element) {
-            if ($element->nodeValue && strlen(trim($element->nodeValue)) > 20) {
-                // Check if element has lang attribute when needed
-                $parentLang = $this->getInheritedLanguage($element);
-
-                // Check for mixed language indicators (basic heuristic)
-                if ($this->containsMixedLanguage($element->nodeValue, $parentLang)) {
-                    $elementLang = $element->getAttribute('lang');
-                    if (empty($elementLang)) {
-                        $snippet = substr(trim($element->nodeValue), 0, 50).'...';
-                        $issues[] = [
-                            'rule' => 'WCAG 3.1.2',
-                            'message' => 'Possible language change without lang attribute',
-                            'element' => $element->nodeName,
-                            'content' => $snippet,
-                            'suggestion' => 'Add lang attribute to elements with different language',
-                            'type' => 'warning',
-                        ];
-                    }
-                }
-            }
+            return;
         }
 
-        // Check all elements with lang attributes for validity
-        $elementsWithLang = $xpath->query('//*[@lang]');
-        foreach ($elementsWithLang as $element) {
+        if (! $this->isValidLanguageCode($this->extractLanguageCode($langAttr))) {
+            $this->report('invalid_lang', Severity::Error, '3.1.1', $html, ['lang' => $langAttr]);
+        }
+    }
+
+    /** Content that looks like a language change but carries no lang attribute. */
+    protected function checkLanguageChanges(): void
+    {
+        foreach ($this->query('//p|//div|//span|//h1|//h2|//h3|//h4|//h5|//h6|//li|//td|//th') as $element) {
+            $content = $element->nodeValue ?? '';
+
+            if (strlen(trim($content)) <= 20) {
+                continue;
+            }
+
+            if (! $this->containsMixedLanguage($content, $this->getInheritedLanguage($element))) {
+                continue;
+            }
+
+            if (trim($element->getAttribute('lang')) !== '') {
+                continue;
+            }
+
+            $this->report('possible_language_change', Severity::Warning, '3.1.2', $element, [
+                'content' => Text::truncate(Text::normalize($content), self::MAX_CONTENT),
+            ]);
+        }
+    }
+
+    /** Every lang attribute in the document must carry a valid language code. */
+    protected function checkLanguageCodes(): void
+    {
+        foreach ($this->query('//*[@lang]') as $element) {
             $langAttr = $element->getAttribute('lang');
-            if ($langAttr) {
-                $langCode = $this->extractLanguageCode($langAttr);
-                if (! $this->isValidLanguageCode($langCode)) {
-                    $issues[] = [
-                        'rule' => 'WCAG 3.1.1',
-                        'message' => "Invalid language code: {$langAttr}",
-                        'element' => '<'.$element->nodeName.'>',
-                        'suggestion' => 'Use valid ISO 639-1 language code',
-                        'type' => 'error',
-                    ];
-                }
-            }
-        }
 
-        // Check for xml:lang attribute (should match lang if present)
-        $elementsWithXmlLang = $xpath->query('//*[@xml:lang]');
-        foreach ($elementsWithXmlLang as $element) {
-            $xmlLang = $element->getAttribute('xml:lang');
+            if (trim($langAttr) === '') {
+                continue;
+            }
+
+            if ($this->isValidLanguageCode($this->extractLanguageCode($langAttr))) {
+                continue;
+            }
+
+            $this->report(
+                'invalid_lang',
+                Severity::Error,
+                $element->nodeName === 'html' ? '3.1.1' : '3.1.2',
+                $element,
+                ['lang' => $langAttr],
+            );
+        }
+    }
+
+    /** xml:lang should match lang where both are present. */
+    protected function checkXmlLang(): void
+    {
+        foreach ($this->query('//*[@*[name()="xml:lang"]]') as $element) {
+            // getAttribute() does not resolve the colon-named attribute of an HTML-parsed document.
+            $xmlLang = $element->attributes?->getNamedItem('xml:lang')?->nodeValue ?? '';
             $lang = $element->getAttribute('lang');
 
-            if ($lang && $xmlLang !== $lang) {
-                $issues[] = [
-                    'rule' => 'WCAG 3.1.1',
-                    'message' => 'Mismatched lang and xml:lang attributes',
-                    'element' => '<'.$element->nodeName.'>',
-                    'suggestion' => 'Ensure lang and xml:lang attributes have the same value',
-                    'type' => 'warning',
-                ];
+            if ($lang !== '' && $xmlLang !== $lang) {
+                $this->report('xml_lang_mismatch', Severity::Warning, '3.1.1', $element, [
+                    'lang' => $lang,
+                    'xml_lang' => $xmlLang,
+                ]);
             }
         }
-
-        return [
-            'issues' => $issues,
-            'stats' => [
-                'total_issues' => count($issues),
-                'critical_issues' => count(array_filter($issues, fn ($i) => ($i['type'] ?? '') === 'error')),
-                'has_main_lang' => $htmlElements->length > 0 && ! empty($htmlElements->item(0)->getAttribute('lang')),
-            ],
-        ];
     }
 
     /**
@@ -153,14 +145,14 @@ class LanguageAnalyzer
     /**
      * Get inherited language from parent elements
      */
-    protected function getInheritedLanguage(\DOMElement $element): ?string
+    protected function getInheritedLanguage(DOMElement $element): ?string
     {
         $current = $element;
         while ($current && $current->parentNode) {
             if ($current->hasAttribute('lang')) {
                 return $this->extractLanguageCode($current->getAttribute('lang'));
             }
-            $current = $current->parentNode instanceof \DOMElement ? $current->parentNode : null;
+            $current = $current->parentNode instanceof DOMElement ? $current->parentNode : null;
         }
 
         return null;

@@ -157,4 +157,26 @@ return [
             'suggestion' => 'Add a suitable role or remove the state attribute',
         ],
     ],
+    'language' => [
+        'missing_lang' => [
+            'message' => 'The <html> element has no lang attribute',
+            'suggestion' => 'Add lang="de" (or the page language) to the <html> element',
+        ],
+        'invalid_lang' => [
+            'message' => 'Invalid language code ":lang"',
+            'suggestion' => 'Use a BCP 47 language tag such as "de", "en-GB" or "de-AT"',
+        ],
+        'no_html_element' => [
+            'message' => 'No <html> element found in the document',
+            'suggestion' => 'Provide a complete HTML document with an <html lang="…"> root',
+        ],
+        'possible_language_change' => [
+            'message' => 'Possible change of language without lang attribute (":content")',
+            'suggestion' => 'Wrap text in another language in an element with a lang attribute',
+        ],
+        'xml_lang_mismatch' => [
+            'message' => 'lang=":lang" and xml:lang=":xml_lang" differ',
+            'suggestion' => 'Use the same value for lang and xml:lang, or drop xml:lang',
+        ],
+    ],
 ];

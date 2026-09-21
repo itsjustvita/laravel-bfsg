@@ -2,125 +2,94 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
-use DOMDocument;
 use ItsJustVita\LaravelBfsg\Analyzers\LanguageAnalyzer;
-use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
 
-class LanguageAnalyzerTest extends TestCase
+class LanguageAnalyzerTest extends AnalyzerTestCase
 {
-    protected LanguageAnalyzer $analyzer;
-
-    protected function setUp(): void
+    protected function analyzer(): Analyzer
     {
-        parent::setUp();
-        $this->analyzer = new LanguageAnalyzer;
+        return new LanguageAnalyzer;
     }
 
-    protected function analyzeHtml(string $html): array
+    public function test_detects_missing_lang_attribute_on_html(): void
     {
-        $dom = new DOMDocument;
-        @$dom->loadHTML($html);
+        $violations = $this->analyze('<html><body><p>Hello</p></body></html>');
 
-        return $this->analyzer->analyze($dom);
+        $violation = $this->assertHasViolation($violations, 'language.missing_lang', element: 'html', severity: Severity::Error);
+        $this->assertSame('3.1.1', $violation->rule);
+        $this->assertSame([], $violation->params);
+        $this->assertViolationCount($violations, 'language.missing_lang', 1);
     }
 
-    public function test_detects_missing_lang_attribute_on_html()
+    public function test_valid_lang_en_produces_no_lang_missing_issues(): void
     {
-        $result = $this->analyzeHtml('<html><body><p>Hello</p></body></html>');
+        $violations = $this->analyze('<html lang="en"><body><p>Hello world</p></body></html>');
 
-        $this->assertNotEmpty($result['issues']);
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'Missing language attribute')),
-            'Should detect missing lang attribute on html element'
-        );
+        $this->assertNoViolation($violations, 'language.missing_lang');
+        $this->assertNoViolation($violations, 'language.no_html_element');
     }
 
-    public function test_valid_lang_en_produces_no_lang_missing_issues()
+    public function test_detects_invalid_language_code(): void
     {
-        $result = $this->analyzeHtml('<html lang="en"><body><p>Hello world</p></body></html>');
+        $violations = $this->analyze('<html lang="xx"><body><p>Hello</p></body></html>');
 
-        $langMissing = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['message'], 'Missing language attribute')
-                || str_contains($i['message'], 'No html element')
-        );
-
-        $this->assertEmpty($langMissing, 'Valid lang="en" should not produce lang-missing issues');
+        $violation = $this->assertHasViolation($violations, 'language.invalid_lang', element: 'html', severity: Severity::Error);
+        $this->assertSame('3.1.1', $violation->rule);
+        $this->assertSame(['lang' => 'xx'], $violation->params);
     }
 
-    public function test_detects_invalid_language_code()
+    public function test_detects_invalid_language_code_on_a_part_of_the_page(): void
     {
-        $result = $this->analyzeHtml('<html lang="xx"><body><p>Hello</p></body></html>');
+        $violations = $this->analyze('<html lang="en"><body><p lang="xx">Hello</p></body></html>');
 
-        $this->assertNotEmpty($result['issues']);
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'Invalid language code')),
-            'Should detect invalid language code "xx"'
-        );
+        $violation = $this->assertHasViolation($violations, 'language.invalid_lang', element: 'p', severity: Severity::Error);
+        $this->assertSame('3.1.2', $violation->rule);
+        $this->assertSame(['lang' => 'xx'], $violation->params);
     }
 
-    public function test_german_lang_de_accepted()
+    public function test_german_lang_de_accepted(): void
     {
-        $result = $this->analyzeHtml('<html lang="de"><body><p>Hallo Welt</p></body></html>');
+        $violations = $this->analyze('<html lang="de"><body><p>Hallo Welt</p></body></html>');
 
-        $invalidLang = collect($result['issues'])->filter(
-            fn ($i) => str_contains($i['message'], 'Invalid language code')
-                || str_contains($i['message'], 'Missing language attribute')
-        );
-
-        $this->assertEmpty($invalidLang, 'German lang="de" should be accepted as valid');
+        $this->assertNoViolation($violations, 'language.invalid_lang');
+        $this->assertNoViolation($violations, 'language.missing_lang');
     }
 
-    public function test_detects_mismatched_lang_and_xml_lang()
+    public function test_detects_possible_language_change_without_lang_attribute(): void
     {
-        // xml:lang is only preserved when using loadXML, not loadHTML
-        $dom = new DOMDocument;
-        @$dom->loadXML('<html lang="en" xml:lang="de"><body><p>Hello</p></body></html>');
-        $result = $this->analyzer->analyze($dom);
+        $violations = $this->analyze('<html lang="de"><body><p>Der Text mit the and for extra Inhalt.</p></body></html>');
 
-        $this->assertTrue(
-            collect($result['issues'])->contains(fn ($i) => str_contains($i['message'], 'Mismatched lang and xml:lang')),
-            'Should detect mismatched lang and xml:lang attributes'
-        );
+        $violation = $this->assertHasViolation($violations, 'language.possible_language_change', element: 'p', severity: Severity::Warning);
+        $this->assertSame('3.1.2', $violation->rule);
+        $this->assertSame(['content' => 'Der Text mit the and for extra Inhalt.'], $violation->params);
     }
 
-    public function test_all_findings_use_type_field_not_severity()
+    public function test_detects_mismatched_lang_and_xml_lang(): void
     {
-        // v2.2.0 Fix 1: LanguageAnalyzer must emit `type` (not `severity`).
-        $result = $this->analyzeHtml('<html><body><p>Hello</p></body></html>');
+        $violations = $this->analyze('<html lang="en" xml:lang="de"><body><p>Hello</p></body></html>');
 
-        $this->assertNotEmpty($result['issues']);
-        foreach ($result['issues'] as $issue) {
-            $this->assertArrayHasKey('type', $issue);
-            $this->assertArrayNotHasKey('severity', $issue);
-            $this->assertContains($issue['type'], ['error', 'warning', 'notice']);
-        }
+        $violation = $this->assertHasViolation($violations, 'language.xml_lang_mismatch', element: 'html', severity: Severity::Warning);
+        $this->assertSame('3.1.1', $violation->rule);
+        $this->assertSame(['lang' => 'en', 'xml_lang' => 'de'], $violation->params);
     }
 
-    public function test_missing_html_lang_is_error_not_critical()
+    public function test_matching_lang_and_xml_lang_are_accepted(): void
     {
-        // v2.2.0 Fix 1: `critical` canonicalised to `error` (no `critical` anywhere).
-        $result = $this->analyzeHtml('<html><body><p>Hello</p></body></html>');
+        $violations = $this->analyze('<html lang="en" xml:lang="en"><body><p>Hello</p></body></html>');
 
-        $missing = collect($result['issues'])->first(
-            fn ($i) => str_contains($i['message'], 'Missing language attribute')
-        );
-
-        $this->assertNotNull($missing);
-        $this->assertSame('error', $missing['type']);
+        $this->assertNoViolation($violations, 'language.xml_lang_mismatch');
     }
 
-    public function test_empty_html_produces_lang_issues()
+    public function test_document_without_html_element_is_reported(): void
     {
-        // Use a minimal document fragment without an html element
-        $result = $this->analyzeHtml('<div>fragment</div>');
+        $violations = $this->analyze('<div>fragment</div>');
 
-        $this->assertNotEmpty($result['issues']);
-        $this->assertTrue(
-            collect($result['issues'])->contains(
-                fn ($i) => str_contains($i['message'], 'Missing language attribute')
-                    || str_contains($i['message'], 'No html element')
-            ),
-            'Minimal HTML without proper structure should produce language-related issues'
-        );
+        $violation = $this->assertHasViolation($violations, 'language.no_html_element', severity: Severity::Error);
+        $this->assertSame('3.1.1', $violation->rule);
+        $this->assertNull($violation->element);
+        $this->assertNull($violation->selector);
     }
 }
