@@ -5,6 +5,31 @@ Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokume
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
 und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 3.0.0 (branch v3)
+
+Phase 1 of the v3 foundation. See UPGRADE.md (written in Phase 4) for the migration guide.
+
+### Changed (breaking)
+- `Bfsg::analyze()` returns an `AnalysisResult`; violations are `Violation` value objects with a stable translation `key`, a single primary `rule` (`1.1.1`), `related` criteria, `tags`, `element`, `selector`, `snippet`, `params` and `meta`. `->toArray()` yields the JSON shape.
+- Every analyzer implements `Contracts\Analyzer` (via `BaseAnalyzer`). Custom analyzers register through `Bfsg::register()`.
+- All violation messages are translation keys with English and German texts (`lang/en`, `lang/de`, publish tag `bfsg-lang`).
+- Aggregated `count` findings, `stats` arrays and the `severity`/`critical` keys are gone; every finding points at one element.
+- `Services\` namespace removed (`Dom\HtmlDocument`, `Css\CssParser`, `Css\Color`).
+- `Services\AuthenticatedHttpClient` moved to `Http\AuthenticatedHttpClient`.
+- Config: `auto_fix`, `reporting.enabled`, `reporting.email`, `authentication.sanctum_enabled`, `authentication.timeout` removed; `locale` and `scoring.weights` added.
+- `laravel/mcp` is optional (`suggest`); the MCP server registers only when it is installed.
+- The MCP `list_analyzers` payload now carries `name`, `class`, `description`, `rules` (array of criteria such as `1.1.1`) and `enabled` per analyzer, instead of the previous `wcag_rules` string.
+- Score: configurable weights, rounding instead of truncation, grade capped at B with any error and at D with five or more errors.
+- The retired `critical` severity is counted as `error` (weight 5 instead of 10); historical scores in `bfsg_reports` are not comparable with v3 scores.
+- Every finding is now per element — the aggregated "multiple h1", "mixed tabindex", "positive tabindex" and "light gray inline" counts became one finding per element, and the combined "new window + noopener" link finding became two findings.
+- `bfsg:analyze` and the browser mode now run the full analyzer registry (all 16 analyzers) instead of hard-coded subsets, and print registry keys (`images`, `forms`, …) instead of class names.
+- `isAccessible()` ignores notices.
+
+### Added
+- `Bfsg::register()/forget()/only()/except()`, middleware alias `bfsg`, container binding `Bfsg::class`.
+- `Dom\HtmlDocument`, `Dom\Element`, `Dom\AccessibleName`, `Dom\Roles`, `Dom\Text`, `Css\Color`, `Reports\ScoreCalculator`, `Persistence\ReportRepository`.
+- CI matrix for Laravel 12 and 13 on PHP 8.2–8.4.
+
 ## [2.2.4] - 2026-09-18
 
 Re-release of 2.2.3 with the CI matrix fix. The 2.2.3 tag was moved after Packagist had
