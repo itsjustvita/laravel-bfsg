@@ -341,4 +341,14 @@ return [
             'suggestion' => 'aria-invalid="true" und aria-describedby an fehlerhaften Feldern ergänzen',
         ],
     ],
+    'status_messages' => [
+        'invalid_aria_live' => [
+            'message' => 'Ungültiger aria-live-Wert „:value“',
+            'suggestion' => 'aria-live="polite", "assertive" oder "off" verwenden',
+        ],
+        'no_live_region' => [
+            'message' => 'Seite mit interaktiven Elementen ohne Live-Region für Statusmeldungen',
+            'suggestion' => 'Container mit role="status" oder aria-live="polite" für Statusmeldungen ergänzen',
+        ],
+    ],
 ];

@@ -341,4 +341,14 @@ return [
             'suggestion' => 'Add aria-invalid="true" and aria-describedby to fields with errors',
         ],
     ],
+    'status_messages' => [
+        'invalid_aria_live' => [
+            'message' => 'Invalid aria-live value ":value"',
+            'suggestion' => 'Use aria-live="polite", "assertive" or "off"',
+        ],
+        'no_live_region' => [
+            'message' => 'Page with interactive elements has no live region for status messages',
+            'suggestion' => 'Add a container with role="status" or aria-live="polite" for status messages',
+        ],
+    ],
 ];
