@@ -2,13 +2,24 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
-use DOMXPath;
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class FocusAnalyzer
+class FocusAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    private const GLOBAL_RESET = '/\*\s*:focus\s*\{[^}]*(?:outline\s*:\s*(?:none|0(?:px)?)\s*;?|outline-style\s*:\s*none\s*;?)[^}]*\}/i';
 
+    private const FOCUS_RULE = '/([\w\s.*#\[\]=",>+~:-]+):focus\s*\{([^}]*)\}/i';
+
+    protected string $key = 'focus';
+
+    protected string $description = 'Visible keyboard focus';
+
+    protected array $rules = ['2.4.7'];
+
+    /** @var list<string> */
     protected array $interactiveElements = [
         'a',
         'button',
@@ -17,117 +28,95 @@ class FocusAnalyzer
         'textarea',
     ];
 
-    public function analyze(DOMDocument $dom): array
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
-
-        $this->checkInlineStyles($xpath);
-        $this->checkStyleBlocks($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkInlineStyles();
+        $this->checkStyleBlocks();
     }
 
-    protected function checkInlineStyles(DOMXPath $xpath): void
+    protected function checkInlineStyles(): void
     {
-        // Check interactive elements with inline styles removing focus outline
         $selectors = [];
-        foreach ($this->interactiveElements as $el) {
-            $selectors[] = "//{$el}[@style]";
+
+        foreach ($this->interactiveElements as $tag) {
+            $selectors[] = "//{$tag}[@style]";
         }
-        // Also check elements with tabindex
+
+        // Also check elements with tabindex.
         $selectors[] = '//*[@tabindex][@style]';
 
-        $query = implode('|', $selectors);
-        $elements = $xpath->query($query);
-
-        foreach ($elements as $element) {
-            $style = $element->getAttribute('style');
-
-            if ($this->removesOutline($style)) {
-                $this->violations[] = [
-                    'type' => 'error',
-                    'rule' => 'WCAG 2.4.7',
-                    'element' => $element->nodeName,
-                    'message' => 'Focus indicator removed via inline style',
-                    'suggestion' => 'Do not remove the outline on interactive elements, or provide an alternative focus indicator',
-                    'auto_fixable' => false,
-                ];
+        foreach ($this->query(implode('|', $selectors)) as $element) {
+            if ($this->removesOutline($element->getAttribute('style'))) {
+                $this->report('outline_removed_inline', Severity::Error, '2.4.7', $element, [
+                    'tag' => Element::tag($element),
+                ]);
             }
         }
     }
 
-    protected function checkStyleBlocks(DOMXPath $xpath): void
+    protected function checkStyleBlocks(): void
     {
-        $styles = $xpath->query('//style');
+        foreach ($this->query('//style') as $style) {
+            $media = Text::lower(trim($style->getAttribute('media')));
 
-        foreach ($styles as $style) {
-            $css = $style->textContent;
-
-            if (empty(trim($css))) {
+            if ($media !== '' && ! str_contains($media, 'all') && ! str_contains($media, 'screen')) {
                 continue;
             }
 
-            $this->analyzeStyleBlock($css);
+            $css = $style->textContent;
+
+            if (trim($css) === '') {
+                continue;
+            }
+
+            $this->analyzeStyleBlock($css, $style);
         }
     }
 
-    protected function analyzeStyleBlock(string $css): void
+    protected function analyzeStyleBlock(string $css, DOMElement $style): void
     {
-        // Check for global focus resets like *:focus { outline: none }
-        if (preg_match('/\*\s*:focus\s*\{[^}]*(?:outline\s*:\s*(?:none|0(?:px)?)\s*;?|outline-style\s*:\s*none\s*;?)[^}]*\}/i', $css)) {
-            // Check if there's an alternative focus indicator in the same block
+        // Global focus resets such as *:focus { outline: none }.
+        if (preg_match(self::GLOBAL_RESET, $css) === 1) {
             if (! $this->hasAlternativeFocusIndicator($css)) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 2.4.7',
-                    'element' => 'style',
-                    'message' => 'Global focus outline reset detected (*:focus { outline: none })',
-                    'suggestion' => 'Provide an alternative focus indicator such as box-shadow, border, or background-color',
-                    'auto_fixable' => false,
-                ];
+                $this->report('outline_removed_global', Severity::Warning, '2.4.7', $style);
             }
 
             return;
         }
 
-        // Check for focus rules on specific elements removing outline without alternatives
-        if (preg_match_all('/([\w\s.*#\[\]=",>+~:-]+):focus\s*\{([^}]*)\}/i', $css, $matches, PREG_SET_ORDER)) {
-            foreach ($matches as $match) {
-                $ruleBody = $match[2];
+        // Focus rules on specific selectors that remove the outline without an alternative.
+        if (preg_match_all(self::FOCUS_RULE, $css, $matches, PREG_SET_ORDER) === 0) {
+            return;
+        }
 
-                if ($this->removesOutline($ruleBody)) {
-                    // Check if the same rule provides an alternative
-                    if (! $this->hasAlternativeInRule($ruleBody)) {
-                        $this->violations[] = [
-                            'type' => 'error',
-                            'rule' => 'WCAG 2.4.7',
-                            'element' => 'style',
-                            'message' => 'Focus outline removed in stylesheet without alternative indicator',
-                            'selector' => trim($match[1]).':focus',
-                            'suggestion' => 'Provide an alternative focus indicator such as box-shadow, border, or background-color',
-                            'auto_fixable' => false,
-                        ];
-                    }
-                }
+        foreach ($matches as $match) {
+            $ruleBody = $match[2];
+
+            if (! $this->removesOutline($ruleBody) || $this->hasAlternativeInRule($ruleBody)) {
+                continue;
             }
+
+            $selector = trim($match[1]).':focus';
+
+            $this->report('outline_removed', Severity::Error, '2.4.7', $style, ['selector' => $selector], ['selector' => $selector]);
         }
     }
 
     protected function removesOutline(string $css): bool
     {
-        return (bool) preg_match('/outline\s*:\s*(?:none|0(?:px)?)\s*[;!}]?/i', $css)
-            || (bool) preg_match('/outline-style\s*:\s*none/i', $css);
+        return preg_match('/outline\s*:\s*(?:none|0(?:px)?)\s*[;!}]?/i', $css) === 1
+            || preg_match('/outline-style\s*:\s*none/i', $css) === 1;
     }
 
     protected function hasAlternativeFocusIndicator(string $css): bool
     {
-        // Check if :focus rules exist with alternative indicators
-        if (preg_match_all('/:focus\s*\{([^}]*)\}/i', $css, $matches)) {
-            foreach ($matches[1] as $ruleBody) {
-                if ($this->hasAlternativeInRule($ruleBody)) {
-                    return true;
-                }
+        if (preg_match_all('/:focus\s*\{([^}]*)\}/i', $css, $matches) === 0) {
+            return false;
+        }
+
+        foreach ($matches[1] as $ruleBody) {
+            if ($this->hasAlternativeInRule($ruleBody)) {
+                return true;
             }
         }
 
@@ -136,10 +125,10 @@ class FocusAnalyzer
 
     protected function hasAlternativeInRule(string $ruleBody): bool
     {
-        return (bool) preg_match('/box-shadow\s*:/i', $ruleBody)
-            || (bool) preg_match('/border\s*:/i', $ruleBody)
-            || (bool) preg_match('/border-color\s*:/i', $ruleBody)
-            || (bool) preg_match('/background\s*:/i', $ruleBody)
-            || (bool) preg_match('/background-color\s*:/i', $ruleBody);
+        return preg_match('/box-shadow\s*:/i', $ruleBody) === 1
+            || preg_match('/border\s*:/i', $ruleBody) === 1
+            || preg_match('/border-color\s*:/i', $ruleBody) === 1
+            || preg_match('/background\s*:/i', $ruleBody) === 1
+            || preg_match('/background-color\s*:/i', $ruleBody) === 1;
     }
 }

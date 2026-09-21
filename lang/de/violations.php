@@ -317,4 +317,18 @@ return [
             'suggestion' => 'Ein Token aus der HTML-Autofill-Liste verwenden, z. B. "name", "email", "tel", "street-address", "postal-code"',
         ],
     ],
+    'focus' => [
+        'outline_removed_inline' => [
+            'message' => 'Fokusanzeige per Inline-Style an <:tag> entfernt',
+            'suggestion' => 'outline:none nicht inline setzen; stattdessen einen sichtbaren :focus-visible-Stil bereitstellen',
+        ],
+        'outline_removed_global' => [
+            'message' => 'Globaler Reset der Fokusanzeige (*:focus { outline: none })',
+            'suggestion' => 'Reset durch einen sichtbaren Fokusstil ersetzen, z. B. :focus-visible { outline: 2px solid }',
+        ],
+        'outline_removed' => [
+            'message' => 'Fokusanzeige für „:selector“ ohne alternative Kennzeichnung entfernt',
+            'suggestion' => 'Sichtbaren Fokusstil (outline, box-shadow oder border) für :selector ergänzen',
+        ],
+    ],
 ];
