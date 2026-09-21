@@ -307,4 +307,14 @@ return [
             'suggestion' => 'Keep the title concise; put the most important words first',
         ],
     ],
+    'input_purpose' => [
+        'missing_autocomplete' => [
+            'message' => 'Personal-data field ":name" has no autocomplete attribute',
+            'suggestion' => 'Add the matching autocomplete token, e.g. autocomplete="email" or "given-name"',
+        ],
+        'invalid_autocomplete' => [
+            'message' => 'Invalid autocomplete value ":value" on field ":name"',
+            'suggestion' => 'Use a token from the HTML autofill list, e.g. "name", "email", "tel", "street-address", "postal-code"',
+        ],
+    ],
 ];

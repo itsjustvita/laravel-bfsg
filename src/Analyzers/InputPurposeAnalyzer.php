@@ -2,13 +2,21 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use DOMDocument;
-use DOMXPath;
+use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Severity;
 
-class InputPurposeAnalyzer
+class InputPurposeAnalyzer extends BaseAnalyzer
 {
-    protected array $violations = [];
+    private const FIELDS = '//input[not(@type="hidden") and not(@type="submit") and not(@type="button") and not(@type="reset")]|//select|//textarea';
 
+    protected string $key = 'input_purpose';
+
+    protected string $description = 'Identify input purpose (autocomplete)';
+
+    protected array $rules = ['1.3.5'];
+
+    /** @var list<string> */
     protected array $personalDataPatterns = [
         'name',
         'email',
@@ -28,6 +36,7 @@ class InputPurposeAnalyzer
         'url',
     ];
 
+    /** @var list<string> */
     protected array $validAutocompleteTokens = [
         'name',
         'email',
@@ -80,45 +89,31 @@ class InputPurposeAnalyzer
         'transaction-amount',
     ];
 
-    public function analyze(DOMDocument $dom): array
+    protected function inspect(): void
     {
-        $this->violations = [];
-        $xpath = new DOMXPath($dom);
-
-        $this->checkInputPurpose($xpath);
-
-        return ['issues' => $this->violations];
+        $this->checkInputPurpose();
     }
 
-    protected function checkInputPurpose(DOMXPath $xpath): void
+    protected function checkInputPurpose(): void
     {
-        $inputs = $xpath->query('//input[not(@type="hidden") and not(@type="submit") and not(@type="button") and not(@type="reset")]|//select|//textarea');
-
-        foreach ($inputs as $input) {
+        foreach ($this->query(self::FIELDS) as $input) {
             $autocomplete = $input->getAttribute('autocomplete');
-            $isPersonalData = $this->isPersonalDataField($input);
 
             if ($autocomplete !== '') {
                 $this->validateAutocompleteValue($autocomplete, $input);
-            } elseif ($isPersonalData) {
-                $this->violations[] = [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 1.3.5',
-                    'element' => $input->nodeName,
-                    'message' => 'Personal data input field is missing autocomplete attribute',
-                    'name' => $input->getAttribute('name') ?: $input->getAttribute('id') ?: 'unnamed',
-                    'suggestion' => 'Add an autocomplete attribute with the appropriate token to help users fill in personal data',
-                    'auto_fixable' => false,
-                ];
+            } elseif ($this->isPersonalDataField($input)) {
+                $this->report('missing_autocomplete', Severity::Warning, '1.3.5', $input, [
+                    'name' => $this->fieldName($input),
+                ]);
             }
         }
     }
 
-    protected function isPersonalDataField($input): bool
+    protected function isPersonalDataField(DOMElement $input): bool
     {
-        $name = strtolower($input->getAttribute('name'));
-        $id = strtolower($input->getAttribute('id'));
-        $type = strtolower($input->getAttribute('type'));
+        $name = Text::lower($input->getAttribute('name'));
+        $id = Text::lower($input->getAttribute('id'));
+        $type = Text::lower($input->getAttribute('type'));
 
         foreach ($this->personalDataPatterns as $pattern) {
             if ($name !== '' && str_contains($name, $pattern)) {
@@ -129,29 +124,25 @@ class InputPurposeAnalyzer
             }
         }
 
-        // Check input types that imply personal data
-        if (in_array($type, ['email', 'tel', 'url'], true)) {
-            return true;
-        }
-
-        return false;
+        // Input types that imply personal data.
+        return in_array($type, ['email', 'tel', 'url'], true);
     }
 
-    protected function validateAutocompleteValue(string $autocomplete, $input): void
+    protected function validateAutocompleteValue(string $autocomplete, DOMElement $input): void
     {
-        $tokens = preg_split('/\s+/', trim($autocomplete));
+        $tokens = preg_split('/\s+/', trim($autocomplete)) ?: [];
         $lastToken = end($tokens);
 
         if (! in_array($lastToken, $this->validAutocompleteTokens, true)) {
-            $this->violations[] = [
-                'type' => 'error',
-                'rule' => 'WCAG 1.3.5',
-                'element' => $input->nodeName,
-                'message' => "Invalid autocomplete value \"{$autocomplete}\"",
-                'name' => $input->getAttribute('name') ?: $input->getAttribute('id') ?: 'unnamed',
-                'suggestion' => 'Use a valid autocomplete token such as: name, email, tel, street-address, postal-code',
-                'auto_fixable' => false,
-            ];
+            $this->report('invalid_autocomplete', Severity::Error, '1.3.5', $input, [
+                'name' => $this->fieldName($input),
+                'value' => $autocomplete,
+            ]);
         }
+    }
+
+    protected function fieldName(DOMElement $input): string
+    {
+        return $input->getAttribute('name') ?: $input->getAttribute('id') ?: 'unnamed';
     }
 }

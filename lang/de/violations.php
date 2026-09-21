@@ -307,4 +307,14 @@ return [
             'suggestion' => 'Titel knapp halten; die wichtigsten Wörter zuerst',
         ],
     ],
+    'input_purpose' => [
+        'missing_autocomplete' => [
+            'message' => 'Feld für personenbezogene Daten „:name“ ohne autocomplete-Attribut',
+            'suggestion' => 'Passendes autocomplete-Token ergänzen, z. B. autocomplete="email" oder "given-name"',
+        ],
+        'invalid_autocomplete' => [
+            'message' => 'Ungültiger autocomplete-Wert „:value“ am Feld „:name“',
+            'suggestion' => 'Ein Token aus der HTML-Autofill-Liste verwenden, z. B. "name", "email", "tel", "street-address", "postal-code"',
+        ],
+    ],
 ];
