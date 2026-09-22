@@ -2,7 +2,6 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-use ItsJustVita\LaravelBfsg\Css\Color;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\Text;
 use ItsJustVita\LaravelBfsg\Severity;
@@ -42,7 +41,7 @@ class ContrastAnalyzer extends BaseAnalyzer
     protected function inspect(): void
     {
         $this->cssParser ??= new CssParser;
-        $this->cssParser->parse($this->document->dom());
+        $this->cssParser->parse($this->document);
 
         $this->checkCssColors($this->cssParser);
         $this->checkProblematicPatterns();
@@ -71,14 +70,9 @@ class ContrastAnalyzer extends BaseAnalyzer
                 continue;
             }
 
-            $colors = $cssParser->getResolvedColors($element);
-
-            $foreground = Color::parse($colors['color']);
-            $background = Color::parse($colors['backgroundColor']);
-
-            if ($foreground === null || $background === null) {
-                continue;
-            }
+            $colors = $cssParser->resolveColors($element);
+            $foreground = $colors['foreground'];
+            $background = $colors['background'];
 
             $ratio = $foreground->contrastWith($background);
 
@@ -99,8 +93,8 @@ class ContrastAnalyzer extends BaseAnalyzer
                 [
                     'ratio' => number_format($ratio, 2),
                     'required' => $required,
-                    'foreground' => $colors['color'],
-                    'background' => $colors['backgroundColor'],
+                    'foreground' => $foreground->toHex(),
+                    'background' => $background->toHex(),
                     'content' => Text::truncate($text, 30),
                 ],
                 [

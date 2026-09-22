@@ -2,614 +2,853 @@
 
 namespace ItsJustVita\LaravelBfsg\Css;
 
-use DOMDocument;
 use DOMElement;
-use DOMXPath;
+use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use Throwable;
 
+/**
+ * Small CSS engine for static analysis: tokenizes stylesheets, resolves the cascade for a
+ * supported selector subset, and computes text/background colours and font metrics.
+ *
+ * A rule is an array{selector: string, properties: array<string, array{value: string, important: bool}>,
+ * specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}.
+ */
 class CssParser
 {
+    /** Upper bound of indexed rules; only rules carrying one of INDEXED_PROPERTIES count. */
+    public const MAX_INDEXED_RULES = 2000;
+
+    /** Colour and font properties (spec §6.1) plus display/visibility for CSS-hidden detection. */
+    public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font-size', 'font-weight', 'display', 'visibility'];
+
+    /** At-rules whose body is unwrapped (their rules apply unconditionally for static analysis). */
+    private const UNWRAPPED_AT_RULES = ['layer', 'supports', 'container', 'scope', 'document', '-moz-document'];
+
+    private const FONT_KEYWORDS = [
+        'xx-small' => 9.0, 'x-small' => 10.0, 'small' => 13.0, 'medium' => 16.0,
+        'large' => 18.0, 'x-large' => 24.0, 'xx-large' => 32.0, 'xxx-large' => 48.0,
+    ];
+
+    /** Default font-size factor relative to the parent, per UA stylesheet. */
+    private const TAG_FONT_FACTORS = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.67, 'small' => 0.83];
+
+    private const BOLD_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th', 'b', 'strong'];
+
+    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
     protected array $rules = [];
 
-    protected DOMXPath $xpath;
+    /** @var array<string, list<int>> node path => indexes into */
+    protected array $index = [];
 
-    /**
-     * Pre-computed map: element node-path → list of rule indexes that match.
-     * Built once per parse() to avoid re-running an XPath query for every
-     * (element × rule) pair during contrast analysis. This turns the hot
-     * path from O(N * M * doc) into O(M * doc) + O(N).
-     *
-     * @var array<string, array<int, int>>
-     */
-    protected array $ruleMatchIndex = [];
+    protected bool $indexed = false;
 
-    /**
-     * Hard upper bound on the number of CSS rules we'll index. Some pages
-     * ship huge utility CSS (Tailwind JIT) and we'd otherwise spend minutes
-     * resolving contrast colors. Beyond this we drop to "best effort" and
-     * rely on inline styles + inheritance fallback.
-     */
-    protected const MAX_INDEXED_RULES = 2000;
+    protected bool $truncated = false;
 
-    /**
-     * Parse CSS from a DOMDocument (extracts all <style> blocks)
-     */
-    public function parse(DOMDocument $dom): self
+    protected ?HtmlDocument $document = null;
+
+    /** @var array<string, array{0: Color, 1: bool}> */
+    private array $backgroundCache = [];
+
+    /** @var array<string, array{0: Color, 1: bool}> */
+    private array $foregroundCache = [];
+
+    /** @var array<string, float> */
+    private array $fontSizeCache = [];
+
+    /** @var array<string, array<string, array{value: string, important: bool}>> */
+    private array $declarationCache = [];
+
+    /** @var array<string, array<string, list<int>>> node path => property => cascade weight of the winner */
+    private array $weightCache = [];
+
+    /** Parse every screen stylesheet of the document and build the rule index. */
+    public function parse(HtmlDocument $document): static
     {
-        $this->xpath = new DOMXPath($dom);
+        $this->document = $document;
         $this->rules = [];
-        $this->ruleMatchIndex = [];
+        $this->index = [];
+        $this->truncated = false;
+        $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
 
-        // Extract <style> blocks
-        $styleNodes = $dom->getElementsByTagName('style');
-        foreach ($styleNodes as $styleNode) {
-            $css = $styleNode->textContent;
-            $this->parseCss($css);
+        foreach ($this->stylesheetsFor($document) as $sheet => $css) {
+            foreach ($this->parseStylesheet($css, count($this->rules)) as $rule) {
+                $rule['sheet'] = $sheet;
+                $this->rules[] = $rule;
+            }
         }
 
-        $this->buildRuleMatchIndex();
+        $this->buildIndex();
 
         return $this;
     }
 
-    /**
-     * Walk every parsed rule once and record which elements it matches.
-     * Subsequent per-element lookups then become a single hash hit.
-     */
-    protected function buildRuleMatchIndex(): void
+    /** @return list<string> */
+    public function stylesheetsFor(HtmlDocument $document): array
     {
-        $limit = min(count($this->rules), self::MAX_INDEXED_RULES);
+        return $document->styleSheets();
+    }
 
-        for ($idx = 0; $idx < $limit; $idx++) {
-            $rule = $this->rules[$idx];
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
+    public function rules(): array
+    {
+        return $this->rules;
+    }
 
-            // Only rules that could contribute to color resolution are worth
-            // indexing — everything else just bloats the map.
-            $props = $rule['properties'];
-            if (! isset($props['color'], $props['background-color'], $props['background'])
-                && ! isset($props['color'])
-                && ! isset($props['background-color'])
-                && ! isset($props['background'])) {
-                continue;
-            }
+    public function isIndexed(): bool
+    {
+        return $this->indexed;
+    }
 
-            $xpathExpr = $this->cssToXpath($rule['selector']);
-            if ($xpathExpr === null) {
-                continue;
-            }
-
-            try {
-                $results = @$this->xpath->query($xpathExpr);
-            } catch (\Exception $e) {
-                continue;
-            }
-
-            if ($results === false) {
-                continue;
-            }
-
-            foreach ($results as $node) {
-                if (! $node instanceof DOMElement) {
-                    continue;
-                }
-                $key = $node->getNodePath();
-                if ($key === null) {
-                    continue;
-                }
-                $this->ruleMatchIndex[$key][] = $idx;
-            }
-        }
+    /** True when more than MAX_INDEXED_RULES colour/font rules exist; results are approximate. */
+    public function isTruncated(): bool
+    {
+        return $this->truncated;
     }
 
     /**
-     * Parse raw CSS string into rules
+     * Tokenize one stylesheet into qualified rules. Comments are stripped; @media is kept for
+     * all/screen only; @layer, @supports, @container are unwrapped; every other at-rule is dropped.
+     *
+     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}>
      */
-    protected function parseCss(string $css): void
+    public function parseStylesheet(string $css, int $orderOffset = 0): array
     {
-        // Remove comments
-        $css = preg_replace('/\/\*.*?\*\//s', '', $css);
+        $rules = [];
+        $this->parseBlock(self::stripComments($css), $rules, $orderOffset);
 
-        // Skip @media, @import, @keyframes blocks (out of scope)
-        $css = preg_replace('/@media\s*[^{]*\{(?:[^{}]*|\{[^{}]*\})*\}/s', '', $css);
-        $css = preg_replace('/@import[^;]*;/', '', $css);
-        $css = preg_replace('/@keyframes\s*[^{]*\{(?:[^{}]*|\{[^{}]*\})*\}/s', '', $css);
-        $css = preg_replace('/@font-face\s*\{[^}]*\}/s', '', $css);
+        return $rules;
+    }
 
-        // Match rule blocks: selector { properties }
-        preg_match_all('/([^{]+)\{([^}]*)\}/s', $css, $matches, PREG_SET_ORDER);
-
-        foreach ($matches as $match) {
-            $selectorGroup = trim($match[1]);
-            $propertiesStr = trim($match[2]);
-
-            // Parse properties
-            $properties = $this->parseProperties($propertiesStr);
-
-            if (empty($properties)) {
-                continue;
-            }
-
-            // Handle comma-separated selectors
-            $selectors = array_map('trim', explode(',', $selectorGroup));
-
-            foreach ($selectors as $selector) {
-                if (empty($selector)) {
-                    continue;
-                }
-
-                $this->rules[] = [
-                    'selector' => $selector,
-                    'properties' => $properties,
-                    'specificity' => $this->calculateSpecificity($selector),
-                ];
-            }
-        }
+    public static function stripComments(string $css): string
+    {
+        return preg_replace('~/\*.*?(\*/|$)~s', '', $css) ?? $css;
     }
 
     /**
-     * Parse CSS property string into key-value pairs
+     * Declarations of a block (or style attribute): names lowercased, `!important` detected and stripped,
+     * `;` inside parentheses or quotes (data URIs, url()) does not split, nested blocks are skipped.
+     *
+     * @return array<string, array{value: string, important: bool}>
      */
-    protected function parseProperties(string $propertiesStr): array
+    public function parseProperties(string $block): array
     {
         $properties = [];
-        $declarations = array_filter(array_map('trim', explode(';', $propertiesStr)));
 
-        foreach ($declarations as $declaration) {
-            $parts = explode(':', $declaration, 2);
-            if (count($parts) === 2) {
-                $property = trim($parts[0]);
-                $value = trim($parts[1]);
+        foreach ($this->splitTopLevel(self::stripComments($block), ';', true) as $declaration) {
+            $colon = strpos($declaration, ':');
 
-                // Remove !important flag (note it but strip it)
-                $value = str_replace('!important', '', $value);
-                $value = trim($value);
-
-                if ($property !== '' && $value !== '') {
-                    $properties[$property] = $value;
-                }
+            if ($colon === false) {
+                continue;
             }
+
+            $name = strtolower(trim(substr($declaration, 0, $colon)));
+            $value = trim(substr($declaration, $colon + 1));
+            $important = false;
+
+            if (preg_match('/!\s*important\s*$/i', $value) === 1) {
+                $important = true;
+                $value = trim(preg_replace('/!\s*important\s*$/i', '', $value) ?? $value);
+            }
+
+            if ($name === '' || $value === '' || preg_match('/^-?[a-z_][a-z0-9_-]*$/', $name) !== 1) {
+                continue;
+            }
+
+            if (isset($properties[$name]) && $properties[$name]['important'] && ! $important) {
+                continue;
+            }
+
+            $properties[$name] = ['value' => $value, 'important' => $important];
         }
 
         return $properties;
     }
 
-    /**
-     * Calculate CSS specificity as [id, class, element] tuple
-     */
+    /** @return array<string, array{value: string, important: bool}> */
+    public function inlineStyle(DOMElement $element): array
+    {
+        return $this->parseProperties($element->getAttribute('style'));
+    }
+
+    /** Specificity as [ids, classes/attributes/pseudo-classes, types/pseudo-elements]. */
     public function calculateSpecificity(string $selector): array
     {
-        $ids = 0;
-        $classes = 0;
-        $elements = 0;
+        $selector = preg_replace('/\\\\./', 'x', $selector) ?? $selector;
+        $selector = preg_replace('/:(?:not|is|where)\(/i', ' ', $selector) ?? $selector;
+        $selector = str_replace(')', ' ', $selector);
 
-        // Remove :not() wrapper but keep contents
-        $selector = preg_replace('/:not\(([^)]*)\)/', '$1', $selector);
+        $ids = preg_match_all('/#[\w-]+/', $selector);
+        $pseudoElements = preg_match_all('/::[\w-]+/', $selector);
+        $selector = preg_replace('/::[\w-]+/', ' ', $selector) ?? $selector;
+        $classes = preg_match_all('/\.[\w-]+/', $selector) + preg_match_all('/\[[^\]]*\]/', $selector) + preg_match_all('/:[\w-]+/', $selector);
 
-        // Count ID selectors
-        $ids = preg_match_all('/#[a-zA-Z_][\w-]*/', $selector);
+        $stripped = preg_replace(['/#[\w-]+/', '/\.[\w-]+/', '/\[[^\]]*\]/', '/:[\w-]+(\([^)]*\))?/'], ' ', $selector) ?? $selector;
+        $types = preg_match_all('/(?:^|[\s>+~])([a-zA-Z][\w-]*)/', $stripped);
 
-        // Count class selectors, attribute selectors, pseudo-classes
-        $classes = preg_match_all('/\.[a-zA-Z_][\w-]*/', $selector);
-        $classes += preg_match_all('/\[[^\]]+\]/', $selector);
-        $classes += preg_match_all('/:[a-zA-Z][\w-]*(?!\()/', $selector);
-
-        // Count element selectors and pseudo-elements
-        // Remove IDs, classes, attributes, pseudo-classes first
-        $cleaned = preg_replace('/#[a-zA-Z_][\w-]*/', '', $selector);
-        $cleaned = preg_replace('/\.[a-zA-Z_][\w-]*/', '', $cleaned);
-        $cleaned = preg_replace('/\[[^\]]+\]/', '', $cleaned);
-        $cleaned = preg_replace('/:[a-zA-Z][\w-]*/', '', $cleaned);
-        $cleaned = preg_replace('/::[\w-]+/', '', $cleaned);
-
-        // Remove combinators and whitespace
-        $cleaned = preg_replace('/[>+~\s]+/', ' ', trim($cleaned));
-        $parts = array_filter(explode(' ', $cleaned));
-
-        foreach ($parts as $part) {
-            if ($part !== '*' && preg_match('/^[a-zA-Z][\w-]*$/', $part)) {
-                $elements++;
-            }
-        }
-
-        // Count pseudo-elements
-        $elements += preg_match_all('/::[\w-]+/', $selector);
-
-        return [$ids, $classes, $elements];
+        return [$ids, $classes, $types + $pseudoElements];
     }
 
     /**
-     * Get the resolved color and background-color for a DOM element
+     * Convert a selector of the supported subset to an absolute XPath, or null when any part is unsupported.
+     * Supported: type, *, .class, #id, [attr], [attr=|~=|^=|$=|*=||=value], :root, :link, :first-child,
+     * :last-child, :not(<compound>), descendant and child combinators.
      */
-    public function getResolvedColors(DOMElement $element): array
+    public function simpleSelectorToXpath(string $selector): ?string
     {
-        $color = null;
-        $backgroundColor = null;
-        $approximate = false;
+        $selector = trim($selector);
 
-        // 1. Collect matching CSS rules sorted by specificity
-        $matchingRules = $this->getMatchingRules($element);
+        if ($selector === '') {
+            return null;
+        }
 
-        // Sort by specificity (ascending — last wins)
-        usort($matchingRules, function ($a, $b) {
-            return $this->compareSpecificity($a['specificity'], $b['specificity']);
-        });
+        $xpath = '';
+        $position = 0;
+        $length = strlen($selector);
+        $axis = '//';
 
-        // Apply CSS rules (lowest specificity first, higher overwrites)
-        foreach ($matchingRules as $rule) {
-            if (isset($rule['properties']['color'])) {
-                $value = $rule['properties']['color'];
-                if ($this->isResolvableColor($value)) {
-                    $color = $value;
-                } else {
-                    $approximate = true;
-                }
+        while ($position < $length) {
+            $compound = $this->compoundToXpath($selector, $position);
+
+            if ($compound === null) {
+                return null;
             }
-            if (isset($rule['properties']['background-color'])) {
-                $value = $rule['properties']['background-color'];
-                if ($this->isResolvableColor($value)) {
-                    $backgroundColor = $value;
-                } else {
-                    $approximate = true;
-                }
+
+            $xpath .= $axis.$compound;
+            $whitespace = $this->skipWhitespace($selector, $position);
+
+            if ($position >= $length) {
+                break;
             }
-            if (isset($rule['properties']['background'])) {
-                // Extract color from shorthand background
-                $bgColor = $this->extractColorFromBackground($rule['properties']['background']);
-                if ($bgColor !== null) {
-                    $backgroundColor = $bgColor;
-                }
+
+            if ($selector[$position] === '>') {
+                $position++;
+                $this->skipWhitespace($selector, $position);
+                $axis = '/';
+            } elseif ($whitespace) {
+                $axis = '//';
+            } else {
+                return null;
             }
         }
 
-        // 2. Inline styles override everything
-        $inlineStyle = $element->getAttribute('style');
-        if ($inlineStyle) {
-            $inlineProps = $this->parseProperties($inlineStyle);
-            if (isset($inlineProps['color']) && $this->isResolvableColor($inlineProps['color'])) {
-                $color = $inlineProps['color'];
-            }
-            if (isset($inlineProps['background-color']) && $this->isResolvableColor($inlineProps['background-color'])) {
-                $backgroundColor = $inlineProps['background-color'];
-            }
-            if (isset($inlineProps['background'])) {
-                $bgColor = $this->extractColorFromBackground($inlineProps['background']);
-                if ($bgColor !== null) {
-                    $backgroundColor = $bgColor;
-                }
+        return $xpath;
+    }
+
+    /** @return array<string, array{value: string, important: bool}> cascaded declarations of the element itself */
+    public function declarationsFor(DOMElement $element): array
+    {
+        $key = $this->nodeKey($element);
+
+        if (isset($this->declarationCache[$key])) {
+            return $this->declarationCache[$key];
+        }
+
+        $winners = [];
+
+        foreach ($this->matchingRules($element) as $rule) {
+            foreach ($rule['properties'] as $name => $declaration) {
+                $weight = [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']];
+                $this->keepHeavier($winners, $name, $declaration, $weight);
             }
         }
 
-        // 3. Inheritance — walk up DOM tree
-        if ($color === null || $backgroundColor === null) {
-            $parent = $element->parentNode;
-            while ($parent instanceof DOMElement) {
-                $parentColors = $this->getDirectColors($parent);
-
-                if ($color === null && $parentColors['color'] !== null) {
-                    $color = $parentColors['color'];
-                    $approximate = true; // inherited
-                }
-                if ($backgroundColor === null && $parentColors['backgroundColor'] !== null) {
-                    $backgroundColor = $parentColors['backgroundColor'];
-                    $approximate = true; // inherited
-                }
-
-                if ($color !== null && $backgroundColor !== null) {
-                    break;
-                }
-
-                $parent = $parent->parentNode;
-            }
+        foreach ($this->inlineStyle($element) as $name => $declaration) {
+            $weight = [$declaration['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX];
+            $this->keepHeavier($winners, $name, $declaration, $weight);
         }
 
-        // 4. Browser defaults
-        if ($color === null) {
-            $color = '#000000';
-            $approximate = true;
-        }
-        if ($backgroundColor === null) {
-            $backgroundColor = '#ffffff';
-            $approximate = true;
+        $this->weightCache[$key] = array_map(fn (array $winner) => $winner['weight'], $winners);
+
+        return $this->declarationCache[$key] = array_map(fn (array $winner) => $winner['declaration'], $winners);
+    }
+
+    /**
+     * Effective text and background colour of an element.
+     *
+     * @return array{foreground: Color, background: Color, approximate: bool}
+     */
+    public function resolveColors(DOMElement $element): array
+    {
+        [$background, $bgApproximate] = $this->background($element);
+        [$foreground, $fgApproximate] = $this->foreground($element);
+
+        if ($foreground->a < 1) {
+            $foreground = $foreground->over($background);
         }
 
         return [
-            'color' => $color,
-            'backgroundColor' => $backgroundColor,
-            'approximate' => $approximate,
+            'foreground' => $foreground,
+            'background' => $background,
+            'approximate' => $bgApproximate || $fgApproximate || $this->truncated,
         ];
     }
 
-    /**
-     * Get direct (non-inherited) colors for an element
-     */
-    protected function getDirectColors(DOMElement $element): array
+    public function fontSizePx(DOMElement $element): float
     {
-        $color = null;
-        $backgroundColor = null;
+        $key = $this->nodeKey($element);
 
-        // Check CSS rules
-        $matchingRules = $this->getMatchingRules($element);
-        usort($matchingRules, fn ($a, $b) => $this->compareSpecificity($a['specificity'], $b['specificity']));
-
-        foreach ($matchingRules as $rule) {
-            if (isset($rule['properties']['color'])) {
-                $color = $rule['properties']['color'];
-            }
-            if (isset($rule['properties']['background-color'])) {
-                $backgroundColor = $rule['properties']['background-color'];
-            }
-            if (isset($rule['properties']['background'])) {
-                $bgColor = $this->extractColorFromBackground($rule['properties']['background']);
-                if ($bgColor !== null) {
-                    $backgroundColor = $bgColor;
-                }
-            }
+        if (isset($this->fontSizeCache[$key])) {
+            return $this->fontSizeCache[$key];
         }
 
-        // Inline overrides
-        $inlineStyle = $element->getAttribute('style');
-        if ($inlineStyle) {
-            $inlineProps = $this->parseProperties($inlineStyle);
-            if (isset($inlineProps['color'])) {
-                $color = $inlineProps['color'];
-            }
-            if (isset($inlineProps['background-color'])) {
-                $backgroundColor = $inlineProps['background-color'];
-            }
-            if (isset($inlineProps['background'])) {
-                $bgColor = $this->extractColorFromBackground($inlineProps['background']);
-                if ($bgColor !== null) {
-                    $backgroundColor = $bgColor;
-                }
-            }
+        $parent = $element->parentNode instanceof DOMElement ? $this->fontSizePx($element->parentNode) : 16.0;
+        $value = strtolower($this->declarationsFor($element)['font-size']['value'] ?? '');
+        $size = $this->fontSizeFrom($value, $parent);
+
+        if ($size === null) {
+            $size = $parent * (self::TAG_FONT_FACTORS[Element::tag($element)] ?? 1.0);
         }
 
-        return ['color' => $color, 'backgroundColor' => $backgroundColor];
+        return $this->fontSizeCache[$key] = $size;
     }
 
     /**
-     * Get all CSS rules matching a DOM element.
-     *
-     * Uses the pre-built ruleMatchIndex when available (set by parse()),
-     * which is ~three orders of magnitude faster on pages with many rules
-     * and many text-bearing elements. Falls back to the linear scan if
-     * a caller constructs the parser without going through parse().
+     * Whether the stylesheets hide the element: cascaded display:none on self or an ancestor, or an inherited
+     * visibility:hidden/collapse that no closer element resets to visible.
      */
-    protected function getMatchingRules(DOMElement $element): array
+    public function hidesElement(DOMElement $element): bool
     {
-        if ($this->ruleMatchIndex !== []) {
-            $key = $element->getNodePath();
-            if ($key === null) {
-                return [];
+        $visibility = null;
+
+        for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
+            $declarations = $this->declarationsFor($node);
+
+            if (strtolower($declarations['display']['value'] ?? '') === 'none') {
+                return true;
             }
 
-            $indexes = $this->ruleMatchIndex[$key] ?? [];
-            $matching = [];
-            foreach ($indexes as $idx) {
-                if (isset($this->rules[$idx])) {
-                    $matching[] = $this->rules[$idx];
-                }
-            }
+            $own = strtolower($declarations['visibility']['value'] ?? '');
 
-            return $matching;
-        }
-
-        $matching = [];
-        foreach ($this->rules as $rule) {
-            if ($this->selectorMatchesElement($rule['selector'], $element)) {
-                $matching[] = $rule;
+            if ($visibility === null && in_array($own, ['visible', 'hidden', 'collapse'], true)) {
+                $visibility = $own;
             }
         }
 
-        return $matching;
+        return $visibility === 'hidden' || $visibility === 'collapse';
     }
 
-    /**
-     * Check if a CSS selector matches a DOM element
-     */
-    public function selectorMatchesElement(string $selector, DOMElement $element): bool
+    public function isBold(DOMElement $element): bool
     {
-        // Try to convert CSS selector to XPath and use it
-        try {
-            $xpath = $this->cssToXpath($selector);
-            if ($xpath === null) {
-                return false;
-            }
+        for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
+            $value = strtolower($this->declarationsFor($node)['font-weight']['value'] ?? '');
 
-            $results = $this->xpath->query($xpath);
-            if ($results === false) {
-                return false;
-            }
-
-            foreach ($results as $node) {
-                if ($node->isSameNode($element)) {
+            if ($value === '' || in_array($value, ['inherit', 'unset'], true)) {
+                if (in_array(Element::tag($node), self::BOLD_TAGS, true)) {
                     return true;
                 }
+
+                continue;
             }
-        } catch (\Exception $e) {
-            return false;
+
+            if (in_array($value, ['bold', 'bolder'], true)) {
+                return true;
+            }
+
+            return is_numeric($value) && (int) $value >= 700;
         }
 
         return false;
     }
 
-    /**
-     * Convert simple CSS selector to XPath
-     */
-    protected function cssToXpath(string $selector): ?string
+    /** @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}>  $rules */
+    private function parseBlock(string $css, array &$rules, int $orderOffset): void
     {
-        $selector = trim($selector);
+        $position = 0;
+        $length = strlen($css);
 
-        // Skip pseudo-classes/elements we can't evaluate
-        if (preg_match('/:(hover|focus|active|visited|focus-within|focus-visible)\b/', $selector)) {
+        while ($position < $length) {
+            $this->skipWhitespace($css, $position);
+
+            if ($position >= $length) {
+                break;
+            }
+
+            if ($css[$position] === '@') {
+                preg_match('/@([\w-]+)/A', $css, $m, 0, $position);
+                $name = strtolower($m[1] ?? '');
+                $position += strlen($m[0] ?? '@');
+                [$prelude, $terminator] = $this->readUntil($css, $position, ['{', ';']);
+
+                if ($terminator !== '{') {
+                    continue; // statement at-rule: @charset, @import, @layer a, b; @namespace
+                }
+
+                $body = $this->readBlock($css, $position);
+
+                if ($name === 'media' && HtmlDocument::mediaAppliesToScreen($prelude)) {
+                    $this->parseBlock($body, $rules, $orderOffset);
+                } elseif (in_array($name, self::UNWRAPPED_AT_RULES, true)) {
+                    $this->parseBlock($body, $rules, $orderOffset);
+                }
+
+                continue; // @font-face, @keyframes, @page, @property, print media, …
+            }
+
+            [$prelude, $terminator] = $this->readUntil($css, $position, ['{']);
+
+            if ($terminator !== '{') {
+                break;
+            }
+
+            $properties = $this->parseProperties($this->readBlock($css, $position));
+
+            if ($properties === []) {
+                continue;
+            }
+
+            foreach ($this->splitTopLevel($prelude, ',') as $selector) {
+                $selector = trim(preg_replace('/\s+/', ' ', $selector) ?? $selector);
+
+                if ($selector === '') {
+                    continue;
+                }
+
+                $rules[] = [
+                    'selector' => $selector,
+                    'properties' => $properties,
+                    'specificity' => $this->calculateSpecificity($selector),
+                    'order' => $orderOffset + count($rules),
+                    'sheet' => 0,
+                ];
+            }
+        }
+    }
+
+    private function buildIndex(): void
+    {
+        $indexedRules = 0;
+        $xpath = $this->document?->xpath();
+
+        foreach ($this->rules as $position => $rule) {
+            if (array_intersect(array_keys($rule['properties']), self::INDEXED_PROPERTIES) === []) {
+                continue;
+            }
+
+            if (++$indexedRules > self::MAX_INDEXED_RULES) {
+                $this->truncated = true;
+
+                break;
+            }
+
+            $expression = $this->simpleSelectorToXpath($rule['selector']);
+
+            if ($expression === null || $xpath === null) {
+                continue;
+            }
+
+            foreach ($this->document->query($expression) as $element) {
+                $this->index[$this->nodeKey($element)][] = $position;
+            }
+        }
+
+        $this->indexed = true;
+    }
+
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
+    private function matchingRules(DOMElement $element): array
+    {
+        if ($this->indexed) {
+            return array_map(fn (int $position) => $this->rules[$position], $this->index[$this->nodeKey($element)] ?? []);
+        }
+
+        return [];
+    }
+
+    /**
+     * @param  array<string, array{declaration: array{value: string, important: bool}, weight: list<int>}>  $winners
+     * @param  array{value: string, important: bool}  $declaration
+     * @param  list<int>  $weight
+     */
+    private function keepHeavier(array &$winners, string $name, array $declaration, array $weight): void
+    {
+        if (! isset($winners[$name]) || $weight >= $winners[$name]['weight']) {
+            $winners[$name] = ['declaration' => $declaration, 'weight' => $weight];
+        }
+    }
+
+    /** @return array{0: Color, 1: bool} colour and whether it is approximate */
+    private function background(DOMElement $element): array
+    {
+        $key = $this->nodeKey($element);
+
+        if (isset($this->backgroundCache[$key])) {
+            return $this->backgroundCache[$key];
+        }
+
+        [$parent, $approximate] = $element->parentNode instanceof DOMElement
+            ? $this->background($element->parentNode)
+            : [new Color(255, 255, 255), false];
+
+        $value = $this->winningBackground($element);
+
+        if ($value === null) {
+            return $this->backgroundCache[$key] = [$parent, $approximate];
+        }
+
+        [$own, $ownApproximate] = Color::fromBackground($value);
+
+        if ($own === null || $own->a <= 0) {
+            return $this->backgroundCache[$key] = [$parent, $approximate || $ownApproximate];
+        }
+
+        return $this->backgroundCache[$key] = [$own->a < 1 ? $own->over($parent) : $own, $approximate || $ownApproximate];
+    }
+
+    /** @return array{0: Color, 1: bool} */
+    private function foreground(DOMElement $element): array
+    {
+        $key = $this->nodeKey($element);
+
+        if (isset($this->foregroundCache[$key])) {
+            return $this->foregroundCache[$key];
+        }
+
+        [$parent, $approximate] = $element->parentNode instanceof DOMElement
+            ? $this->foreground($element->parentNode)
+            : [new Color(0, 0, 0), false];
+
+        $value = $this->declarationsFor($element)['color']['value'] ?? null;
+
+        if ($value === null) {
+            return $this->foregroundCache[$key] = [$parent, $approximate];
+        }
+
+        $own = Color::isUnresolvable($value) ? null : Color::parse($value);
+
+        if ($own === null) {
+            return $this->foregroundCache[$key] = [$parent, true];
+        }
+
+        return $this->foregroundCache[$key] = [$own, $approximate];
+    }
+
+    /** The value of whichever of background / background-color wins the cascade for the element. */
+    private function winningBackground(DOMElement $element): ?string
+    {
+        $declarations = $this->declarationsFor($element);
+        $weights = $this->weightCache[$this->nodeKey($element)] ?? [];
+        $shorthand = $declarations['background'] ?? null;
+        $longhand = $declarations['background-color'] ?? null;
+
+        if ($shorthand === null || $longhand === null) {
+            return ($longhand ?? $shorthand)['value'] ?? null;
+        }
+
+        return $weights['background-color'] >= $weights['background'] ? $longhand['value'] : $shorthand['value'];
+    }
+
+    private function fontSizeFrom(string $value, float $parent): ?float
+    {
+        if ($value === '' || in_array($value, ['inherit', 'unset'], true)) {
+            return $value === '' ? null : $parent;
+        }
+
+        if ($value === 'initial') {
+            return 16.0;
+        }
+
+        if (isset(self::FONT_KEYWORDS[$value])) {
+            return self::FONT_KEYWORDS[$value];
+        }
+
+        if ($value === 'larger' || $value === 'smaller') {
+            return $parent * ($value === 'larger' ? 1.2 : 0.83);
+        }
+
+        if (preg_match('/^(\d*\.?\d+)(px|pt|em|rem|%)$/', $value, $m) !== 1) {
             return null;
         }
 
-        // Handle child combinator: parent > child
-        $parts = preg_split('/\s*>\s*/', $selector);
-        if (count($parts) > 1) {
-            $xpaths = [];
-            foreach ($parts as $part) {
-                $x = $this->simpleSelectorToXpath(trim($part));
-                if ($x === null) {
-                    return null;
-                }
-                $xpaths[] = $x;
-            }
+        $number = (float) $m[1];
 
-            return '//'.implode('/', $xpaths);
-        }
-
-        // Handle descendant combinator
-        $parts = preg_split('/\s+/', $selector);
-        if (count($parts) > 1) {
-            $xpaths = [];
-            foreach ($parts as $part) {
-                $x = $this->simpleSelectorToXpath(trim($part));
-                if ($x === null) {
-                    return null;
-                }
-                $xpaths[] = $x;
-            }
-
-            return '//'.implode('//', $xpaths);
-        }
-
-        $x = $this->simpleSelectorToXpath($selector);
-
-        return $x ? '//'.$x : null;
+        return match ($m[2]) {
+            'px' => $number,
+            'pt' => $number * 4 / 3,
+            'em' => $number * $parent,
+            'rem' => $number * 16,
+            '%' => $number / 100 * $parent,
+        };
     }
 
-    /**
-     * Convert a single simple selector to XPath
-     */
-    protected function simpleSelectorToXpath(string $selector): ?string
+    private function compoundToXpath(string $selector, int &$position): ?string
     {
-        $element = '*';
+        $length = strlen($selector);
+        $name = '*';
         $predicates = [];
 
-        // Extract element name
-        if (preg_match('/^([a-zA-Z][\w-]*)/', $selector, $m)) {
-            $element = $m[1];
-            $selector = substr($selector, strlen($m[0]));
-        } elseif (str_starts_with($selector, '*')) {
-            $selector = substr($selector, 1);
+        if ($position < $length && $selector[$position] === '*') {
+            $position++;
+        } elseif (preg_match('/[a-zA-Z][a-zA-Z0-9-]*/A', $selector, $m, 0, $position) === 1) {
+            $name = strtolower($m[0]);
+            $position += strlen($m[0]);
         }
 
-        // Process remaining selector parts
-        while ($selector !== '' && $selector !== false) {
-            // ID selector
-            if (preg_match('/^#([a-zA-Z_][\w-]*)/', $selector, $m)) {
-                $predicates[] = "@id='{$m[1]}'";
-                $selector = substr($selector, strlen($m[0]));
-            }
-            // Class selector
-            elseif (preg_match('/^\.([a-zA-Z_][\w-]*)/', $selector, $m)) {
-                $predicates[] = "contains(concat(' ', normalize-space(@class), ' '), ' {$m[1]} ')";
-                $selector = substr($selector, strlen($m[0]));
-            }
-            // Attribute selector
-            elseif (preg_match('/^\[([a-zA-Z_][\w-]*)(?:([~|^$*]?=)"?([^"\]]*)"?)?\]/', $selector, $m)) {
-                $attr = $m[1];
-                $op = $m[2] ?? '';
-                $val = $m[3] ?? '';
+        while ($position < $length && ! ctype_space($selector[$position]) && $selector[$position] !== '>') {
+            $predicate = $this->simplePredicate($selector, $position);
 
-                if ($op === '' && $val === '') {
-                    $predicates[] = "@{$attr}";
-                } elseif ($op === '=') {
-                    $predicates[] = "@{$attr}='{$val}'";
-                } elseif ($op === '~=') {
-                    $predicates[] = "contains(concat(' ', @{$attr}, ' '), ' {$val} ')";
-                } elseif ($op === '*=') {
-                    $predicates[] = "contains(@{$attr}, '{$val}')";
-                } elseif ($op === '^=') {
-                    $predicates[] = "starts-with(@{$attr}, '{$val}')";
-                } else {
-                    $predicates[] = "@{$attr}='{$val}'";
-                }
-                $selector = substr($selector, strlen($m[0]));
-            } else {
-                // Unknown selector part, bail
-                break;
+            if ($predicate === null) {
+                return null;
             }
+
+            $predicates[] = $predicate;
         }
 
-        if (empty($predicates)) {
-            return $element;
+        if ($name === '*' && $predicates === [] && ($position === 0 || $selector[$position - 1] !== '*')) {
+            return null;
         }
 
-        return $element.'['.implode(' and ', $predicates).']';
+        return $name.($predicates === [] ? '' : '['.implode(' and ', $predicates).']');
     }
 
-    /**
-     * Compare two specificity tuples
-     */
-    protected function compareSpecificity(array $a, array $b): int
+    private function simplePredicate(string $selector, int &$position): ?string
     {
-        for ($i = 0; $i < 3; $i++) {
-            if ($a[$i] !== $b[$i]) {
-                return $a[$i] <=> $b[$i];
+        $char = $selector[$position];
+        $ident = '-?(?:[a-zA-Z_]|\\\\.|[^\x00-\x7F])(?:[\w-]|\\\\.|[^\x00-\x7F])*';
+
+        if ($char === '#' || $char === '.') {
+            if (preg_match('/'.$ident.'/A', $selector, $m, 0, $position + 1) !== 1) {
+                return null;
             }
+
+            $position += 1 + strlen($m[0]);
+            $value = $this->unescape($m[0]);
+
+            return $char === '#'
+                ? '@id='.HtmlDocument::xpathLiteral($value)
+                : 'contains(concat(" ", normalize-space(@class), " "), '.HtmlDocument::xpathLiteral(' '.$value.' ').')';
         }
 
-        return 0;
-    }
+        if ($char === '[') {
+            $pattern = '/\[\s*([a-zA-Z_:][\w:.-]*)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|\'([^\']*)\'|('.$ident.'))\s*)?\]/A';
 
-    /**
-     * Check if a color value can be resolved (not a CSS variable or calc)
-     */
-    protected function isResolvableColor(string $value): bool
-    {
-        if (str_contains($value, 'var(')) {
-            return false;
-        }
-        if (str_contains($value, 'calc(')) {
-            return false;
-        }
-        if (str_contains($value, 'currentColor')) {
-            return false;
-        }
-        if ($value === 'inherit' || $value === 'initial' || $value === 'unset') {
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * Extract a color value from a CSS background shorthand
-     */
-    protected function extractColorFromBackground(string $value): ?string
-    {
-        // Try to find a color in the background shorthand
-        // Match hex colors
-        if (preg_match('/(#[0-9a-fA-F]{3,8})\b/', $value, $m)) {
-            return $m[1];
-        }
-        // Match rgb/rgba
-        if (preg_match('/(rgba?\([^)]+\))/', $value, $m)) {
-            return $m[1];
-        }
-        // Match hsl/hsla
-        if (preg_match('/(hsla?\([^)]+\))/', $value, $m)) {
-            return $m[1];
-        }
-        // Match named colors (basic ones)
-        $namedColors = ['white', 'black', 'red', 'green', 'blue', 'yellow', 'gray', 'grey',
-            'transparent', 'orange', 'purple', 'pink', 'brown', 'navy', 'teal'];
-        foreach ($namedColors as $name) {
-            if (preg_match('/\b'.$name.'\b/i', $value)) {
-                return $name;
+            if (preg_match($pattern, $selector, $m, 0, $position) !== 1) {
+                return null;
             }
+
+            $position += strlen($m[0]);
+
+            return $this->attributePredicate(strtolower($m[1]), $m[2] ?? '', ($m[3] ?? '').($m[4] ?? '').$this->unescape($m[5] ?? ''));
+        }
+
+        if ($char !== ':' || ($selector[$position + 1] ?? '') === ':') {
+            return null;
+        }
+
+        if (preg_match('/:(root|link|first-child|last-child)(?![\w(-])/Ai', $selector, $m, 0, $position) === 1) {
+            $position += strlen($m[0]);
+
+            return match (strtolower($m[1])) {
+                'root' => 'not(parent::*)',
+                'link' => '(local-name()="a" or local-name()="area") and @href',
+                'first-child' => 'not(preceding-sibling::*)',
+                'last-child' => 'not(following-sibling::*)',
+            };
+        }
+
+        if (preg_match('/:not\(\s*([^()]*?)\s*\)/Ai', $selector, $m, 0, $position) === 1) {
+            $inner = $m[1];
+            $innerPosition = 0;
+            $compound = $this->compoundToXpath($inner, $innerPosition);
+
+            if ($compound === null || $innerPosition !== strlen($inner)) {
+                return null;
+            }
+
+            $position += strlen($m[0]);
+
+            return 'not(self::'.$compound.')';
         }
 
         return null;
     }
 
-    /**
-     * Get all parsed rules (for testing/debugging)
-     */
-    public function getRules(): array
+    private function attributePredicate(string $attribute, string $operator, string $value): ?string
     {
-        return $this->rules;
+        $attr = '@'.$attribute;
+        $literal = HtmlDocument::xpathLiteral($value);
+
+        return match ($operator) {
+            '' => $attr,
+            '=' => $attr.'='.$literal,
+            '~=' => $value === '' || preg_match('/\s/', $value) === 1 ? 'false()' : 'contains(concat(" ", normalize-space('.$attr.'), " "), '.HtmlDocument::xpathLiteral(' '.$value.' ').')',
+            '^=' => $value === '' ? 'false()' : 'starts-with('.$attr.', '.$literal.')',
+            '$=' => $value === '' ? 'false()' : 'substring('.$attr.', string-length('.$attr.') - '.strlen($value).' + 1) = '.$literal,
+            '*=' => $value === '' ? 'false()' : 'contains('.$attr.', '.$literal.')',
+            '|=' => '('.$attr.'='.$literal.' or starts-with('.$attr.', '.HtmlDocument::xpathLiteral($value.'-').'))',
+            default => null,
+        };
+    }
+
+    private function unescape(string $identifier): string
+    {
+        return preg_replace('/\\\\(.)/s', '$1', $identifier) ?? $identifier;
+    }
+
+    private function skipWhitespace(string $css, int &$position): bool
+    {
+        $start = $position;
+        $length = strlen($css);
+
+        while ($position < $length && ctype_space($css[$position])) {
+            $position++;
+        }
+
+        return $position > $start;
+    }
+
+    /**
+     * Read up to (and consume) the first of $terminators outside strings and parentheses.
+     *
+     * @param  list<string>  $terminators
+     * @return array{0: string, 1: ?string} text before the terminator, the terminator (null at end of input)
+     */
+    private function readUntil(string $css, int &$position, array $terminators): array
+    {
+        $start = $position;
+        $length = strlen($css);
+        $depth = 0;
+        $quote = null;
+
+        for (; $position < $length; $position++) {
+            $char = $css[$position];
+
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    $position++;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '(') {
+                $depth++;
+            } elseif ($char === ')') {
+                $depth = max(0, $depth - 1);
+            } elseif ($depth === 0 && in_array($char, $terminators, true)) {
+                $text = substr($css, $start, $position - $start);
+                $position++;
+
+                return [$text, $char];
+            }
+        }
+
+        return [substr($css, $start), null];
+    }
+
+    /** Read a balanced block body; $position is just after the opening brace and ends after the closing one. */
+    private function readBlock(string $css, int &$position): string
+    {
+        $start = $position;
+        $length = strlen($css);
+        $depth = 1;
+        $quote = null;
+
+        for (; $position < $length; $position++) {
+            $char = $css[$position];
+
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    $position++;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '{') {
+                $depth++;
+            } elseif ($char === '}' && --$depth === 0) {
+                $body = substr($css, $start, $position - $start);
+                $position++;
+
+                return $body;
+            }
+        }
+
+        return substr($css, $start);
+    }
+
+    /**
+     * Split on $separator outside strings, parentheses and brackets; optionally drop nested {…} blocks.
+     *
+     * @return list<string>
+     */
+    private function splitTopLevel(string $text, string $separator, bool $skipBlocks = false): array
+    {
+        $parts = [];
+        $current = '';
+        $depth = 0;
+        $braces = 0;
+        $quote = null;
+        $length = strlen($text);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $text[$i];
+
+            if ($quote !== null) {
+                $current .= $char;
+
+                if ($char === '\\' && $i + 1 < $length) {
+                    $current .= $text[++$i];
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+
+            if ($skipBlocks && $char === '{') {
+                $braces++;
+
+                continue;
+            }
+
+            if ($skipBlocks && $char === '}') {
+                $braces = max(0, $braces - 1);
+                $current = '';
+
+                continue;
+            }
+
+            if ($braces > 0) {
+                continue;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '(' || $char === '[') {
+                $depth++;
+            } elseif ($char === ')' || $char === ']') {
+                $depth = max(0, $depth - 1);
+            } elseif ($char === $separator && $depth === 0) {
+                $parts[] = $current;
+                $current = '';
+
+                continue;
+            }
+
+            $current .= $char;
+        }
+
+        $parts[] = $current;
+
+        return array_values(array_filter(array_map('trim', $parts), fn (string $part) => $part !== ''));
+    }
+
+    private function nodeKey(DOMElement $element): string
+    {
+        try {
+            return $element->getNodePath() ?? spl_object_hash($element);
+        } catch (Throwable) {
+            return spl_object_hash($element);
+        }
     }
 }

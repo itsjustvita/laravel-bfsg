@@ -314,6 +314,9 @@ HTML;
         .parent-light {
             color: #dddddd;
         }
+        .parent-light span {
+            color: var(--muted);
+        }
     </style>
 </head>
 <body>

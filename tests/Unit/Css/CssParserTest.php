@@ -2,263 +2,265 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Css;
 
+use DOMElement;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class CssParserTest extends TestCase
 {
-    protected CssParser $parser;
-
-    protected function setUp(): void
+    private function selectors(string $css): array
     {
-        parent::setUp();
-        $this->parser = new CssParser;
+        return array_map(fn (array $rule) => $rule['selector'], (new CssParser)->parseStylesheet($css));
     }
 
-    protected function parseDom(string $html): \DOMDocument
+    /** @return array{0: CssParser, 1: HtmlDocument} */
+    private function parsed(string $css, string $body): array
     {
-        $dom = new \DOMDocument;
-        @$dom->loadHTML($html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        $document = HtmlDocument::fromHtml('<html><head><style>'.$css.'</style></head><body>'.$body.'</body></html>');
 
-        return $dom;
+        return [(new CssParser)->parse($document), $document];
     }
 
-    // --- CSS Parsing ---
-
-    public function test_extracts_rules_from_style_block(): void
+    private function target(HtmlDocument $document): DOMElement
     {
-        $html = '<html><head><style>p { color: red; } .btn { background-color: blue; }</style></head><body><p>Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-        $rules = $this->parser->getRules();
-
-        $this->assertCount(2, $rules);
-        $this->assertEquals('p', $rules[0]['selector']);
-        $this->assertEquals('red', $rules[0]['properties']['color']);
-        $this->assertEquals('.btn', $rules[1]['selector']);
+        return $document->query('//*[@id="t"]')[0];
     }
 
-    public function test_handles_multiple_style_blocks(): void
+    /** @return array{0: string, 1: string, 2: bool} foreground hex, background hex, approximate */
+    private function colors(string $css, string $body): array
     {
-        $html = '<html><head><style>p { color: red; }</style><style>.x { color: blue; }</style></head><body><p>Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        [$parser, $document] = $this->parsed($css, $body);
+        $colors = $parser->resolveColors($this->target($document));
 
-        $this->assertCount(2, $this->parser->getRules());
+        return [$colors['foreground']->toHex(), $colors['background']->toHex(), $colors['approximate']];
     }
 
-    public function test_handles_comma_separated_selectors(): void
+    public function test_splits_selector_lists_and_strips_comments(): void
     {
-        $html = '<html><head><style>h1, h2, h3 { color: navy; }</style></head><body><h1>Hi</h1></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $this->assertCount(3, $this->parser->getRules());
+        $this->assertSame(['h1', 'h2', 'p.lead'], $this->selectors('/* a { color: red } */ h1, h2 , p.lead { color: #000 } /* open'));
     }
 
-    public function test_strips_css_comments(): void
+    public function test_unwraps_layer_supports_and_container_blocks(): void
     {
-        $html = '<html><head><style>/* comment */ p { color: red; } /* another */</style></head><body><p>Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        $css = '@layer base, utilities; @layer base { a { color: red } } '
+            .'@supports (display: grid) { .grid { color: blue } } '
+            .'@container card (min-width: 400px) { .card { color: green } }';
 
-        $this->assertCount(1, $this->parser->getRules());
-        $this->assertEquals('red', $this->parser->getRules()[0]['properties']['color']);
+        $this->assertSame(['a', '.grid', '.card'], $this->selectors($css));
     }
 
-    public function test_skips_media_queries(): void
+    public function test_media_is_kept_for_screen_and_dropped_for_print(): void
     {
-        $html = '<html><head><style>p { color: red; } @media (max-width: 768px) { p { color: blue; } }</style></head><body><p>Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        $css = '@media print { .p { color: red } } @media screen and (min-width: 40em) { .s { color: red } } '
+            .'@media (prefers-color-scheme: dark) { .d { color: red } } @media not screen { .n { color: red } }';
 
-        // Only the non-media rule should be parsed
-        $this->assertCount(1, $this->parser->getRules());
-        $this->assertEquals('red', $this->parser->getRules()[0]['properties']['color']);
+        $this->assertSame(['.s', '.d'], $this->selectors($css));
     }
 
-    // --- Specificity ---
-
-    public function test_specificity_element(): void
+    public function test_drops_statement_and_descriptor_at_rules(): void
     {
-        $this->assertEquals([0, 0, 1], $this->parser->calculateSpecificity('p'));
+        $css = '@charset "utf-8"; @import url("x.css") screen; @font-face { font-family: X; src: url(x.woff) } '
+            .'@keyframes spin { from { color: red } to { color: blue } } @page { margin: 1cm } '
+            .'@property --x { syntax: "<color>"; inherits: false; initial-value: red } p { color: #111 }';
+
+        $this->assertSame(['p'], $this->selectors($css));
     }
 
-    public function test_specificity_class(): void
+    public function test_properties_keep_important_and_do_not_split_inside_parentheses_or_quotes(): void
     {
-        $this->assertEquals([0, 1, 0], $this->parser->calculateSpecificity('.btn'));
+        $properties = (new CssParser)->parseProperties('COLOR: Red !IMPORTANT; background: url("data:image/svg+xml;utf8,<svg>;</svg>") #fff; content: "a;b"; color: blue');
+
+        $this->assertSame(['value' => 'Red', 'important' => true], $properties['color']);
+        $this->assertSame('url("data:image/svg+xml;utf8,<svg>;</svg>") #fff', $properties['background']['value']);
+        $this->assertSame('"a;b"', $properties['content']['value']);
     }
 
-    public function test_specificity_id(): void
+    public function test_specificity(): void
     {
-        $this->assertEquals([1, 0, 0], $this->parser->calculateSpecificity('#header'));
+        $parser = new CssParser;
+
+        $this->assertSame([0, 0, 1], $parser->calculateSpecificity('p'));
+        $this->assertSame([0, 1, 0], $parser->calculateSpecificity('.btn'));
+        $this->assertSame([1, 0, 0], $parser->calculateSpecificity('#header'));
+        $this->assertSame([0, 1, 1], $parser->calculateSpecificity('div.btn'));
+        $this->assertSame([1, 1, 1], $parser->calculateSpecificity('#nav .item a'));
+        $this->assertSame([0, 2, 1], $parser->calculateSpecificity('a[href]:not(.x)'));
+        $this->assertSame([0, 0, 2], $parser->calculateSpecificity('p::before'));
     }
 
-    public function test_specificity_combined(): void
+    public function test_selector_to_xpath_supports_the_documented_subset(): void
     {
-        // div.btn = 0,1,1
-        $this->assertEquals([0, 1, 1], $this->parser->calculateSpecificity('div.btn'));
+        $document = HtmlDocument::fromHtml('<html><body><main><ul class="nav main"><li><a href="/de/kontakt" data-x="a b" id="k" lang="de-AT">K</a></li><li><a>L</a></li></ul></main></body></html>');
+        $parser = new CssParser;
+        $count = fn (string $selector) => count($document->query($parser->simpleSelectorToXpath($selector)));
+
+        $this->assertSame(1, $count(':root'));
+        $this->assertSame(1, $count('ul.nav.main > li > a#k'));
+        $this->assertSame(2, $count('main a'));
+        $this->assertSame(1, $count('a:link'));
+        $this->assertSame(1, $count('li:first-child a'));
+        $this->assertSame(1, $count('li:last-child > a'));
+        $this->assertSame(1, $count('a:not([href])'));
+        $this->assertSame(1, $count('[href^="/de"]'));
+        $this->assertSame(1, $count('[href$=kontakt]'));
+        $this->assertSame(1, $count("[href*='kont']"));
+        $this->assertSame(1, $count('[data-x~="b"]'));
+        $this->assertSame(1, $count('[lang|=de]'));
+        $this->assertSame(1, $count('*[id="k"]'));
     }
 
-    public function test_specificity_complex(): void
+    public function test_unsupported_selectors_are_null(): void
     {
-        // #nav .item a = 1,1,1
-        $this->assertEquals([1, 1, 1], $this->parser->calculateSpecificity('#nav .item a'));
+        $parser = new CssParser;
+
+        foreach (['a:hover', 'a:focus', 'li:nth-child(2)', 'p::before', 'h1 + p', 'h1 ~ p', 'a:not(:focus-visible)', '[href="x" i]', '', '> a'] as $selector) {
+            $this->assertNull($parser->simpleSelectorToXpath($selector), $selector);
+        }
     }
 
-    // --- Selector Matching ---
-
-    public function test_matches_element_selector(): void
+    public function test_escaped_class_names_are_supported(): void
     {
-        $html = '<html><head><style>p { color: red; }</style></head><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        [$parser, $document] = $this->parsed('.md\:text-gray-400 { color: #9ca3af }', '<p id="t" class="md:text-gray-400">x</p>');
 
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $this->assertTrue($this->parser->selectorMatchesElement('p', $element));
+        $this->assertSame('#9ca3af', $parser->resolveColors($this->target($document))['foreground']->toHex());
     }
 
-    public function test_matches_class_selector(): void
+    public function test_cascade_orders_by_important_then_specificity_then_source_order(): void
     {
-        $html = '<html><head><style>.red { color: red; }</style></head><body><p class="red" id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $this->assertTrue($this->parser->selectorMatchesElement('.red', $element));
+        $this->assertSame('#0000ff', $this->colors('p { color: red } p { color: blue }', '<p id="t">x</p>')[0]);
+        $this->assertSame('#ff0000', $this->colors('#t { color: red } p { color: blue }', '<p id="t">x</p>')[0]);
+        $this->assertSame('#008000', $this->colors('p { color: green !important } #t { color: red }', '<p id="t">x</p>')[0]);
+        $this->assertSame('#ff0000', $this->colors('p { color: blue }', '<p id="t" style="color: red">x</p>')[0]);
+        $this->assertSame('#0000ff', $this->colors('p { color: blue !important }', '<p id="t" style="color: red">x</p>')[0]);
     }
 
-    public function test_matches_id_selector(): void
+    public function test_pseudo_class_and_pseudo_element_rules_do_not_apply(): void
     {
-        $html = '<html><head><style>#target { color: red; }</style></head><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $this->assertTrue($this->parser->selectorMatchesElement('#target', $element));
+        $this->assertSame(['#000000', '#ffffff', false], $this->colors('p:hover { color: red } p::first-line { color: red } p:focus { background: black }', '<p id="t">x</p>'));
     }
 
-    public function test_does_not_match_wrong_selector(): void
+    public function test_colour_syntaxes(): void
     {
-        $html = '<html><head><style>.blue { color: blue; }</style></head><body><p class="red" id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $this->assertFalse($this->parser->selectorMatchesElement('.blue', $element));
+        $this->assertSame('#ff6347', $this->colors('p { color: Tomato }', '<p id="t">x</p>')[0]);
+        $this->assertSame('#ff0000', $this->colors('p { color: hsl(0 100% 50%) }', '<p id="t">x</p>')[0]);
+        $this->assertSame('#808080', $this->colors('p { color: rgba(0, 0, 0, .5) }', '<p id="t">x</p>')[0]);
+        $this->assertSame('#7f7f7f', $this->colors('p { color: #00000080 }', '<p id="t">x</p>')[0]);
     }
 
-    // --- Color Resolution ---
-
-    public function test_resolves_color_from_css(): void
+    public function test_background_inherits_through_transparent_and_composites_alpha(): void
     {
-        $html = '<html><head><style>p { color: #333333; background-color: #ffffff; }</style></head><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertEquals('#333333', $colors['color']);
-        $this->assertEquals('#ffffff', $colors['backgroundColor']);
+        $this->assertSame('#000080', $this->colors('div { background: navy } p { background-color: transparent }', '<div><p id="t">x</p></div>')[1]);
+        $this->assertSame('#808080', $this->colors('div { background: #000 } p { background: rgba(255,255,255,.5) }', '<div><p id="t">x</p></div>')[1]);
     }
 
-    public function test_inline_style_overrides_css(): void
+    public function test_unresolvable_values_walk_up_and_are_approximate(): void
     {
-        $html = '<html><head><style>p { color: red; }</style></head><body><p id="target" style="color: blue;">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertEquals('blue', $colors['color']);
+        $this->assertSame(['#333333', '#ffffff', true], $this->colors('body { color: #333 } p { color: var(--muted) }', '<p id="t">x</p>'));
+        $this->assertSame(['#000000', '#eeeeee', true], $this->colors('body { background: #eee } p { background: var(--bg) }', '<p id="t">x</p>'));
+        $this->assertSame(['#333333', '#ffffff', true], $this->colors('body { color: #333 } p { color: currentColor }', '<p id="t">x</p>'));
     }
 
-    public function test_higher_specificity_wins(): void
+    public function test_inherited_resolved_colours_are_exact(): void
     {
-        $html = '<html><head><style>p { color: red; } p.special { color: green; }</style></head><body><p class="special" id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertEquals('green', $colors['color']);
+        $this->assertSame(['#dddddd', '#ffffff', false], $this->colors('.parent-light { color: #ddd }', '<div class="parent-light"><span id="t">x</span></div>'));
     }
 
-    public function test_inherits_color_from_parent(): void
+    public function test_gradients_use_the_first_stop_and_are_approximate(): void
     {
-        $html = '<html><head><style>.parent { color: navy; }</style></head><body><div class="parent"><p id="target">Text</p></div></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        $this->assertSame(['#000000', '#112233', true], $this->colors('p { background: linear-gradient(to right, #123 0%, #fff 100%) }', '<p id="t">x</p>'));
+    }
 
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
+    public function test_url_is_stripped_before_scanning_the_shorthand(): void
+    {
+        $this->assertSame('#000000', $this->colors('p { background: url(red.png) no-repeat #000 }', '<p id="t">x</p>')[1]);
+        $this->assertSame('#ffffff', $this->colors('p { background: url("data:image/svg+xml;utf8,<svg fill=\'red\'></svg>") }', '<p id="t">x</p>')[1]);
+    }
 
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertEquals('navy', $colors['color']);
+    public function test_background_shorthand_versus_longhand_precedence(): void
+    {
+        $this->assertSame('#0000ff', $this->colors('p { background-color: red } p { background: blue }', '<p id="t">x</p>')[1]);
+        $this->assertSame('#ff0000', $this->colors('p { background: blue } p { background-color: red }', '<p id="t">x</p>')[1]);
+        $this->assertSame('#ff0000', $this->colors('#t { background-color: red } p { background: blue }', '<p id="t">x</p>')[1]);
+    }
+
+    public function test_inline_style_is_parsed_and_public(): void
+    {
+        $document = HtmlDocument::fromHtml('<html><body><a id="t" href="/" style="outline:none; BOX-SHADOW: 0 0 0 3px #005fcc">x</a></body></html>');
+
+        $style = (new CssParser)->inlineStyle($this->target($document));
+
+        $this->assertSame('none', $style['outline']['value']);
+        $this->assertSame('0 0 0 3px #005fcc', $style['box-shadow']['value']);
+        $this->assertSame('a{}', CssParser::stripComments('a/* x */{}'));
+    }
+
+    public function test_index_is_used_even_without_matching_rules(): void
+    {
+        [$parser, $document] = $this->parsed('', '<p id="t">x</p>');
+
+        $this->assertTrue($parser->isIndexed());
+        $this->assertFalse($parser->isTruncated());
+        $this->assertSame(['#000000', '#ffffff', false], [
+            $parser->resolveColors($this->target($document))['foreground']->toHex(),
+            $parser->resolveColors($this->target($document))['background']->toHex(),
+            $parser->resolveColors($this->target($document))['approximate'],
+        ]);
+    }
+
+    public function test_overflowing_the_rule_index_marks_results_approximate(): void
+    {
+        $css = '';
+
+        for ($i = 0; $i <= CssParser::MAX_INDEXED_RULES; $i++) {
+            $css .= ".u{$i} { color: #111 } .n{$i} { margin: 0 } ";
+        }
+
+        [$parser, $document] = $this->parsed($css.'p { color: red }', '<p id="t" class="u1">x</p>');
+
+        $this->assertTrue($parser->isTruncated());
+        $colors = $parser->resolveColors($this->target($document));
         $this->assertTrue($colors['approximate']);
+        $this->assertSame('#111111', $colors['foreground']->toHex(), 'rules beyond the cap are not applied');
     }
 
-    public function test_defaults_to_black_on_white(): void
+    public function test_font_size_and_weight(): void
     {
-        $html = '<html><head></head><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        [$parser, $document] = $this->parsed('.big { font-size: 1.5rem } .pt { font-size: 14pt; font-weight: 700 } .em { font-size: 2em }',
+            '<h1 id="h">x</h1><p class="big" id="b">x</p><p class="pt" id="p">x</p><div class="em"><span class="em" id="e">x</span></div><h4 id="h4">x</h4>');
+        $byId = $document->elementsById();
 
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertEquals('#000000', $colors['color']);
-        $this->assertEquals('#ffffff', $colors['backgroundColor']);
-        $this->assertTrue($colors['approximate']);
+        $this->assertEqualsWithDelta(32.0, $parser->fontSizePx($byId['h']), 0.01);
+        $this->assertEqualsWithDelta(24.0, $parser->fontSizePx($byId['b']), 0.01);
+        $this->assertEqualsWithDelta(18.67, $parser->fontSizePx($byId['p']), 0.01);
+        $this->assertEqualsWithDelta(64.0, $parser->fontSizePx($byId['e']), 0.01);
+        $this->assertTrue($parser->isBold($byId['p']));
+        $this->assertTrue($parser->isBold($byId['h4']));
+        $this->assertFalse($parser->isBold($byId['b']));
     }
 
-    public function test_css_variable_marked_approximate(): void
+    public function test_rules_carry_the_index_of_their_stylesheet(): void
     {
-        $html = '<html><head><style>p { color: var(--text-color); }</style></head><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        $document = HtmlDocument::fromHtml('<html><head><style>a{color:red}</style><style media="print">b{color:red}</style><style>c{color:red}</style></head><body></body></html>');
 
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
+        $rules = (new CssParser)->parse($document)->rules();
 
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertTrue($colors['approximate']);
+        $this->assertSame([['a', 0], ['c', 1]], array_map(fn (array $rule) => [$rule['selector'], $rule['sheet']], $rules));
     }
 
-    public function test_background_shorthand(): void
+    public function test_hides_element_uses_display_and_visibility_from_stylesheets(): void
     {
-        $html = '<html><head><style>p { background: #f0f0f0 url(bg.png) no-repeat; }</style></head><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
+        [$parser, $document] = $this->parsed(
+            '.modal { display: none } .modal.show { display: block } .invisible { visibility: hidden } .shown { visibility: visible }',
+            '<div class="modal" id="closed"><button id="b1">x</button></div><div class="modal show" id="open"><button id="b2">y</button></div>'
+                .'<div class="invisible"><p id="p1">a</p><p class="shown" id="p2">b</p></div>'
+        );
+        $byId = $document->elementsById();
 
-        $xpath = new \DOMXPath($dom);
-        $element = $xpath->query('//*[@id="target"]')->item(0);
-
-        $colors = $this->parser->getResolvedColors($element);
-        $this->assertEquals('#f0f0f0', $colors['backgroundColor']);
-    }
-
-    public function test_no_style_blocks(): void
-    {
-        $html = '<html><body><p id="target">Text</p></body></html>';
-        $dom = $this->parseDom($html);
-        $this->parser->parse($dom);
-
-        $this->assertEmpty($this->parser->getRules());
+        $this->assertTrue($parser->hidesElement($byId['closed']));
+        $this->assertTrue($parser->hidesElement($byId['b1']));
+        $this->assertFalse($parser->hidesElement($byId['b2']));
+        $this->assertTrue($parser->hidesElement($byId['p1']));
+        $this->assertFalse($parser->hidesElement($byId['p2']));
     }
 }

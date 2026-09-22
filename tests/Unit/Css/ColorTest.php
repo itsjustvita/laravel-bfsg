@@ -66,4 +66,30 @@ class ColorTest extends TestCase
         $this->assertLessThan(4.5, $ratio);
         $this->assertSame(4.48, Color::parse('#777')->contrastWith(Color::parse('#fff')));
     }
+
+    public function test_unresolvable_values(): void
+    {
+        foreach (['inherit', 'initial', 'unset', 'currentColor', 'var(--fg)', 'calc(1px)', 'color-mix(in srgb, red, blue)'] as $value) {
+            $this->assertTrue(Color::isUnresolvable($value), $value);
+        }
+
+        $this->assertFalse(Color::isUnresolvable('#fff'));
+        $this->assertFalse(Color::isUnresolvable('transparent'));
+    }
+
+    public function test_background_values(): void
+    {
+        [$color, $approximate] = Color::fromBackground('url("a;b.png") no-repeat center / cover #123456');
+        $this->assertSame('#123456', $color->toHex());
+        $this->assertFalse($approximate);
+
+        [$color, $approximate] = Color::fromBackground('linear-gradient(180deg, rgba(0,0,0,1) 0%, #fff 100%)');
+        $this->assertSame('#000000', $color->toHex());
+        $this->assertTrue($approximate);
+
+        $this->assertSame([null, false], Color::fromBackground('none'));
+        $this->assertSame([null, true], Color::fromBackground('var(--surface)'));
+        $this->assertSame(0.0, Color::fromBackground('transparent')[0]->a);
+        $this->assertSame([null, false], Color::fromBackground('url(red.png)'));
+    }
 }

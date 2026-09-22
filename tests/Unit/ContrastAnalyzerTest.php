@@ -104,9 +104,9 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertNoViolation($this->analyze($html), 'contrast.insufficient');
     }
 
-    public function test_inherited_color_marked_approximate(): void
+    public function test_unresolvable_color_marked_approximate(): void
     {
-        $html = '<html><head><style>.container { color: #cccccc; background-color: #dddddd; }</style></head>'
+        $html = '<html><head><style>.container { color: #cccccc; background-color: #dddddd; } p { color: var(--muted); }</style></head>'
             .'<body><div class="container"><p id="target">Inherited poor contrast</p></div></body></html>';
 
         $violations = $this->analyze($html);

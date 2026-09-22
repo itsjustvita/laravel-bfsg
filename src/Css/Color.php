@@ -83,6 +83,60 @@ final class Color
         return null;
     }
 
+    /** Values that cannot be resolved statically: the caller walks up the tree and marks the result approximate. */
+    public static function isUnresolvable(string $value): bool
+    {
+        $value = strtolower(trim($value));
+
+        return in_array($value, ['inherit', 'initial', 'unset', 'revert', 'revert-layer', 'currentcolor'], true)
+            || preg_match('/\b(var|calc|env|color-mix|light-dark|attr)\(/', $value) === 1;
+    }
+
+    /**
+     * Colour of a background / background-color value: url() is stripped first, gradients yield their
+     * first colour stop (approximate), `none`/`transparent` yield a transparent colour, unresolvable
+     * values yield null + approximate.
+     *
+     * @return array{0: ?self, 1: bool} colour (null = not set or unresolvable) and whether it is approximate
+     */
+    public static function fromBackground(string $value): array
+    {
+        $value = strtolower(trim($value));
+        $value = trim(preg_replace('/url\((?:[^()\'"]|\'[^\']*\'|"[^"]*")*\)/', ' ', $value) ?? $value);
+
+        if ($value === '' || $value === 'none') {
+            return [null, false];
+        }
+
+        $gradient = preg_match('/(?:repeating-)?(?:linear|radial|conic)-gradient\((.*)\)/', $value, $m) === 1;
+        $haystack = $gradient ? $m[1] : $value;
+
+        if (! $gradient && self::isUnresolvable($haystack) && self::firstColor($haystack) === null) {
+            return [null, true];
+        }
+
+        $color = self::firstColor($haystack);
+
+        return [$color, $gradient || ($color === null && self::isUnresolvable($haystack))];
+    }
+
+    private static function firstColor(string $text): ?self
+    {
+        preg_match_all('/#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^)]*\)|[a-z]+/', $text, $matches);
+
+        foreach ($matches[0] as $token) {
+            if ($token === 'transparent' || $token[0] === '#' || str_contains($token, '(') || isset(self::NAMED[$token])) {
+                $color = self::parse($token);
+
+                if ($color !== null) {
+                    return $color;
+                }
+            }
+        }
+
+        return null;
+    }
+
     public function luminance(): float
     {
         $channel = function (float $c): float {
