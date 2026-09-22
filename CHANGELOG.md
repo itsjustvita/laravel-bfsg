@@ -7,7 +7,7 @@ und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.
 
 ## [Unreleased] — 3.0.0 (branch v3)
 
-Phase 1 of the v3 foundation. See UPGRADE.md (written in Phase 4) for the migration guide.
+Phases 1 (foundation) and 2 (analyzer round) of v3. See UPGRADE.md (written in Phase 4) for the migration guide.
 
 ### Changed (breaking)
 - `Bfsg::analyze()` returns an `AnalysisResult`; violations are `Violation` value objects with a stable translation `key`, a single primary `rule` (`1.1.1`), `related` criteria, `tags`, `element`, `selector`, `snippet`, `params` and `meta`. `->toArray()` yields the JSON shape.
@@ -24,11 +24,20 @@ Phase 1 of the v3 foundation. See UPGRADE.md (written in Phase 4) for the migrat
 - Every finding is now per element — the aggregated "multiple h1", "mixed tabindex", "positive tabindex" and "light gray inline" counts became one finding per element, and the combined "new window + noopener" link finding became two findings.
 - `bfsg:analyze` and the browser mode now run the full analyzer registry (all 16 analyzers) instead of hard-coded subsets, and print registry keys (`images`, `forms`, …) instead of class names.
 - `isAccessible()` ignores notices.
+- Analyzer round (spec Appendix A): every check re-keyed, re-rated and re-scoped. Findings on hidden subtrees (`hidden`, `aria-hidden`, inline or stylesheet `display:none`, `<template>`) are skipped; document-level checks are skipped for fragments; enumerated attributes are compared case-insensitively.
+- Removed checks: `forms.form_missing_name`, `forms.required_missing_aria_required`, `contrast.light_gray_inline`, `aria.label_conflict`, `links.missing_href`, `language.no_html_element`, `media.audio_missing_controls`, `semantic.missing_nav`, `semantic.missing_header`, `semantic.missing_footer`, `semantic.div_ratio`, `semantic.anchor_as_button`, `error_handling.css_only_error_indicators`, `status_messages.no_live_region`.
+- Severity changes: `headings.skipped_level` error → warning; `headings.missing_h1`, `headings.short_heading`, `images.possibly_decorative`, `links.url_as_text`, `links.new_window_unannounced`, `links.missing_noopener`, `links.download_unannounced`, `links.adjacent_duplicate`, `keyboard.missing_skip_link`, `keyboard.negative_tabindex_on_interactive`, `keyboard.mouse_only_handler`, `aria.redundant_role`, `tables.missing_caption`, `tables.nested_table`, `semantic.section_without_heading`, `semantic.button_with_href`, `page_title.long_title`, `media.video_missing_audio_description`, `media.embedded_video_captions_unknown`, `error_handling.no_error_strategy` → notice; `links.non_descriptive`, `keyboard.dialog_missing_aria_modal`, `media.video_missing_controls`, `tables.th_missing_scope` → warning.
+- Rule changes: `semantic.missing_main` cites 2.4.1 (was 1.3.1), `semantic.section_without_heading` 1.3.1 (was 2.4.6), `semantic.button_with_href` 4.1.2 + tag `best-practice`, `keyboard.dialog_missing_aria_modal` 4.1.2 (was 2.1.2), `links.non_descriptive` no longer cites 2.4.9, `headings.missing_h1` no longer cites 2.4.6, `media.autoplay_with_audio` no longer cites 2.2.2, `error_handling.no_error_strategy` no longer cites 3.3.3; `contrast.insufficient` cites 1.4.6 with tag `aaa` for AAA-only failures under `compliance_level=AAA`.
+- `contrast.insufficient` params are `ratio`, `required`, `foreground`, `background` (hex); `content` was removed. `headings.multiple_h1` params are `content` only. `aria.dangling_idref` and `tables.dangling_headers_ref` report one finding per element (all ids in `meta`).
+- `Css\CssParser` rewritten: tokenizer, `@media` (screen/all only), `@layer`/`@supports`/`@container` unwrapped, cascade by `!important`, specificity and source order, a documented selector subset, 148 named colours, `rgb/hsl` in both syntaxes, alpha compositing, gradients (first stop, approximate). Inherited colours are exact; only unresolvable values (`var()`, `currentColor`, …) and an overflowing rule index mark a result approximate.
 
 ### Added
 - `Bfsg::register()/forget()/only()/except()`, middleware alias `bfsg`, container binding `Bfsg::class`.
 - `Dom\HtmlDocument`, `Dom\Element`, `Dom\AccessibleName`, `Dom\Roles`, `Dom\Text`, `Css\Color`, `Reports\ScoreCalculator`, `Persistence\ReportRepository`.
 - CI matrix for Laravel 12 and 13 on PHP 8.2–8.4.
+- New checks: `images.area_missing_alt`, `images.svg_missing_name`, `images.suspicious_alt`, `forms.button_missing_name`, `forms.radio_group_missing_legend`, `forms.required_not_indicated`, `contrast.analysis_truncated`, `aria.abstract_role`, `aria.duplicate_id`, `links.non_descriptive_in_context`, `links.pseudo_link`, `keyboard.skip_link_target_missing`, `keyboard.role_without_tabindex`, `language.empty_lang`, `language.unknown_lang`, `media.autoplay_without_pause`, `page_title.multiple_titles`, `input_purpose.autocomplete_off_on_personal_field`, `status_messages.empty_aria_live`, `status_messages.alert_without_live_region`.
+- `bfsg.compliance_level=AAA` now drives the contrast thresholds (7:1 / 4.5:1).
+- Fixture corpus (`tests/Fixtures`) with expected keys for Bootstrap, Tailwind v4, TYPO3, a Laravel form, an ARIA data grid and a card pattern.
 
 ## [2.2.4] - 2026-09-18
 
