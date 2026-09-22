@@ -357,12 +357,8 @@ return [
     ],
     'error_handling' => [
         'no_error_strategy' => [
-            'message' => 'Formular „:name“ mit Pflichtfeldern ohne erkennbare Fehlerbehandlung',
-            'suggestion' => 'Ungültige Felder mit aria-invalid kennzeichnen und den Fehlertext per aria-describedby oder aria-errormessage verknüpfen; Fehler mit role="alert" ankündigen',
-        ],
-        'css_only_error_indicators' => [
-            'message' => 'Formular „:name“ zeigt Fehler nur über CSS-Klassen an',
-            'suggestion' => 'aria-invalid="true" und aria-describedby an fehlerhaften Feldern ergänzen',
+            'message' => 'Formular ":name" schaltet die Browser-Validierung ab; die Fehlererkennung ist statisch nicht prüfbar',
+            'suggestion' => 'Fehlerhafte Felder mit aria-invalid kennzeichnen, den Fehlertext per aria-describedby oder aria-errormessage verknüpfen und Fehler mit role="alert" ansagen',
         ],
     ],
     'status_messages' => [

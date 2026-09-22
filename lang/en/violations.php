@@ -357,12 +357,8 @@ return [
     ],
     'error_handling' => [
         'no_error_strategy' => [
-            'message' => 'Form ":name" with required fields has no detectable error handling',
-            'suggestion' => 'Mark invalid fields with aria-invalid and link the error text via aria-describedby or aria-errormessage; announce errors with role="alert"',
-        ],
-        'css_only_error_indicators' => [
-            'message' => 'Form ":name" shows errors only through CSS classes',
-            'suggestion' => 'Add aria-invalid="true" and aria-describedby to fields with errors',
+            'message' => 'Form ":name" disables browser validation; its error identification cannot be verified statically',
+            'suggestion' => 'Mark invalid fields with aria-invalid, link the error text via aria-describedby or aria-errormessage, and announce errors with role="alert"',
         ],
     ],
     'status_messages' => [
