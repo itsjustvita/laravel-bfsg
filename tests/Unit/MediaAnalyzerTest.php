@@ -14,157 +14,131 @@ class MediaAnalyzerTest extends AnalyzerTestCase
         return new MediaAnalyzer;
     }
 
-    public function test_detects_video_without_captions(): void
+    public function test_video_without_captions_cites_1_2_2(): void
     {
-        $violations = $this->analyze('<video src="video.mp4" controls></video>');
+        $violations = $this->analyze('<video src="movie.mp4" controls></video>');
 
         $violation = $this->assertHasViolation($violations, 'media.video_missing_captions', element: 'video', severity: Severity::Error);
         $this->assertSame('1.2.2', $violation->rule);
-        $this->assertSame(['src' => 'video.mp4'], $violation->params);
+        $this->assertSame(['src' => 'movie.mp4'], $violation->params);
     }
 
-    public function test_video_with_captions_track_has_no_caption_errors(): void
+    public function test_caption_track_kinds(): void
     {
-        $violations = $this->analyze('
-            <video src="video.mp4" controls>
-                <track kind="captions" src="captions.vtt" srclang="en">
-                <track kind="descriptions" src="descriptions.vtt" srclang="en">
-            </video>
-        ');
-
-        $this->assertNoViolation($violations, 'media.video_missing_captions');
-        $this->assertNoViolation($violations, 'media.video_missing_audio_description');
+        $this->assertNoViolation($this->analyze('<video controls><track kind="CAPTIONS" src="c.vtt"></video>'), 'media.video_missing_captions');
+        $this->assertNoViolation($this->analyze('<video controls><track src="s.vtt"></video>'), 'media.video_missing_captions');
+        $this->assertHasViolation($this->analyze('<video controls><track kind="chapters" src="c.vtt"></video>'), 'media.video_missing_captions');
+        $this->assertHasViolation($this->analyze('<video controls><track kind="" src="c.vtt"></video>'), 'media.video_missing_captions');
     }
 
-    public function test_detects_video_without_audio_description_when_tracks_exist(): void
+    public function test_audio_description_is_a_notice_for_every_unmuted_video(): void
     {
-        $violations = $this->analyze('
-            <video src="video.mp4" controls>
-                <track kind="captions" src="captions.vtt" srclang="en">
-            </video>
-        ');
+        $violations = $this->analyze('<video controls><track kind="captions" src="c.vtt"></video><video controls><track kind="descriptions" src="d.vtt"><track kind="captions" src="c.vtt"></video>');
 
-        $violation = $this->assertHasViolation($violations, 'media.video_missing_audio_description', element: 'video', severity: Severity::Warning);
+        $violation = $this->assertHasViolation($violations, 'media.video_missing_audio_description', severity: Severity::Notice);
         $this->assertSame('1.2.5', $violation->rule);
-        $this->assertSame(['src' => 'video.mp4'], $violation->params);
+        $this->assertViolationCount($violations, 'media.video_missing_audio_description', 1);
     }
 
-    public function test_detects_video_with_autoplay(): void
+    public function test_muted_video_needs_no_captions_or_description(): void
     {
-        $violations = $this->analyze('<video src="video.mp4" autoplay controls></video>');
+        $violations = $this->analyze('<video muted controls src="loop.mp4"></video>');
+
+        $this->assertSame([], $violations);
+    }
+
+    public function test_video_missing_controls_is_a_warning_with_player_hints(): void
+    {
+        $html = '<video id="bare" src="a.mp4"><track kind="captions"><track kind="descriptions"></video>'
+            .'<video class="video-js" src="b.mp4"><track kind="captions"><track kind="descriptions"></video>'
+            .'<video data-plyr-provider="html5" src="c.mp4"><track kind="captions"><track kind="descriptions"></video>'
+            .'<div><video src="d.mp4"><track kind="captions"><track kind="descriptions"></video><div class="player-controls">▶</div></div>'
+            .'<video aria-hidden="true" src="e.mp4"></video>';
+
+        $violations = $this->analyze($html);
+
+        $violation = $this->assertHasViolation($violations, 'media.video_missing_controls', element: 'video#bare', severity: Severity::Warning);
+        $this->assertSame('2.1.1', $violation->rule);
+        $this->assertCount(1, $violations);
+    }
+
+    public function test_autoplay_with_sound_is_an_error(): void
+    {
+        $violations = $this->analyze('<video autoplay controls src="a.mp4"><track kind="captions"><track kind="descriptions"></video><audio autoplay controls src="a.mp3" aria-describedby="t"></audio><p id="t">Transcript</p>');
 
         $violation = $this->assertHasViolation($violations, 'media.autoplay_with_audio', element: 'video', severity: Severity::Error);
         $this->assertSame('1.4.2', $violation->rule);
-        $this->assertSame(['tag' => 'video'], $violation->params);
-        $this->assertSame(['2.2.2'], $violation->related);
+        $this->assertSame([], $violation->related);
+        $this->assertHasViolation($violations, 'media.autoplay_with_audio', element: 'audio');
+        $this->assertCount(2, $violations);
     }
 
-    public function test_detects_video_without_controls(): void
+    public function test_muted_autoplay_without_controls_needs_a_pause_mechanism(): void
     {
-        $violations = $this->analyze('<video src="video.mp4"></video>');
+        $violations = $this->analyze('<video autoplay muted loop src="bg.mp4"></video><video autoplay muted controls src="ok.mp4"></video>');
 
-        $violation = $this->assertHasViolation($violations, 'media.video_missing_controls', element: 'video', severity: Severity::Error);
-        $this->assertSame('2.1.1', $violation->rule);
-        $this->assertSame(['src' => 'video.mp4'], $violation->params);
+        $violation = $this->assertHasViolation($violations, 'media.autoplay_without_pause', severity: Severity::Warning);
+        $this->assertSame('2.2.2', $violation->rule);
+        $this->assertSame(['src' => 'bg.mp4'], $violation->params);
+        $this->assertCount(1, $violations);
     }
 
     public function test_video_source_element_provides_the_src_param(): void
     {
-        $violations = $this->analyze('
-            <video controls>
-                <source src="movie.webm" type="video/webm">
-            </video>
-        ');
+        $violation = $this->assertHasViolation($this->analyze('<video controls><source src="movie.webm" type="video/webm"></video>'), 'media.video_missing_captions');
 
-        $violation = $this->assertHasViolation($violations, 'media.video_missing_captions', element: 'video');
         $this->assertSame(['src' => 'movie.webm'], $violation->params);
     }
 
-    public function test_detects_audio_without_transcript(): void
+    public function test_audio_transcript_detection(): void
     {
-        $violations = $this->analyze('<audio src="audio.mp3" controls></audio>');
+        $html = '<audio id="a" src="a.mp3" controls></audio>'
+            .'<figure><audio src="b.mp3" controls></audio><figcaption><a href="/b-transkript">Transkript lesen</a></figcaption></figure>'
+            .'<div><audio src="c.mp3" controls></audio><details><summary>Transcript</summary>…</details></div>'
+            .'<audio src="d.mp3" controls aria-details="t"></audio><div id="t">Text</div>';
 
-        $violation = $this->assertHasViolation($violations, 'media.audio_missing_transcript', element: 'audio', severity: Severity::Warning);
+        $violations = $this->analyze($html);
+
+        $violation = $this->assertHasViolation($violations, 'media.audio_missing_transcript', element: 'audio#a', severity: Severity::Warning);
         $this->assertSame('1.2.1', $violation->rule);
-        $this->assertSame(['src' => 'audio.mp3'], $violation->params);
+        $this->assertViolationCount($violations, 'media.audio_missing_transcript', 1);
     }
 
-    public function test_audio_with_transcript_reference_has_no_transcript_warning(): void
+    public function test_every_iframe_needs_a_name(): void
     {
-        $violations = $this->analyze('
-            <audio src="audio.mp3" controls aria-describedby="transcript"></audio>
-            <p id="transcript">Transcript of the recording</p>
-        ');
+        $html = '<iframe src="https://maps.example.com/embed"></iframe><iframe data-src="/lazy.html"></iframe>'
+            .'<iframe src="/a" title="Opening hours"></iframe><iframe src="/b" aria-label="Map"></iframe>';
 
-        $this->assertNoViolation($violations, 'media.audio_missing_transcript');
-    }
-
-    public function test_detects_audio_with_autoplay(): void
-    {
-        $violations = $this->analyze('<audio src="audio.mp3" autoplay controls></audio>');
-
-        $violation = $this->assertHasViolation($violations, 'media.autoplay_with_audio', element: 'audio', severity: Severity::Error);
-        $this->assertSame('1.4.2', $violation->rule);
-        $this->assertSame(['tag' => 'audio'], $violation->params);
-        $this->assertSame([], $violation->related);
-    }
-
-    public function test_detects_audio_without_controls(): void
-    {
-        $violations = $this->analyze('<audio src="audio.mp3"></audio>');
-
-        $violation = $this->assertHasViolation($violations, 'media.audio_missing_controls', element: 'audio', severity: Severity::Error);
-        $this->assertSame('2.1.1', $violation->rule);
-        $this->assertSame(['src' => 'audio.mp3'], $violation->params);
-    }
-
-    public function test_detects_iframe_without_title(): void
-    {
-        $violations = $this->analyze('<iframe src="https://www.youtube.com/embed/abc123"></iframe>');
+        $violations = $this->analyze($html);
 
         $violation = $this->assertHasViolation($violations, 'media.iframe_missing_title', element: 'iframe', severity: Severity::Error);
-        $this->assertSame('4.1.2', $violation->rule);
-        $this->assertSame(['src' => 'https://www.youtube.com/embed/abc123'], $violation->params);
+        $this->assertSame(['src' => 'https://maps.example.com/embed'], $violation->params);
+        $this->assertViolationCount($violations, 'media.iframe_missing_title', 2);
     }
 
-    public function test_iframe_title_param_is_truncated(): void
+    public function test_iframe_src_param_is_truncated(): void
     {
-        $src = 'https://www.youtube.com/embed/abc123?start=1&end=2&modestbranding=1&rel=0&enablejsapi=1';
+        $violation = $this->assertHasViolation($this->analyze('<iframe src="https://example.com/'.str_repeat('a', 100).'"></iframe>'), 'media.iframe_missing_title');
 
-        $violations = $this->analyze('<iframe src="'.$src.'"></iframe>');
-
-        $violation = $this->assertHasViolation($violations, 'media.iframe_missing_title', element: 'iframe');
-        $this->assertSame(60, mb_strlen((string) $violation->params['src']));
-        $this->assertStringEndsWith('…', (string) $violation->params['src']);
+        $this->assertSame(60, mb_strlen($violation->params['src']));
     }
 
-    public function test_detects_youtube_iframe_without_cc_load_policy(): void
+    public function test_embedded_video_captions_are_a_reminder(): void
     {
-        $violations = $this->analyze('<iframe src="https://www.youtube.com/embed/abc123" title="Video"></iframe>');
+        $html = '<iframe title="Video" src="https://www.youtube-nocookie.com/embed/x?cc_load_policy=1"></iframe>'
+            .'<iframe title="Video" data-src="https://player.vimeo.com/video/1"></iframe>'
+            .'<iframe title="Video" src="https://youtu.be/abc"></iframe>'
+            .'<iframe title="Not a video" src="https://notyoutube.com.example.org/"></iframe>';
 
-        $violation = $this->assertHasViolation($violations, 'media.embedded_video_captions_unknown', element: 'iframe', severity: Severity::Warning);
+        $violations = $this->analyze($html);
+
+        $violation = $this->assertHasViolation($violations, 'media.embedded_video_captions_unknown', severity: Severity::Notice);
         $this->assertSame('1.2.2', $violation->rule);
-        $this->assertSame(['src' => 'https://www.youtube.com/embed/abc123'], $violation->params);
+        $this->assertViolationCount($violations, 'media.embedded_video_captions_unknown', 3);
     }
 
-    public function test_youtube_iframe_with_cc_load_policy_has_no_caption_warning(): void
+    public function test_hidden_media_is_skipped(): void
     {
-        $violations = $this->analyze('<iframe src="https://www.youtube.com/embed/abc123?cc_load_policy=1" title="Video"></iframe>');
-
-        $this->assertNoViolation($violations, 'media.embedded_video_captions_unknown');
-    }
-
-    public function test_non_media_iframe_is_ignored(): void
-    {
-        $violations = $this->analyze('<iframe src="https://example.com/widget"></iframe>');
-
-        $this->assertSame([], $violations);
-    }
-
-    public function test_html_without_media_returns_no_violations(): void
-    {
-        $violations = $this->analyze('<html><body><p>No media here</p></body></html>');
-
-        $this->assertSame([], $violations);
+        $this->assertSame([], $this->analyze('<div hidden><video src="a.mp4"></video><audio src="a.mp3"></audio><iframe src="/x"></iframe></div>'));
     }
 }

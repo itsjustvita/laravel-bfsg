@@ -251,32 +251,32 @@ return [
             'suggestion' => 'Add a <track kind="captions"> (or subtitles) in the language of the video',
         ],
         'video_missing_audio_description' => [
-            'message' => 'Video without audio description (:src)',
-            'suggestion' => 'Provide an audio description track or an alternative version with descriptions',
-        ],
-        'autoplay_with_audio' => [
-            'message' => '<:tag> plays automatically',
-            'suggestion' => 'Do not autoplay media with sound; if autoplay is needed, mute it and offer a pause control',
+            'message' => 'Video without audio description track (:src)',
+            'suggestion' => 'Provide an audio description (track kind="descriptions" or a described version) if the video conveys visual information',
         ],
         'video_missing_controls' => [
             'message' => 'Video without controls (:src)',
             'suggestion' => 'Add the controls attribute or accessible custom controls',
         ],
-        'audio_missing_transcript' => [
-            'message' => 'Audio without transcript reference (:src)',
-            'suggestion' => 'Provide a transcript and link it via aria-describedby or next to the player',
+        'autoplay_with_audio' => [
+            'message' => '<:tag> plays sound automatically',
+            'suggestion' => 'Do not autoplay media with sound; if autoplay is needed, mute it and offer a pause control',
         ],
-        'audio_missing_controls' => [
-            'message' => 'Audio without controls (:src)',
-            'suggestion' => 'Add the controls attribute or accessible custom controls',
+        'autoplay_without_pause' => [
+            'message' => 'Muted video plays automatically without a way to pause it (:src)',
+            'suggestion' => 'Add controls or a pause button, or stop the animation after five seconds',
+        ],
+        'audio_missing_transcript' => [
+            'message' => 'Audio without transcript (:src)',
+            'suggestion' => 'Provide a transcript next to the player and link it via aria-describedby',
         ],
         'iframe_missing_title' => [
-            'message' => 'Media iframe without title (:src)',
+            'message' => 'Frame without accessible name (:src)',
             'suggestion' => 'Add a title attribute that describes the embedded content',
         ],
         'embedded_video_captions_unknown' => [
-            'message' => 'Embedded video player without captions enabled by default (:src)',
-            'suggestion' => 'Enable captions in the embed URL (e.g. cc_load_policy=1) or verify captions are available',
+            'message' => 'Embedded video player: captions cannot be verified (:src)',
+            'suggestion' => 'Verify that the embedded video has accurate captions',
         ],
     ],
     'semantic' => [
