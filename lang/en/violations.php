@@ -27,16 +27,20 @@ return [
     ],
     'forms' => [
         'control_missing_label' => [
-            'message' => 'Form control ":name" (:type) has no associated label',
+            'message' => 'Form control ":name" (:type) has no accessible name',
             'suggestion' => 'Add a <label for="…">, wrap the control in a <label>, or use aria-label/aria-labelledby',
         ],
-        'form_missing_name' => [
-            'message' => 'Form without descriptive label or heading',
-            'suggestion' => 'Add aria-label/aria-labelledby to the form or a heading that names it',
+        'button_missing_name' => [
+            'message' => 'Button <:tag> without accessible name',
+            'suggestion' => 'Give the button visible text, a value, or an aria-label that states its action',
         ],
-        'required_missing_aria_required' => [
-            'message' => 'Required field ":name" without aria-required attribute',
-            'suggestion' => 'Add aria-required="true" or make the required state visible in the label',
+        'radio_group_missing_legend' => [
+            'message' => 'Radio group ":name" without group label',
+            'suggestion' => 'Wrap the radio buttons in a <fieldset> with a <legend>, or use role="radiogroup" with aria-labelledby',
+        ],
+        'required_not_indicated' => [
+            'message' => 'Required field ":name" is not marked as required in its label',
+            'suggestion' => 'Mark the field as required in the visible label (e.g. "required" or an explained asterisk)',
         ],
     ],
     'headings' => [

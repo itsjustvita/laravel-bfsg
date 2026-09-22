@@ -27,16 +27,20 @@ return [
     ],
     'forms' => [
         'control_missing_label' => [
-            'message' => 'Formularfeld ":name" (:type) hat keine zugeordnete Beschriftung',
+            'message' => 'Formularfeld ":name" (:type) hat keinen zugänglichen Namen',
             'suggestion' => '<label for="…"> ergänzen, das Feld in ein <label> einbetten oder aria-label/aria-labelledby verwenden',
         ],
-        'form_missing_name' => [
-            'message' => 'Formular ohne beschreibende Bezeichnung oder Überschrift',
-            'suggestion' => 'aria-label/aria-labelledby am Formular oder eine benennende Überschrift ergänzen',
+        'button_missing_name' => [
+            'message' => 'Schaltfläche <:tag> ohne zugänglichen Namen',
+            'suggestion' => 'Der Schaltfläche sichtbaren Text, einen value oder ein aria-label geben, das die Aktion benennt',
         ],
-        'required_missing_aria_required' => [
-            'message' => 'Pflichtfeld ":name" ohne aria-required-Attribut',
-            'suggestion' => 'aria-required="true" ergänzen oder den Pflichtstatus in der Beschriftung sichtbar machen',
+        'radio_group_missing_legend' => [
+            'message' => 'Optionsfeld-Gruppe ":name" ohne Gruppenbeschriftung',
+            'suggestion' => 'Optionsfelder in ein <fieldset> mit <legend> einbetten oder role="radiogroup" mit aria-labelledby verwenden',
+        ],
+        'required_not_indicated' => [
+            'message' => 'Pflichtfeld ":name" ist in der Beschriftung nicht als Pflichtfeld gekennzeichnet',
+            'suggestion' => 'Pflichtfeld in der sichtbaren Beschriftung kennzeichnen (z. B. „Pflichtfeld“ oder ein erklärtes Sternchen)',
         ],
     ],
     'headings' => [
