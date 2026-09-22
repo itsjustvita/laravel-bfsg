@@ -5,12 +5,24 @@
 return [
     'images' => [
         'missing_alt' => [
-            'message' => 'Bild ohne alt-Attribut (:src)',
+            'message' => 'Bild ohne Textalternative (:src)',
             'suggestion' => 'alt-Attribut ergänzen, das den Bildinhalt beschreibt, oder alt="" für rein dekorative Bilder',
         ],
+        'area_missing_alt' => [
+            'message' => 'Imagemap-Bereich ohne Textalternative (:href)',
+            'suggestion' => 'alt-Attribut ergänzen, das das Linkziel des Bereichs beschreibt',
+        ],
+        'svg_missing_name' => [
+            'message' => 'Inline-SVG ohne zugänglichen Namen',
+            'suggestion' => '<title> als erstes Kindelement oder aria-label ergänzen; rein dekorative SVGs mit aria-hidden="true" auszeichnen',
+        ],
         'possibly_decorative' => [
-            'message' => 'Bild mit leerem Alternativtext ist möglicherweise nicht dekorativ (:src)',
+            'message' => 'Bild mit leerem Alternativtext wird als dekorativ behandelt (:src)',
             'suggestion' => 'Prüfen, ob das Bild dekorativ ist; andernfalls den Inhalt im alt-Attribut beschreiben',
+        ],
+        'suspicious_alt' => [
+            'message' => 'Alternativtext „:alt“ beschreibt das Bild nicht (:src)',
+            'suggestion' => 'Inhalt oder Funktion des Bildes beschreiben statt Dateiname oder Allgemeinbegriff',
         ],
     ],
     'forms' => [

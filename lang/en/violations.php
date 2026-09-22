@@ -5,12 +5,24 @@
 return [
     'images' => [
         'missing_alt' => [
-            'message' => 'Image without alt attribute (:src)',
+            'message' => 'Image without text alternative (:src)',
             'suggestion' => 'Add an alt attribute that describes the image, or alt="" if it is purely decorative',
         ],
+        'area_missing_alt' => [
+            'message' => 'Image map area without text alternative (:href)',
+            'suggestion' => 'Add an alt attribute that describes the link target of the area',
+        ],
+        'svg_missing_name' => [
+            'message' => 'Inline SVG without accessible name',
+            'suggestion' => 'Add a <title> as first child or aria-label; mark purely decorative SVGs with aria-hidden="true"',
+        ],
         'possibly_decorative' => [
-            'message' => 'Image with empty alt text may not be decorative (:src)',
+            'message' => 'Image with empty alt text is treated as decorative (:src)',
             'suggestion' => 'Verify the image is decorative; otherwise describe it in the alt attribute',
+        ],
+        'suspicious_alt' => [
+            'message' => 'Alt text ":alt" does not describe the image (:src)',
+            'suggestion' => 'Describe the content or function of the image instead of a file name or a generic word',
         ],
     ],
     'forms' => [
