@@ -216,33 +216,33 @@ return [
         ],
     ],
     'tables' => [
-        'missing_caption' => [
-            'message' => 'Datentabelle ohne Beschriftung',
-            'suggestion' => '<caption> ergänzen, die die Tabelle benennt, oder aria-label/aria-labelledby verwenden',
-        ],
-        'th_missing_scope' => [
-            'message' => 'Kopfzelle „:content“ ohne scope-Attribut',
-            'suggestion' => 'scope="col" oder scope="row" an Kopfzellen ergänzen',
-        ],
-        'invalid_scope' => [
-            'message' => 'Ungültiger scope-Wert „:value“',
-            'suggestion' => 'scope="col", "row", "colgroup" oder "rowgroup" verwenden',
+        'layout_table_with_semantics' => [
+            'message' => 'Layouttabelle (role="presentation") enthält :found',
+            'suggestion' => 'Tabellensemantik aus Layouttabellen entfernen oder role="presentation" weglassen, falls es eine Datentabelle ist',
         ],
         'missing_headers' => [
             'message' => 'Datentabelle ohne Kopfzellen',
             'suggestion' => 'Kopfzellen mit <th> (und scope) auszeichnen oder id/headers-Zuordnungen verwenden',
         ],
+        'missing_caption' => [
+            'message' => 'Tabelle ohne Beschriftung oder zugänglichen Namen',
+            'suggestion' => '<caption> ergänzen, die die Tabelle benennt, oder aria-label/aria-labelledby verwenden',
+        ],
+        'th_missing_scope' => [
+            'message' => 'Kopfzelle „:content“ in komplexer Tabelle ohne scope',
+            'suggestion' => 'scope="col" oder scope="row" ergänzen oder Zellen über id/headers zuordnen',
+        ],
+        'invalid_scope' => [
+            'message' => 'Ungültiger scope-Wert „:value“',
+            'suggestion' => 'scope="col", "row", "colgroup" oder "rowgroup" verwenden',
+        ],
         'dangling_headers_ref' => [
             'message' => 'Zelle verweist auf eine nicht vorhandene Kopfzellen-id „:id“',
-            'suggestion' => 'headers-Attribut auf vorhandene <th>-ids zeigen lassen',
-        ],
-        'layout_table_with_semantics' => [
-            'message' => 'Layout-Tabelle (role="presentation") enthält <:found>',
-            'suggestion' => 'Tabellensemantik aus Layout-Tabellen entfernen oder role="presentation" bei Datentabellen weglassen',
+            'suggestion' => 'headers-Attribut auf vorhandene <th>-ids verweisen lassen',
         ],
         'nested_table' => [
             'message' => 'Verschachtelte Tabelle',
-            'suggestion' => 'Datentabellen nicht verschachteln; Struktur abflachen',
+            'suggestion' => 'Datentabellen nicht verschachteln; Struktur vereinfachen',
         ],
     ],
     'media' => [

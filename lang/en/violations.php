@@ -216,29 +216,29 @@ return [
         ],
     ],
     'tables' => [
-        'missing_caption' => [
-            'message' => 'Data table without caption',
-            'suggestion' => 'Add a <caption> that names the table, or aria-label/aria-labelledby',
-        ],
-        'th_missing_scope' => [
-            'message' => 'Header cell ":content" without scope attribute',
-            'suggestion' => 'Add scope="col" or scope="row" to header cells',
-        ],
-        'invalid_scope' => [
-            'message' => 'Invalid scope value ":value"',
-            'suggestion' => 'Use scope="col", "row", "colgroup" or "rowgroup"',
+        'layout_table_with_semantics' => [
+            'message' => 'Layout table (role="presentation") contains :found',
+            'suggestion' => 'Remove table semantics from layout tables, or drop role="presentation" if it is a data table',
         ],
         'missing_headers' => [
             'message' => 'Data table without header cells',
             'suggestion' => 'Mark header cells with <th> (and scope) or use id/headers associations',
         ],
+        'missing_caption' => [
+            'message' => 'Table without caption or accessible name',
+            'suggestion' => 'Add a <caption> that names the table, or aria-label/aria-labelledby',
+        ],
+        'th_missing_scope' => [
+            'message' => 'Header cell ":content" in a complex table without scope',
+            'suggestion' => 'Add scope="col" or scope="row", or associate cells via id/headers',
+        ],
+        'invalid_scope' => [
+            'message' => 'Invalid scope value ":value"',
+            'suggestion' => 'Use scope="col", "row", "colgroup" or "rowgroup"',
+        ],
         'dangling_headers_ref' => [
             'message' => 'Cell references a non-existent header id ":id"',
             'suggestion' => 'Point the headers attribute to existing <th> ids',
-        ],
-        'layout_table_with_semantics' => [
-            'message' => 'Layout table (role="presentation") contains <:found>',
-            'suggestion' => 'Remove table semantics from layout tables, or drop role="presentation" if it is a data table',
         ],
         'nested_table' => [
             'message' => 'Nested table',
