@@ -366,9 +366,13 @@ return [
             'message' => 'Invalid aria-live value ":value"',
             'suggestion' => 'Use aria-live="polite", "assertive" or "off"',
         ],
-        'no_live_region' => [
-            'message' => 'Page with interactive elements has no live region for status messages',
-            'suggestion' => 'Add a container with role="status" or aria-live="polite" for status messages',
+        'empty_aria_live' => [
+            'message' => 'Empty aria-live attribute',
+            'suggestion' => 'Set aria-live="polite" (or "assertive" for urgent messages), or remove the attribute',
+        ],
+        'alert_without_live_region' => [
+            'message' => 'Status message container is not a live region',
+            'suggestion' => 'Add role="status" (or role="alert" for errors) so screen readers announce the message',
         ],
     ],
 ];
