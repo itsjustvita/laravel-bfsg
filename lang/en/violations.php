@@ -67,12 +67,12 @@ return [
     ],
     'contrast' => [
         'insufficient' => [
-            'message' => 'Insufficient contrast :ratio:1 (required :required:1) for ":content" — :foreground on :background',
+            'message' => 'Insufficient text contrast :ratio:1 (required :required:1): :foreground on :background',
             'suggestion' => 'Increase the contrast between text and background colour to at least :required:1',
         ],
-        'light_gray_inline' => [
-            'message' => 'Inline style uses a light gray text colour',
-            'suggestion' => 'Ensure a contrast ratio of at least 4.5:1 for body text',
+        'analysis_truncated' => [
+            'message' => 'Contrast analysis stopped after :limit text elements',
+            'suggestion' => 'Check the remaining text with a browser-based contrast tool, or analyze smaller pages',
         ],
     ],
     'links' => [

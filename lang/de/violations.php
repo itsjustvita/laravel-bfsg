@@ -67,12 +67,12 @@ return [
     ],
     'contrast' => [
         'insufficient' => [
-            'message' => 'Unzureichender Kontrast :ratio:1 (erforderlich :required:1) für „:content“ — :foreground auf :background',
+            'message' => 'Unzureichender Textkontrast :ratio:1 (erforderlich :required:1): :foreground auf :background',
             'suggestion' => 'Kontrast zwischen Text- und Hintergrundfarbe auf mindestens :required:1 erhöhen',
         ],
-        'light_gray_inline' => [
-            'message' => 'Inline-Style verwendet eine hellgraue Schriftfarbe',
-            'suggestion' => 'Kontrastverhältnis von mindestens 4.5:1 für Fließtext sicherstellen',
+        'analysis_truncated' => [
+            'message' => 'Kontrastprüfung nach :limit Textelementen abgebrochen',
+            'suggestion' => 'Übrige Texte mit einem browserbasierten Kontrastwerkzeug prüfen oder kleinere Seiten analysieren',
         ],
     ],
     'links' => [
