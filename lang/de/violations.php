@@ -76,37 +76,41 @@ return [
         ],
     ],
     'links' => [
-        'non_descriptive' => [
-            'message' => 'Nicht aussagekräftiger Linktext „:text“ (:href)',
-            'suggestion' => 'Linktext verwenden, der das Ziel beschreibt, oder ein aria-label ergänzen',
-        ],
         'missing_name' => [
-            'message' => 'Link ohne zugänglichen Text (:href)',
-            'suggestion' => 'Linktext, aria-label oder Alternativtext für das Bild im Link ergänzen',
+            'message' => 'Link ohne zugänglichen Namen (:href)',
+            'suggestion' => 'Linktext, ein aria-label oder einen Alternativtext am Bild im Link ergänzen',
         ],
-        'missing_href' => [
-            'message' => 'Anker-Element ohne href-Attribut („:text“)',
-            'suggestion' => 'href ergänzen oder für Aktionen einen <button> verwenden',
+        'non_descriptive' => [
+            'message' => 'Linktext „:text“ beschreibt das Ziel nicht (:href)',
+            'suggestion' => 'Linktext verwenden, der das Ziel benennt, oder ein entsprechendes aria-label ergänzen',
         ],
-        'adjacent_duplicate' => [
-            'message' => 'Benachbarte doppelte Links zu :href',
-            'suggestion' => 'Benachbarte Links zum selben Ziel zu einem Link zusammenfassen',
-        ],
-        'new_window_unannounced' => [
-            'message' => 'Link öffnet ein neues Fenster ohne Hinweis (:href)',
-            'suggestion' => '„(öffnet in neuem Fenster)“ im Linktext oder aria-label ergänzen',
-        ],
-        'missing_noopener' => [
-            'message' => 'Link mit target="_blank" ohne rel="noopener" (:href)',
-            'suggestion' => 'rel="noopener noreferrer" bei Links ergänzen, die ein neues Fenster öffnen',
+        'non_descriptive_in_context' => [
+            'message' => 'Linktext „:text“ ist nur im Kontext verständlich (:href)',
+            'suggestion' => 'Linktext bevorzugen, der auch für sich allein verständlich ist, z. B. in Linklisten',
         ],
         'url_as_text' => [
             'message' => 'URL als Linktext verwendet (:text)',
             'suggestion' => 'Beschreibenden Text statt der URL verwenden',
         ],
+        'new_window_unannounced' => [
+            'message' => 'Link öffnet ohne Hinweis ein neues Fenster (:href)',
+            'suggestion' => '„(öffnet in neuem Fenster)“ im Linktext oder aria-label ergänzen',
+        ],
+        'missing_noopener' => [
+            'message' => 'Externer Link mit target="_blank" ohne rel="noopener" (:href)',
+            'suggestion' => 'rel="noopener" an externen Links ergänzen, die ein neues Fenster öffnen',
+        ],
         'download_unannounced' => [
-            'message' => 'Download-Link ohne Angabe des Dateityps (:href)',
-            'suggestion' => 'Dateityp und Größe im Linktext ergänzen, z. B. „Bericht (:type, 2 MB)“',
+            'message' => 'Link auf eine :type-Datei nennt den Dateityp nicht (:href)',
+            'suggestion' => 'Dateityp und -größe im Linktext angeben, z. B. „Jahresbericht (PDF, 2 MB)“',
+        ],
+        'adjacent_duplicate' => [
+            'message' => 'Benachbarte Links mit gleichem Text verweisen auf :href',
+            'suggestion' => 'Benachbarte Links zum selben Ziel zu einem Link zusammenfassen',
+        ],
+        'pseudo_link' => [
+            'message' => 'Link als Schaltfläche verwendet (:href)',
+            'suggestion' => '<button> für Aktionen verwenden und <a href> für Navigation beibehalten',
         ],
     ],
     'keyboard' => [

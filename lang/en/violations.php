@@ -76,37 +76,41 @@ return [
         ],
     ],
     'links' => [
-        'non_descriptive' => [
-            'message' => 'Non-descriptive link text ":text" (:href)',
-            'suggestion' => 'Use link text that describes the destination, or add an aria-label',
-        ],
         'missing_name' => [
-            'message' => 'Link without accessible text (:href)',
+            'message' => 'Link without accessible name (:href)',
             'suggestion' => 'Add link text, an aria-label, or alt text on the image inside the link',
         ],
-        'missing_href' => [
-            'message' => 'Anchor element without href attribute (":text")',
-            'suggestion' => 'Add an href, or use a <button> for actions',
+        'non_descriptive' => [
+            'message' => 'Link text ":text" does not describe the destination (:href)',
+            'suggestion' => 'Use link text that names the destination, or add an aria-label that does',
         ],
-        'adjacent_duplicate' => [
-            'message' => 'Adjacent duplicate links to :href',
-            'suggestion' => 'Merge adjacent links to the same destination into one link',
-        ],
-        'new_window_unannounced' => [
-            'message' => 'Link opens in a new window without warning (:href)',
-            'suggestion' => 'Add "(opens in new window)" to the link text or aria-label',
-        ],
-        'missing_noopener' => [
-            'message' => 'Link with target="_blank" lacks rel="noopener" (:href)',
-            'suggestion' => 'Add rel="noopener noreferrer" to links that open a new window',
+        'non_descriptive_in_context' => [
+            'message' => 'Link text ":text" relies on the surrounding context (:href)',
+            'suggestion' => 'Prefer link text that is meaningful on its own, e.g. in a list of links',
         ],
         'url_as_text' => [
             'message' => 'URL used as link text (:text)',
             'suggestion' => 'Use descriptive text instead of the URL',
         ],
+        'new_window_unannounced' => [
+            'message' => 'Link opens a new window without notice (:href)',
+            'suggestion' => 'Add "(opens in new window)" to the link text or aria-label',
+        ],
+        'missing_noopener' => [
+            'message' => 'External link with target="_blank" lacks rel="noopener" (:href)',
+            'suggestion' => 'Add rel="noopener" to external links that open a new window',
+        ],
         'download_unannounced' => [
-            'message' => 'Download link without file type indication (:href)',
-            'suggestion' => 'Add the file type and size to the link text, e.g. "Report (:type, 2 MB)"',
+            'message' => 'Link to a :type file does not mention the file type (:href)',
+            'suggestion' => 'Add the file type and size to the link text, e.g. "Annual report (PDF, 2 MB)"',
+        ],
+        'adjacent_duplicate' => [
+            'message' => 'Adjacent links with the same text point to :href',
+            'suggestion' => 'Merge adjacent links to the same destination into one link',
+        ],
+        'pseudo_link' => [
+            'message' => 'Link used as a button (:href)',
+            'suggestion' => 'Use a <button> for actions and keep <a href> for navigation',
         ],
     ],
     'keyboard' => [

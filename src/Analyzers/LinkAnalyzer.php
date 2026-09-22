@@ -3,6 +3,8 @@
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
 use DOMElement;
+use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Dom\Roles;
 use ItsJustVita\LaravelBfsg\Dom\Text;
 use ItsJustVita\LaravelBfsg\Severity;
 
@@ -10,7 +12,26 @@ class LinkAnalyzer extends BaseAnalyzer
 {
     private const MAX_TEXT = 50;
 
-    private const DOWNLOAD_EXTENSIONS = '/\.(pdf|doc|docx|xls|xlsx|zip|rar)$/i';
+    /** Link names that do not describe the destination (English + German), compared after normalization. */
+    public const GENERIC_NAMES = [
+        'click here', 'here', 'read more', 'more', 'link', 'click', 'go', 'start', 'download', 'learn more',
+        'continue', 'see more', 'view more', 'details', 'more info', 'info', 'this link',
+        'hier klicken', 'hier', 'klicken', 'mehr', 'mehr erfahren', 'mehr lesen', 'mehr infos', 'weiterlesen',
+        'weiter', 'lesen', 'jetzt', 'los', 'herunterladen', 'dieser link',
+    ];
+
+    private const NEW_WINDOW_HINTS = [
+        'new window', 'new tab', 'opens in', 'external', 'neues fenster', 'neuem fenster', 'neuer tab',
+        'neuen tab', 'neuem tab', 'öffnet in', 'extern',
+    ];
+
+    private const DOCUMENT_EXTENSIONS = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'csv', 'zip'];
+
+    private const DOWNLOAD_HINTS = ['download', 'pdf', 'datei', 'herunterladen', 'dokument'];
+
+    private const CONTEXT_CONTAINERS = ['li', 'p', 'td', 'dd'];
+
+    private const HEADINGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
 
     protected string $key = 'links';
 
@@ -18,195 +39,154 @@ class LinkAnalyzer extends BaseAnalyzer
 
     protected array $rules = ['2.4.4', '4.1.2', '3.2.5'];
 
-    // Common non-descriptive link texts to avoid (English + German).
-    protected const NON_DESCRIPTIVE_TEXTS = [
-        // English
-        'click here',
-        'here',
-        'read more',
-        'more',
-        'link',
-        'click',
-        'go',
-        'start',
-        'download',
-        'learn more',
-        'continue',
-        'see more',
-        'view more',
-        'details',
-        // German
-        'hier klicken',
-        'hier',
-        'klicken',
-        'mehr',
-        'mehr erfahren',
-        'weiterlesen',
-        'weiter',
-        'lesen',
-        'jetzt',
-        'los',
-        'herunterladen',
-    ];
-
     protected function inspect(): void
     {
-        $this->checkNonDescriptiveLinks();
-        $this->checkEmptyLinks();
-        $this->checkLinksWithoutHref();
-        $this->checkAdjacentDuplicateLinks();
-        $this->checkNewWindowLinks();
-        $this->checkLinkPurposeClarity();
-    }
-
-    protected function checkNonDescriptiveLinks(): void
-    {
-        foreach ($this->query('//a[@href]') as $link) {
-            $linkText = $this->text($link);
-
-            if (in_array(Text::lower($linkText), self::NON_DESCRIPTIVE_TEXTS, true)) {
-                $this->report('non_descriptive', Severity::Error, '2.4.4', $link, [
-                    'text' => $this->excerpt($linkText),
-                    'href' => $link->getAttribute('href'),
-                ], related: ['2.4.9']);
-            }
-
-            // Very short link text without an accessible name of its own.
-            if (Text::length($linkText) > 0 && Text::length($linkText) <= 2 && ! $link->hasAttribute('aria-label')) {
-                $this->report('non_descriptive', Severity::Warning, '2.4.4', $link, [
-                    'text' => $this->excerpt($linkText),
-                    'href' => $link->getAttribute('href'),
-                ]);
-            }
+        foreach ($this->queryVisible('//a[@href]') as $link) {
+            $this->checkLink($link);
         }
     }
 
-    protected function checkEmptyLinks(): void
+    protected function checkLink(DOMElement $link): void
     {
-        foreach ($this->query('//a[@href and not(text()) and not(*)]') as $link) {
-            if (! $link->hasAttribute('aria-label') && ! $link->hasAttribute('title')) {
-                $this->report('missing_name', Severity::Error, '2.4.4', $link, [
-                    'href' => $link->getAttribute('href'),
-                ], related: ['4.1.2']);
-            }
+        $href = $link->getAttribute('href');
+        $name = $this->name($link);
+
+        if ($name === '') {
+            $this->report('missing_name', Severity::Error, '2.4.4', $link, ['href' => $href], related: ['4.1.2']);
+        } else {
+            $this->checkPurpose($link, $name, $href);
         }
 
-        // Links whose only content is an image without alternative text.
-        foreach ($this->query('//a[@href]/img[not(@alt) or @alt=""]') as $img) {
-            $link = $img->parentNode;
+        $this->checkNewWindow($link, $name, $href);
+        $this->checkDownload($link, $name, $href);
+        $this->checkAdjacentDuplicate($link, $name, $href);
+        $this->checkPseudoLink($link, $href);
+    }
 
-            if (! $link instanceof DOMElement) {
-                continue;
+    protected function checkPurpose(DOMElement $link, string $name, string $href): void
+    {
+        $authored = $this->authoredName($link);
+        $subject = $authored !== '' ? $authored : $name;
+        $normalized = Text::lower(Text::stripTrailingPunctuation($subject));
+
+        if (in_array($normalized, self::GENERIC_NAMES, true) || Text::length($normalized) < 3) {
+            $params = ['text' => Text::truncate($subject, self::MAX_TEXT), 'href' => $href];
+
+            if ($this->hasContext($link)) {
+                $this->report('non_descriptive_in_context', Severity::Notice, '2.4.4', $link, $params);
+            } else {
+                $this->report('non_descriptive', Severity::Warning, '2.4.4', $link, $params);
             }
 
-            if ($this->text($link) === '' && ! $link->hasAttribute('aria-label')) {
-                $this->report('missing_name', Severity::Error, '2.4.4', $link, [
-                    'href' => $link->getAttribute('href'),
-                ], meta: ['reason' => 'image_without_alt'], related: ['1.1.1']);
-            }
+            return;
+        }
+
+        if ($this->looksLikeUrl($name)) {
+            $this->report('url_as_text', Severity::Notice, '2.4.4', $link, ['text' => Text::truncate($name, self::MAX_TEXT), 'href' => $href]);
         }
     }
 
-    protected function checkLinksWithoutHref(): void
+    /** Programmatically determinable context (WCAG techniques H77–H81): surrounding sentence, list item, cell, or a preceding heading. */
+    protected function hasContext(DOMElement $link): bool
     {
-        foreach ($this->query('//a[not(@href)]') as $link) {
-            $this->report('missing_href', Severity::Warning, '2.4.4', $link, [
-                'text' => $this->excerpt($this->text($link)),
-            ]);
+        for ($node = $link->parentNode; $node instanceof DOMElement; $node = $node->parentNode) {
+            if (in_array(Element::tag($node), self::CONTEXT_CONTAINERS, true)) {
+                return Element::text($node) !== Element::text($link);
+            }
+        }
+
+        $previous = Element::previousElement($link);
+
+        return $previous !== null && in_array(Element::tag($previous), self::HEADINGS, true);
+    }
+
+    protected function checkNewWindow(DOMElement $link, string $name, string $href): void
+    {
+        if (Element::enumAttr($link, 'target') !== '_blank') {
+            return;
+        }
+
+        $announced = Text::lower($name.' '.$link->getAttribute('title'));
+
+        if (! $this->containsAny($announced, self::NEW_WINDOW_HINTS)) {
+            $this->report('new_window_unannounced', Severity::Notice, '3.2.5', $link, ['href' => $href], tags: ['aaa']);
+        }
+
+        $rel = preg_split('/\s+/', Element::enumAttr($link, 'rel'), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        if ($this->isExternal($href) && array_intersect($rel, ['noopener', 'noreferrer']) === []) {
+            $this->report('missing_noopener', Severity::Notice, null, $link, ['href' => $href], tags: ['security'], autoFixable: true);
         }
     }
 
-    protected function checkAdjacentDuplicateLinks(): void
+    protected function checkDownload(DOMElement $link, string $name, string $href): void
     {
-        $previousHref = null;
+        $path = strtolower((string) preg_replace('/[?#].*$/', '', $href));
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
 
-        foreach ($this->query('//a[@href]') as $link) {
-            $href = $link->getAttribute('href');
+        if (! in_array($extension, self::DOCUMENT_EXTENSIONS, true) || $link->hasAttribute('download')) {
+            return;
+        }
 
-            if ($href !== '' && $href === $previousHref && $link->previousSibling?->nodeName === 'a') {
-                $this->report('adjacent_duplicate', Severity::Warning, '2.4.4', $link, ['href' => $href]);
-            }
-
-            $previousHref = $href;
+        if (! Text::containsAnyWord($name.' '.$link->getAttribute('title'), [...self::DOWNLOAD_HINTS, $extension])) {
+            $this->report('download_unannounced', Severity::Notice, '2.4.4', $link, ['href' => $href, 'type' => strtoupper($extension)]);
         }
     }
 
-    /**
-     * For links with target="_blank" two independent concerns are reported:
-     *   1. UX (WCAG 3.2.5): does the user know it opens in a new window?
-     *   2. Security: does the link carry rel="noopener noreferrer"?
-     */
-    protected function checkNewWindowLinks(): void
+    protected function checkAdjacentDuplicate(DOMElement $link, string $name, string $href): void
     {
-        foreach ($this->query('//a[@target="_blank" or @target="blank"]') as $link) {
-            $linkText = $this->text($link);
-            $ariaLabel = $link->getAttribute('aria-label');
-            $title = $link->getAttribute('title');
-            $rel = $link->getAttribute('rel');
-            $href = $link->getAttribute('href');
+        $previous = Element::previousElement($link);
 
-            // Is there any indication that this link opens in a new window?
-            $hasWarning = (
-                stripos($linkText, 'new window') !== false ||
-                stripos($linkText, 'new tab') !== false ||
-                stripos($linkText, 'opens in') !== false ||
-                stripos($ariaLabel, 'new window') !== false ||
-                stripos($ariaLabel, 'new tab') !== false ||
-                stripos($title, 'new window') !== false ||
-                stripos($title, 'new tab') !== false
-            );
+        if ($previous === null || Element::tag($previous) !== 'a' || $previous->getAttribute('href') !== $href || $this->isHidden($previous)) {
+            return;
+        }
 
-            if (! $hasWarning) {
-                $this->report('new_window_unannounced', Severity::Warning, '3.2.5', $link, [
-                    'href' => $href,
-                    'text' => $this->excerpt($linkText),
-                ]);
-            }
-
-            if (stripos($rel, 'noopener') === false || stripos($rel, 'noreferrer') === false) {
-                $this->report('missing_noopener', Severity::Warning, null, $link, [
-                    'href' => $href,
-                ], tags: ['security'], autoFixable: true);
-            }
+        if ($name !== '' && $this->name($previous) === $name) {
+            $this->report('adjacent_duplicate', Severity::Notice, '2.4.4', $link, ['href' => $href]);
         }
     }
 
-    protected function checkLinkPurposeClarity(): void
+    protected function checkPseudoLink(DOMElement $link, string $href): void
     {
-        foreach ($this->query('//a[@href]') as $link) {
-            $href = $link->getAttribute('href');
-            $linkText = $this->text($link);
+        $target = strtolower(trim($href));
 
-            if (filter_var($linkText, FILTER_VALIDATE_URL)) {
-                $this->report('url_as_text', Severity::Warning, '2.4.4', $link, [
-                    'href' => $href,
-                    'text' => $this->excerpt($linkText),
-                ]);
-            }
+        if ($target !== '#' && ! str_starts_with($target, 'javascript:')) {
+            return;
+        }
 
-            if (preg_match(self::DOWNLOAD_EXTENSIONS, $href) !== 1) {
-                continue;
-            }
-
-            $hasFileIndication = (
-                stripos($linkText, 'pdf') !== false ||
-                stripos($linkText, 'download') !== false ||
-                stripos($linkText, 'document') !== false ||
-                stripos($linkText, 'file') !== false
-            );
-
-            if (! $hasFileIndication) {
-                $this->report('download_unannounced', Severity::Warning, '2.4.4', $link, [
-                    'href' => $href,
-                    'text' => $this->excerpt($linkText),
-                    'type' => strtoupper(pathinfo($href, PATHINFO_EXTENSION)),
-                ]);
-            }
+        if ($link->hasAttribute('onclick') || Roles::effective($link) === 'button') {
+            $this->report('pseudo_link', Severity::Notice, '4.1.2', $link, ['href' => $href]);
         }
     }
 
-    protected function excerpt(string $text): string
+    /** With scheme, starting with www., or host-like (the last label is not a file extension). */
+    protected function looksLikeUrl(string $name): bool
     {
-        return Text::truncate($text, self::MAX_TEXT);
+        if (preg_match('~^(?:https?://|www\.)\S+$~i', $name) === 1) {
+            return true;
+        }
+
+        if (preg_match('~^(?:[a-z0-9-]+\.)+([a-z]{2,})(?:/\S*)?$~i', $name, $m) !== 1) {
+            return false;
+        }
+
+        return ! in_array(strtolower($m[1]), [...self::DOCUMENT_EXTENSIONS, 'html', 'htm', 'jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'], true);
+    }
+
+    protected function isExternal(string $href): bool
+    {
+        return preg_match('~^(?:https?:)?//~i', trim($href)) === 1;
+    }
+
+    /** @param  list<string>  $needles */
+    protected function containsAny(string $haystack, array $needles): bool
+    {
+        foreach ($needles as $needle) {
+            if (str_contains($haystack, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
