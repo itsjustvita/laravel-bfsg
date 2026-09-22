@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="csrf-token" content="YVGhjM0ZqSr2mJp8tq1h7mE1S8m6XnJpY4pEdb0S">
+    <title>Registrieren - Laravel</title>
+</head>
+<body class="font-sans antialiased">
+<div class="min-h-screen">
+    <nav aria-label="Konto">
+        <a href="/">Startseite</a>
+        <a href="/login">Anmelden</a>
+    </nav>
+    <main>
+        <h1>Registrieren</h1>
+        <form method="POST" action="https://app.example.test/register">
+            <input type="hidden" name="_token" value="YVGhjM0ZqSr2mJp8tq1h7mE1S8m6XnJpY4pEdb0S" autocomplete="off">
+
+            <div>
+                <label for="name">Name</label>
+                <input id="name" class="block mt-1 w-full" type="text" name="name" value="" required autofocus autocomplete="name">
+            </div>
+
+            <div class="mt-4">
+                <label for="email">E-Mail</label>
+                <input id="email" class="block mt-1 w-full" type="email" name="email" value="" required>
+            </div>
+
+            <div class="mt-4">
+                <label for="password">Passwort</label>
+                <input id="password" class="block mt-1 w-full" type="password" name="password" required autocomplete="new-password">
+            </div>
+
+            <div class="mt-4">
+                <label for="password_confirmation">Passwort bestätigen</label>
+                <input id="password_confirmation" class="block mt-1 w-full" type="password" name="password_confirmation" required autocomplete="new-password">
+            </div>
+
+            <div class="mt-4">
+                <label for="remember_me">
+                    <input id="remember_me" type="checkbox" name="remember">
+                    <span>Angemeldet bleiben</span>
+                </label>
+            </div>
+
+            <div class="flex items-center justify-end mt-4">
+                <a class="underline text-sm" href="https://app.example.test/login">Bereits registriert?</a>
+                <button type="submit" class="ms-4">Registrieren</button>
+            </div>
+        </form>
+    </main>
+</div>
+</body>
+</html>

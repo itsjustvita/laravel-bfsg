@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Invoices | Billing dashboard</title>
+</head>
+<body>
+<main>
+    <h1>Invoices</h1>
+
+    <div role="toolbar" aria-label="Invoice actions" aria-controls="invoice-grid">
+        <button type="button" tabindex="0">Export</button>
+        <button type="button" tabindex="-1">Print</button>
+        <button type="button" tabindex="-1" aria-pressed="false">Show paid</button>
+    </div>
+
+    <div id="invoice-grid" role="grid" aria-label="Invoices" aria-rowcount="3" aria-multiselectable="true">
+        <div role="rowgroup">
+            <div role="row">
+                <div role="columnheader" aria-sort="ascending">Number</div>
+                <div role="columnheader">Customer</div>
+                <div role="columnheader">Paid</div>
+            </div>
+        </div>
+        <div role="rowgroup">
+            <div role="row" aria-selected="true" aria-rowindex="2">
+                <div role="gridcell" tabindex="0">INV-001</div>
+                <div role="gridcell" tabindex="-1">Acme Ltd.</div>
+                <div role="gridcell" tabindex="-1"><span role="checkbox" aria-checked="true" aria-label="Paid"></span></div>
+            </div>
+            <div role="row" aria-selected="false" aria-rowindex="3">
+                <div role="gridcell" tabindex="-1" aria-selected="false">INV-002</div>
+                <div role="gridcell" tabindex="-1">Globex</div>
+                <div role="gridcell" tabindex="-1"><span role="checkbox" aria-checked="false" aria-label="Paid"></span></div>
+            </div>
+        </div>
+    </div>
+
+    <label id="status-label">Status filter</label>
+    <div role="listbox" tabindex="0" aria-labelledby="status-label" aria-activedescendant="opt-open">
+        <div role="option" id="opt-open" aria-selected="true">Open</div>
+        <div role="option" id="opt-paid" aria-selected="false">Paid</div>
+    </div>
+
+    <div role="tablist" aria-label="Views">
+        <button role="tab" type="button" aria-selected="true" aria-controls="panel-table" id="tab-table">Table</button>
+        <button role="tab" type="button" aria-selected="false" aria-controls="panel-chart" id="tab-chart" tabindex="-1">Chart</button>
+    </div>
+    <div role="tabpanel" id="panel-table" aria-labelledby="tab-table" tabindex="0">Table view</div>
+
+    <div role="slider" tabindex="0" aria-label="Amount filter" aria-valuemin="0" aria-valuemax="1000">0</div>
+</main>
+</body>
+</html>

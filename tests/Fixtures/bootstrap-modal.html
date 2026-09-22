@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Newsletter settings | Acme Shop</title>
+    <!-- Excerpt of bootstrap.min.css as UrlFetcher inlines it (spec §9.1) -->
+    <style data-bfsg-inlined="/css/bootstrap.min.css">
+        .modal { display: none; position: fixed; }
+        .modal.show { display: block; }
+        .fade { transition: opacity .15s linear; }
+        .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; }
+        .btn-primary { color: #fff; background-color: #0d6efd; }
+        .alert-warning { color: #664d03; background-color: #fff3cd; }
+        .text-muted { color: #6c757d !important; }
+    </style>
+</head>
+<body>
+<a class="visually-hidden-focusable" href="#content">Skip to main content</a>
+<nav class="navbar navbar-expand-lg" aria-label="Main">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="/">Acme Shop</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav" aria-controls="nav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="nav">
+            <ul class="navbar-nav">
+                <li class="nav-item"><a class="nav-link active" aria-current="page" href="/settings">Settings</a></li>
+                <li class="nav-item"><a class="nav-link" href="/orders">Orders</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<main id="content" class="container">
+    <h1>Newsletter settings</h1>
+
+    <div class="alert alert-warning" role="alert">Your e-mail address is not confirmed yet.</div>
+
+    <p class="text-muted">Choose which newsletters you want to receive.</p>
+
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#subscribeModal">Subscribe</button>
+
+    <!-- Closed Bootstrap 5 modal: aria-hidden + display:none from the stylesheet -->
+    <div class="modal fade" id="subscribeModal" tabindex="-1" aria-labelledby="subscribeModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title fs-5" id="subscribeModalLabel">Subscribe to the newsletter</h2>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <form>
+                        <label for="modal-email" class="form-label">E-mail address</label>
+                        <input type="email" class="form-control" id="modal-email" name="email" autocomplete="email">
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="button" class="btn btn-primary">Save changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hand-rolled dialog that is open: no name, no aria-modal -->
+    <div class="custom-dialog" role="dialog">
+        <p>Your changes have been saved.</p>
+        <button type="button">OK</button>
+    </div>
+
+    <!-- Toast without live region -->
+    <div class="toast show" id="savedToast">
+        <div class="toast-body">Settings saved.</div>
+    </div>
+</main>
+
+<footer class="py-3">
+    <p>&copy; 2026 Acme Shop</p>
+</footer>
+</body>
+</html>
