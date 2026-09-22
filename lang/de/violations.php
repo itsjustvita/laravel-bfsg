@@ -192,22 +192,26 @@ return [
     'language' => [
         'missing_lang' => [
             'message' => 'Das <html>-Element hat kein lang-Attribut',
-            'suggestion' => 'lang="de" (bzw. die Seitensprache) am <html>-Element ergänzen',
+            'suggestion' => 'lang="de" (bzw. die Sprache der Seite) am <html>-Element ergänzen',
+        ],
+        'empty_lang' => [
+            'message' => 'Das <html>-Element hat ein leeres lang-Attribut',
+            'suggestion' => 'lang auf die Sprache der Seite setzen, z. B. lang="de"',
         ],
         'invalid_lang' => [
-            'message' => 'Ungültiger Sprachcode „:lang“',
-            'suggestion' => 'Einen BCP-47-Sprachcode wie „de“, „en-GB“ oder „de-AT“ verwenden',
+            'message' => 'Ungültiges Sprach-Tag „:lang“',
+            'suggestion' => 'Ein BCP-47-Sprach-Tag wie „de“, „en-GB“ oder „de-AT“ verwenden (Bindestrich statt Unterstrich)',
         ],
-        'no_html_element' => [
-            'message' => 'Kein <html>-Element im Dokument gefunden',
-            'suggestion' => 'Ein vollständiges HTML-Dokument mit <html lang="…"> als Wurzel bereitstellen',
+        'unknown_lang' => [
+            'message' => 'Unbekannter Sprachcode „:lang“',
+            'suggestion' => 'Einen ISO-639-1-Sprachcode wie „de“, „en“ oder „fr“ verwenden',
         ],
         'possible_language_change' => [
-            'message' => 'Möglicher Sprachwechsel ohne lang-Attribut („:content“)',
-            'suggestion' => 'Text in anderer Sprache in ein Element mit lang-Attribut einbetten',
+            'message' => 'Text wirkt anderssprachig (:lang), hat aber kein passendes lang-Attribut („:content“)',
+            'suggestion' => 'Anderssprachigen Text in ein Element mit lang-Attribut einschließen',
         ],
         'xml_lang_mismatch' => [
-            'message' => 'lang=":lang" und xml:lang=":xml_lang" weichen voneinander ab',
+            'message' => 'lang=":lang" und xml:lang=":xml_lang" unterscheiden sich',
             'suggestion' => 'Für lang und xml:lang denselben Wert verwenden oder xml:lang entfernen',
         ],
     ],

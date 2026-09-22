@@ -194,16 +194,20 @@ return [
             'message' => 'The <html> element has no lang attribute',
             'suggestion' => 'Add lang="de" (or the page language) to the <html> element',
         ],
-        'invalid_lang' => [
-            'message' => 'Invalid language code ":lang"',
-            'suggestion' => 'Use a BCP 47 language tag such as "de", "en-GB" or "de-AT"',
+        'empty_lang' => [
+            'message' => 'The <html> element has an empty lang attribute',
+            'suggestion' => 'Set lang to the language of the page, e.g. lang="de"',
         ],
-        'no_html_element' => [
-            'message' => 'No <html> element found in the document',
-            'suggestion' => 'Provide a complete HTML document with an <html lang="…"> root',
+        'invalid_lang' => [
+            'message' => 'Invalid language tag ":lang"',
+            'suggestion' => 'Use a BCP 47 language tag such as "de", "en-GB" or "de-AT" (hyphen, not underscore)',
+        ],
+        'unknown_lang' => [
+            'message' => 'Unknown language code ":lang"',
+            'suggestion' => 'Use an ISO 639-1 language code such as "de", "en" or "fr"',
         ],
         'possible_language_change' => [
-            'message' => 'Possible change of language without lang attribute (":content")',
+            'message' => 'Text looks like another language (:lang) but has no matching lang attribute (":content")',
             'suggestion' => 'Wrap text in another language in an element with a lang attribute',
         ],
         'xml_lang_mismatch' => [
