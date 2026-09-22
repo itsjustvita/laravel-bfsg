@@ -329,12 +329,16 @@ return [
     ],
     'input_purpose' => [
         'missing_autocomplete' => [
-            'message' => 'Feld für personenbezogene Daten „:name“ ohne autocomplete-Attribut',
-            'suggestion' => 'Passendes autocomplete-Token ergänzen, z. B. autocomplete="email" oder "given-name"',
+            'message' => 'Feld für persönliche Daten ":name" ohne autocomplete-Attribut',
+            'suggestion' => 'Passenden autocomplete-Wert ergänzen, z. B. autocomplete="email" oder "given-name"',
         ],
         'invalid_autocomplete' => [
-            'message' => 'Ungültiger autocomplete-Wert „:value“ am Feld „:name“',
-            'suggestion' => 'Ein Token aus der HTML-Autofill-Liste verwenden, z. B. "name", "email", "tel", "street-address", "postal-code"',
+            'message' => 'Ungültiger autocomplete-Wert ":value" am Feld ":name"',
+            'suggestion' => 'Einen Wert aus der HTML-Autofill-Liste verwenden, z. B. "name", "email", "tel", "street-address", "postal-code"',
+        ],
+        'autocomplete_off_on_personal_field' => [
+            'message' => 'Automatisches Ausfüllen ist am Feld für persönliche Daten ":name" abgeschaltet',
+            'suggestion' => 'Passenden autocomplete-Wert statt autocomplete="off" verwenden, damit das Feld automatisch ausgefüllt werden kann',
         ],
     ],
     'focus' => [

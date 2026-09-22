@@ -336,6 +336,10 @@ return [
             'message' => 'Invalid autocomplete value ":value" on field ":name"',
             'suggestion' => 'Use a token from the HTML autofill list, e.g. "name", "email", "tel", "street-address", "postal-code"',
         ],
+        'autocomplete_off_on_personal_field' => [
+            'message' => 'Autofill is switched off on personal-data field ":name"',
+            'suggestion' => 'Use the matching autocomplete token instead of autocomplete="off" so users can fill the field automatically',
+        ],
     ],
     'focus' => [
         'outline_removed_inline' => [

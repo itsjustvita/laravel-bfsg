@@ -14,54 +14,76 @@ class InputPurposeAnalyzerTest extends AnalyzerTestCase
         return new InputPurposeAnalyzer;
     }
 
-    public function test_detects_email_input_without_autocomplete(): void
+    public function test_personal_fields_without_autocomplete(): void
     {
-        $violations = $this->analyze('<form><input type="email" name="email"></form>');
+        $violations = $this->analyze('<form><input type="email" name="email"><input name="user[first_name]"><input TYPE="Tel" id="telefon"></form>');
 
         $violation = $this->assertHasViolation($violations, 'input_purpose.missing_autocomplete', element: 'input', severity: Severity::Warning);
         $this->assertSame('1.3.5', $violation->rule);
         $this->assertSame(['name' => 'email'], $violation->params);
-        $this->assertCount(1, $violations);
+        $this->assertViolationCount($violations, 'input_purpose.missing_autocomplete', 3);
     }
 
-    public function test_accepts_input_with_valid_autocomplete(): void
+    public function test_personal_data_is_matched_on_whole_tokens(): void
     {
-        $this->assertSame([], $this->analyze('<form><input type="email" name="email" autocomplete="email"></form>'));
+        $html = '<form><input name="billing.plz"><input name="E-Mail"><input name="cc-number"><input name="Straße">'
+            .'<input name="username_or_email"><input name="nameless_search"><input name="hostname"><input name="landing_page"><input name="q"></form>';
+
+        $violations = $this->analyze($html);
+
+        $this->assertSame(['billing.plz', 'E-Mail', 'cc-number', 'Straße', 'username_or_email'], array_map(fn ($v) => $v->params['name'], $violations));
     }
 
-    public function test_detects_invalid_autocomplete_value(): void
+    public function test_non_text_types_are_excluded(): void
     {
-        $violations = $this->analyze('<form><input type="text" name="email" autocomplete="invalid-value"></form>');
+        $html = '<form><input type="checkbox" name="email_opt_in"><input type="radio" name="country"><input type="file" name="name">'
+            .'<input type="range" name="zip"><input type="color" name="firma"><input type="image" name="name" alt="Go"><input type="hidden" name="email"></form>';
+
+        $this->assertSame([], $this->analyze($html));
+    }
+
+    public function test_valid_autocomplete_grammar(): void
+    {
+        $analyzer = new InputPurposeAnalyzer;
+
+        foreach (['email', 'EMAIL', 'on', 'off', 'section-blue shipping street-address', 'billing work tel', 'home email', 'username webauthn', 'section-a billing cc-number', 'tel-local-suffix'] as $value) {
+            $this->assertTrue($analyzer->isValidAutocomplete($value), $value);
+        }
+
+        foreach (['e-mail', 'work name', 'section- email', 'shipping', 'email tel', 'off email', 'firstname', 'webauthn'] as $value) {
+            $this->assertFalse($analyzer->isValidAutocomplete($value), $value);
+        }
+    }
+
+    public function test_invalid_autocomplete_is_an_error_on_any_field(): void
+    {
+        $violations = $this->analyze('<form><input name="email" autocomplete="e-mail"><select name="land" autocomplete="nation"><option>DE</option></select></form>');
 
         $violation = $this->assertHasViolation($violations, 'input_purpose.invalid_autocomplete', element: 'input', severity: Severity::Error);
-        $this->assertSame('1.3.5', $violation->rule);
-        $this->assertSame(['name' => 'email', 'value' => 'invalid-value'], $violation->params);
+        $this->assertSame(['name' => 'email', 'value' => 'e-mail'], $violation->params);
+        $this->assertViolationCount($violations, 'input_purpose.invalid_autocomplete', 2);
+        $this->assertNoViolation($violations, 'input_purpose.missing_autocomplete');
+    }
+
+    public function test_autocomplete_off_on_personal_field_is_a_notice(): void
+    {
+        $violations = $this->analyze('<form><input name="email" autocomplete="OFF"><input name="coupon" autocomplete="off"></form>');
+
+        $violation = $this->assertHasViolation($violations, 'input_purpose.autocomplete_off_on_personal_field', severity: Severity::Notice);
+        $this->assertSame(['name' => 'email'], $violation->params);
         $this->assertCount(1, $violations);
     }
 
-    public function test_ignores_non_personal_field_without_autocomplete(): void
+    public function test_name_param_falls_back_to_id_then_unnamed(): void
     {
-        $this->assertSame([], $this->analyze('<form><input type="text" name="search" id="search-box"></form>'));
+        $violations = $this->analyze('<form><input id="email"><input autocomplete="bogus"></form>');
+
+        $this->assertSame('email', $this->assertHasViolation($violations, 'input_purpose.missing_autocomplete')->params['name']);
+        $this->assertSame('unnamed', $this->assertHasViolation($violations, 'input_purpose.invalid_autocomplete')->params['name']);
     }
 
-    public function test_detects_phone_input_by_name_attribute(): void
+    public function test_complete_form_passes(): void
     {
-        $violations = $this->analyze('<form><input type="text" name="phone_number"></form>');
-
-        $violation = $this->assertHasViolation($violations, 'input_purpose.missing_autocomplete', element: 'input', severity: Severity::Warning);
-        $this->assertSame(['name' => 'phone_number'], $violation->params);
-        $this->assertCount(1, $violations);
-    }
-
-    public function test_falls_back_to_id_and_unnamed_for_the_name_param(): void
-    {
-        $violations = $this->analyze('<form><input type="email" id="contact-email"><input type="tel"></form>');
-
-        $byId = $this->assertHasViolation($violations, 'input_purpose.missing_autocomplete', element: 'input#contact-email');
-        $this->assertSame(['name' => 'contact-email'], $byId->params);
-
-        $this->assertViolationCount($violations, 'input_purpose.missing_autocomplete', 2);
-        $unnamed = array_values(array_filter($violations, fn ($v) => $v->params === ['name' => 'unnamed']));
-        $this->assertCount(1, $unnamed);
+        $this->assertSame([], $this->analyze('<form><input type="email" name="email" autocomplete="email"><input name="vorname" autocomplete="given-name"><input name="search"></form>'));
     }
 }
