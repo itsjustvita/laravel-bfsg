@@ -304,23 +304,27 @@ return [
     'page_title' => [
         'missing_title' => [
             'message' => 'Seite hat kein <title>-Element',
-            'suggestion' => '<title> im <head> ergänzen, das die Seite beschreibt',
+            'suggestion' => '<title> im <head> ergänzen, der die Seite beschreibt',
         ],
         'empty_title' => [
-            'message' => '<title> der Seite ist leer',
-            'suggestion' => '<title> mit beschreibendem Text füllen',
-        ],
-        'generic_title' => [
-            'message' => 'Seitentitel „:title“ ist zu allgemein',
-            'suggestion' => 'Titel verwenden, der Seite und Website benennt, z. B. „Kontakt | Firma“',
+            'message' => 'Seitentitel <title> ist leer',
+            'suggestion' => 'Dem <title> einen beschreibenden Text geben',
         ],
         'short_title' => [
             'message' => 'Seitentitel ist zu kurz (:length Zeichen)',
-            'suggestion' => 'Titel verwenden, der den Seiteninhalt benennt',
+            'suggestion' => 'Einen Titel verwenden, der den Seiteninhalt benennt',
+        ],
+        'generic_title' => [
+            'message' => 'Seitentitel „:title“ ist zu allgemein',
+            'suggestion' => 'Einen Titel verwenden, der Seite und Website benennt, z. B. „Kontakt | Firma“',
         ],
         'long_title' => [
-            'message' => 'Seitentitel ist zu lang (:length Zeichen)',
-            'suggestion' => 'Titel knapp halten; die wichtigsten Wörter zuerst',
+            'message' => 'Seitentitel ist sehr lang (:length Zeichen)',
+            'suggestion' => 'Titel knapp halten; die wichtigsten Wörter an den Anfang stellen',
+        ],
+        'multiple_titles' => [
+            'message' => 'Weiteres <title>-Element im <head>',
+            'suggestion' => 'Genau einen <title> pro Seite verwenden',
         ],
     ],
     'input_purpose' => [

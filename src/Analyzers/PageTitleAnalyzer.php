@@ -12,75 +12,76 @@ class PageTitleAnalyzer extends BaseAnalyzer
 
     private const MAX_LENGTH = 70;
 
+    /** Titles that identify no page (English + German), compared lowercased without trailing punctuation. */
+    public const GENERIC_TITLES = [
+        'home', 'homepage', 'home page', 'untitled', 'untitled document', 'page', 'new page', 'document', 'welcome',
+        'index', 'test', 'website',
+        'startseite', 'willkommen', 'seite', 'neue seite', 'dokument', 'unbenannt', 'unbenanntes dokument', 'neu', 'beispiel',
+    ];
+
     protected string $key = 'page_title';
 
     protected string $description = 'Page title';
 
     protected array $rules = ['2.4.2'];
 
-    /** @var list<string> */
-    protected array $genericTitles = [
-        // English
-        'home',
-        'untitled',
-        'page',
-        'document',
-        'welcome',
-        'index',
-        'test',
-        'website',
-        // German
-        'startseite',
-        'willkommen',
-        'seite',
-        'dokument',
-        'unbenannt',
-        'neu',
-        'beispiel',
-    ];
-
     protected function inspect(): void
     {
-        $this->checkTitleExists();
-    }
+        if ($this->isFragment()) {
+            return;
+        }
 
-    protected function checkTitleExists(): void
-    {
-        $title = $this->query('//title')[0] ?? null;
+        $titles = $this->query('/html/head/title');
 
-        if ($title === null) {
+        if ($titles === []) {
             $this->report('missing_title', Severity::Error, '2.4.2');
 
             return;
         }
 
-        $titleText = $this->text($title);
+        foreach (array_slice($titles, 1) as $extra) {
+            $this->report('multiple_titles', Severity::Warning, '2.4.2', $extra);
+        }
 
-        if ($titleText === '') {
+        $this->checkTitle($titles[0]);
+    }
+
+    protected function checkTitle(DOMElement $title): void
+    {
+        $text = $this->text($title);
+
+        if ($text === '') {
             $this->report('empty_title', Severity::Error, '2.4.2', $title);
 
             return;
         }
 
-        $this->checkGenericTitle($title, $titleText);
-        $this->checkTitleLength($title, $titleText);
-    }
-
-    protected function checkGenericTitle(DOMElement $title, string $titleText): void
-    {
-        if (in_array(Text::lower($titleText), $this->genericTitles, true)) {
-            $this->report('generic_title', Severity::Warning, '2.4.2', $title, ['title' => $titleText]);
-        }
-    }
-
-    protected function checkTitleLength(DOMElement $title, string $titleText): void
-    {
-        $length = Text::length($titleText);
+        $length = Text::length($text);
 
         if ($length < self::MIN_LENGTH) {
             $this->report('short_title', Severity::Warning, '2.4.2', $title, ['length' => $length]);
+        } elseif ($this->isGeneric($text)) {
+            $this->report('generic_title', Severity::Warning, '2.4.2', $title, ['title' => $text]);
         } elseif ($length > self::MAX_LENGTH) {
-            $this->report('long_title', Severity::Warning, '2.4.2', $title, ['length' => $length]);
+            $this->report('long_title', Severity::Notice, '2.4.2', $title, ['length' => $length]);
         }
+    }
+
+    /** The whole title, or — for titles of at most two words — its first segment before | - – — is generic. */
+    protected function isGeneric(string $title): bool
+    {
+        $candidates = [$title];
+
+        if (preg_match_all('/[\pL\pN]+/u', $title) <= 2) {
+            $candidates[] = preg_split('/\s*[|\-–—]\s*/u', $title)[0] ?? $title;
+        }
+
+        foreach ($candidates as $candidate) {
+            if (in_array(Text::lower(Text::stripTrailingPunctuation(Text::normalize($candidate))), self::GENERIC_TITLES, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
