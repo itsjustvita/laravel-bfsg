@@ -148,29 +148,33 @@ return [
             'message' => 'Ungültige ARIA-Rolle „:role“',
             'suggestion' => 'Eine in WAI-ARIA 1.2 definierte Rolle verwenden oder das Attribut entfernen',
         ],
-        'redundant_role' => [
-            'message' => 'Redundante ARIA-Rolle „:role“ auf <:tag>',
-            'suggestion' => 'role-Attribut entfernen; das Element hat diese Rolle bereits implizit',
+        'abstract_role' => [
+            'message' => 'Abstrakte ARIA-Rolle „:role“ darf nicht im Inhalt verwendet werden',
+            'suggestion' => 'Abstrakte Rolle durch eine konkrete Rolle wie button, link oder region ersetzen',
         ],
         'missing_required_state' => [
             'message' => 'Rolle „:role“ erfordert das Attribut :attribute',
-            'suggestion' => ':attribute ergänzen und mit dem Zustand des Widgets synchron halten',
+            'suggestion' => ':attribute ergänzen und mit dem Zustand des Bedienelements synchron halten',
+        ],
+        'unsupported_state' => [
+            'message' => 'ARIA-Zustand :attribute an <:tag> wird von dessen Rolle nicht unterstützt',
+            'suggestion' => 'Dem Element eine Rolle geben, die den Zustand unterstützt, oder das Attribut entfernen',
         ],
         'hidden_focusable' => [
-            'message' => 'Fokussierbares <:tag> ist per aria-hidden="true" vor Hilfstechnologie verborgen',
-            'suggestion' => 'aria-hidden entfernen oder das Element zusätzlich aus der Tab-Reihenfolge nehmen (tabindex="-1")',
+            'message' => 'Fokussierbares <:tag> ist mit aria-hidden="true" vor Hilfstechnologien verborgen',
+            'suggestion' => 'aria-hidden entfernen oder das Element zusätzlich aus der Tab-Reihenfolge nehmen (tabindex="-1" oder disabled)',
         ],
-        'label_conflict' => [
-            'message' => 'Element hat sowohl aria-label als auch aria-labelledby',
-            'suggestion' => 'Eines der beiden Attribute behalten; aria-labelledby hat Vorrang',
+        'redundant_role' => [
+            'message' => 'Redundante ARIA-Rolle „:role“ an <:tag>',
+            'suggestion' => 'role-Attribut entfernen; das Element hat diese Rolle bereits implizit',
         ],
         'dangling_idref' => [
             'message' => ':attribute verweist auf eine nicht vorhandene id „:id“',
-            'suggestion' => ':attribute auf eine vorhandene Element-id zeigen lassen',
+            'suggestion' => ':attribute auf eine vorhandene Element-id verweisen lassen',
         ],
-        'unsupported_state' => [
-            'message' => 'ARIA-Zustand :attribute auf <:tag> ohne unterstützende Rolle',
-            'suggestion' => 'Passende Rolle ergänzen oder das Zustandsattribut entfernen',
+        'duplicate_id' => [
+            'message' => 'Referenzierte id „:id“ wird mehrfach verwendet',
+            'suggestion' => 'id eindeutig machen, damit Verweise genau auf ein Element zeigen',
         ],
     ],
     'language' => [

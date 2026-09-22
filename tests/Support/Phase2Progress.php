@@ -11,7 +11,7 @@ use ItsJustVita\LaravelBfsg\Violation;
 final class Phase2Progress
 {
     /** @var list<string> */
-    public const DONE = ['images', 'forms', 'headings', 'contrast'];
+    public const DONE = ['images', 'forms', 'headings', 'contrast', 'aria'];
 
     /**
      * @param  list<string>  $keys  full violation keys such as "images.missing_alt"

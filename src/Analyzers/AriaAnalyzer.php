@@ -3,209 +3,203 @@
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
 use DOMElement;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Dom\Roles;
 use ItsJustVita\LaravelBfsg\Severity;
 
 class AriaAnalyzer extends BaseAnalyzer
 {
+    public const IDREF_ATTRIBUTES = [
+        'aria-labelledby', 'aria-describedby', 'aria-controls', 'aria-owns',
+        'aria-activedescendant', 'aria-errormessage', 'aria-details', 'aria-flowto',
+    ];
+
+    private const IDREF_QUERY = '//*[@aria-labelledby or @aria-describedby or @aria-controls or @aria-owns or @aria-activedescendant or @aria-errormessage or @aria-details or @aria-flowto]';
+
+    private const STATES = ['aria-checked', 'aria-selected', 'aria-pressed', 'aria-expanded', 'aria-valuenow'];
+
+    /** Native elements whose required state is provided by the element itself. */
+    private const NATIVE_STATE_TAGS = ['select', 'progress', 'meter', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
+
+    private const NATIVE_STATE_INPUTS = ['checkbox', 'radio', 'range'];
+
     protected string $key = 'aria';
 
     protected string $description = 'ARIA roles, states and references';
 
-    protected array $rules = ['4.1.2', '1.3.1'];
+    protected array $rules = ['4.1.2', '1.3.1', '4.1.1'];
 
-    // Valid ARIA roles
-    protected const VALID_ROLES = [
-        'alert', 'alertdialog', 'application', 'article', 'banner', 'button',
-        'checkbox', 'columnheader', 'combobox', 'complementary', 'contentinfo',
-        'definition', 'dialog', 'directory', 'document', 'feed', 'figure',
-        'form', 'grid', 'gridcell', 'group', 'heading', 'img', 'link',
-        'list', 'listbox', 'listitem', 'log', 'main', 'marquee', 'math',
-        'menu', 'menubar', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
-        'navigation', 'none', 'note', 'option', 'presentation', 'progressbar',
-        'radio', 'radiogroup', 'region', 'row', 'rowgroup', 'rowheader',
-        'scrollbar', 'search', 'searchbox', 'separator', 'slider', 'spinbutton',
-        'status', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'term',
-        'textbox', 'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem',
-    ];
+    public function __construct(private ?CssParser $cssParser = null) {}
 
     protected function inspect(): void
     {
-        // Check for invalid ARIA roles
-        $this->checkAriaRoles();
+        foreach ($this->queryVisible('//*[@role]') as $element) {
+            $this->checkRole($element);
+        }
 
-        // Check for missing required ARIA attributes
-        $this->checkRequiredAriaAttributes();
+        foreach ($this->queryVisible('//*[@aria-checked or @aria-selected or @aria-pressed or @aria-expanded or @aria-valuenow]') as $element) {
+            $this->checkSupportedState($element);
+        }
 
-        // Check for conflicting ARIA attributes
-        $this->checkConflictingAriaAttributes();
-
-        // Check for proper ARIA labeling
-        $this->checkAriaLabeling();
-
-        // Check for ARIA on non-interactive elements
-        $this->checkAriaOnNonInteractiveElements();
+        $this->checkHiddenFocusable();
+        $this->checkIdReferences();
+        $this->checkDuplicateIds();
     }
 
-    protected function checkAriaRoles(): void
+    protected function checkRole(DOMElement $element): void
     {
-        foreach ($this->query('//*[@role]') as $element) {
-            $role = $element->getAttribute('role');
+        $tokens = Element::roles($element);
 
-            // Check for invalid role values
-            if (! in_array($role, self::VALID_ROLES, true)) {
-                $this->report('invalid_role', Severity::Error, '4.1.2', $element, ['role' => $role]);
-            }
+        if ($tokens === []) {
+            return;
+        }
 
-            // Check for redundant roles
-            if ($this->isRedundantRole($element, $role)) {
-                $this->report(
-                    'redundant_role',
-                    Severity::Warning,
-                    '4.1.2',
-                    $element,
-                    ['role' => $role, 'tag' => Element::tag($element)],
-                    autoFixable: true,
-                );
+        $role = null;
+
+        foreach ($tokens as $token) {
+            if (Roles::isValid($token) || Roles::isAbstract($token)) {
+                $role = $token;
+
+                break;
             }
         }
+
+        if ($role === null) {
+            $this->report('invalid_role', Severity::Error, '4.1.2', $element, ['role' => trim($element->getAttribute('role'))]);
+
+            return;
+        }
+
+        if (Roles::isAbstract($role)) {
+            $this->report('abstract_role', Severity::Error, '4.1.2', $element, ['role' => $role]);
+
+            return;
+        }
+
+        foreach (Roles::requiredStates($role) as $state) {
+            if (! $element->hasAttribute($state) && ! $this->providesStateNatively($element)) {
+                $this->report('missing_required_state', Severity::Error, '4.1.2', $element, ['role' => $role, 'attribute' => $state]);
+
+                break;
+            }
+        }
+
+        if ($role === Roles::implicit($element)) {
+            $this->report('redundant_role', Severity::Notice, '4.1.2', $element, ['role' => $role, 'tag' => Element::tag($element)], autoFixable: true);
+        }
     }
 
-    protected function checkRequiredAriaAttributes(): void
+    protected function checkSupportedState(DOMElement $element): void
     {
-        // Elements with specific roles that require certain ARIA attributes
-        $roleRequirements = [
-            'checkbox' => ['aria-checked'],
-            'combobox' => ['aria-expanded'],
-            'slider' => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'],
-            'spinbutton' => ['aria-valuenow'],
-        ];
+        $role = Roles::of($element);
 
-        foreach ($roleRequirements as $role => $requiredAttrs) {
-            foreach ($this->query('//*[@role='.$this->document->xpathLiteral($role).']') as $element) {
-                foreach ($requiredAttrs as $attr) {
-                    if ($element->hasAttribute($attr)) {
-                        continue;
-                    }
+        foreach (self::STATES as $state) {
+            if ($element->hasAttribute($state) && ($role === null || ! Roles::supportsState($role, $state))) {
+                $this->report('unsupported_state', Severity::Warning, '4.1.2', $element, ['attribute' => $state, 'tag' => Element::tag($element)]);
 
-                    $this->report(
-                        'missing_required_state',
-                        Severity::Error,
-                        '4.1.2',
-                        $element,
-                        ['role' => $role, 'attribute' => $attr],
-                    );
-                }
+                return;
             }
         }
     }
 
-    protected function checkConflictingAriaAttributes(): void
+    /**
+     * Focusable elements that are, or sit inside, aria-hidden="true" but are still rendered. Elements hidden
+     * by the page's stylesheets (e.g. a closed Bootstrap modal: .modal { display: none }) are not rendered.
+     */
+    protected function checkHiddenFocusable(): void
     {
-        // Check for aria-hidden on focusable elements
-        $focusableWithHidden = $this->query('//a[@aria-hidden="true"]|//button[@aria-hidden="true"]|//input[@aria-hidden="true"]|//select[@aria-hidden="true"]|//textarea[@aria-hidden="true"]');
+        $reported = [];
+        $parser = null;
 
-        foreach ($focusableWithHidden as $element) {
-            $this->report('hidden_focusable', Severity::Error, '4.1.2', $element, ['tag' => Element::tag($element)]);
-        }
+        foreach ($this->query('//*[@aria-hidden]') as $container) {
+            if (Element::enumAttr($container, 'aria-hidden') !== 'true' || Element::isNotRendered($container)) {
+                continue;
+            }
 
-        // Check for both aria-label and aria-labelledby
-        foreach ($this->query('//*[@aria-label and @aria-labelledby]') as $element) {
-            $this->report('label_conflict', Severity::Warning, '4.1.2', $element);
-        }
-    }
+            $parser ??= ($this->cssParser ?? new CssParser)->parse($this->document);
 
-    protected function checkAriaLabeling(): void
-    {
-        $this->checkIdReferences('aria-labelledby');
-        $this->checkIdReferences('aria-describedby');
-    }
+            if ($parser->hidesElement($container)) {
+                continue;
+            }
 
-    /** Report every IDREF of $attribute that points at an id the document does not have. */
-    protected function checkIdReferences(string $attribute): void
-    {
-        $elementsById = $this->document->elementsById();
+            foreach ([$container, ...$this->query('.//*', $container)] as $element) {
+                $id = spl_object_id($element);
 
-        foreach ($this->query("//*[@{$attribute}]") as $element) {
-            $ids = preg_split('/\s+/', $element->getAttribute($attribute), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-
-            foreach ($ids as $id) {
-                if (isset($elementsById[$id])) {
+                if (isset($reported[$id]) || ! Element::isFocusable($element) || Element::isNotRendered($element) || $parser->hidesElement($element)) {
                     continue;
                 }
 
-                $this->report(
-                    'dangling_idref',
-                    Severity::Error,
-                    '1.3.1',
-                    $element,
-                    ['attribute' => $attribute, 'id' => $id],
-                    related: ['4.1.2'],
-                );
+                $reported[$id] = true;
+                $this->report('hidden_focusable', Severity::Error, '4.1.2', $element, ['tag' => Element::tag($element)]);
             }
         }
     }
 
-    protected function checkAriaOnNonInteractiveElements(): void
+    /** One finding per element: the first dangling reference is the parameter, all of them go into meta. */
+    protected function checkIdReferences(): void
     {
-        // Check for interactive ARIA attributes on non-interactive elements
-        $nonInteractiveElements = ['div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'];
-        $interactiveAttributes = ['aria-pressed', 'aria-checked', 'aria-selected'];
-        $interactiveRoles = ['button', 'checkbox', 'link', 'menuitem', 'option', 'radio', 'switch', 'tab'];
+        $byId = $this->document->elementsById();
 
-        foreach ($nonInteractiveElements as $tagName) {
-            foreach ($interactiveAttributes as $attr) {
-                foreach ($this->query("//{$tagName}[@{$attr}]") as $element) {
-                    // Skip elements that carry an interactive role
-                    if (in_array($element->getAttribute('role'), $interactiveRoles, true)) {
-                        continue;
+        foreach ($this->queryVisible(self::IDREF_QUERY) as $element) {
+            $dangling = [];
+
+            foreach (self::IDREF_ATTRIBUTES as $attribute) {
+                foreach (Element::idrefs($element, $attribute) as $id) {
+                    if (! isset($byId[$id])) {
+                        $dangling[] = ['attribute' => $attribute, 'id' => $id];
                     }
+                }
+            }
 
-                    $this->report(
-                        'unsupported_state',
-                        Severity::Warning,
-                        '4.1.2',
-                        $element,
-                        ['attribute' => $attr, 'tag' => $tagName],
-                    );
+            if ($dangling !== []) {
+                $this->report('dangling_idref', Severity::Error, '1.3.1', $element, $dangling[0], ['references' => $dangling], related: ['4.1.2']);
+            }
+        }
+    }
+
+    /** Duplicate ids only matter when something references them. */
+    protected function checkDuplicateIds(): void
+    {
+        $duplicates = $this->document->duplicateIds();
+
+        if ($duplicates === []) {
+            return;
+        }
+
+        $referenced = [];
+
+        foreach ($this->query(self::IDREF_QUERY) as $element) {
+            foreach (self::IDREF_ATTRIBUTES as $attribute) {
+                foreach (Element::idrefs($element, $attribute) as $id) {
+                    $referenced[$id] = true;
                 }
             }
         }
-    }
 
-    protected function isRedundantRole(DOMElement $element, string $role): bool
-    {
-        // Map of HTML elements to their implicit ARIA roles
-        $implicitRoles = [
-            'button' => 'button',
-            'input' => [
-                'button' => 'button',
-                'checkbox' => 'checkbox',
-                'radio' => 'radio',
-                'range' => 'slider',
-            ],
-            'a' => 'link',
-            'article' => 'article',
-            'aside' => 'complementary',
-            'footer' => 'contentinfo',
-            'header' => 'banner',
-            'main' => 'main',
-            'nav' => 'navigation',
-            'section' => 'region',
-        ];
-
-        $tagName = Element::tag($element);
-
-        if (isset($implicitRoles[$tagName])) {
-            if (is_array($implicitRoles[$tagName])) {
-                $type = $element->getAttribute('type');
-
-                return isset($implicitRoles[$tagName][$type]) && $implicitRoles[$tagName][$type] === $role;
-            }
-
-            return $implicitRoles[$tagName] === $role;
+        foreach ($this->query('//label[@for]') as $label) {
+            $referenced[trim($label->getAttribute('for'))] = true;
         }
 
-        return false;
+        foreach (array_keys($duplicates) as $id) {
+            if (! isset($referenced[$id])) {
+                continue;
+            }
+
+            foreach (array_slice($this->query('//*[@id='.$this->document->xpathLiteral($id).']'), 1) as $element) {
+                $this->report('duplicate_id', Severity::Warning, '4.1.1', $element, ['id' => $id]);
+            }
+        }
+    }
+
+    protected function providesStateNatively(DOMElement $element): bool
+    {
+        $tag = Element::tag($element);
+
+        if (in_array($tag, self::NATIVE_STATE_TAGS, true)) {
+            return true;
+        }
+
+        return $tag === 'input' && in_array(Element::enumAttr($element, 'type'), self::NATIVE_STATE_INPUTS, true);
     }
 }

@@ -148,29 +148,33 @@ return [
             'message' => 'Invalid ARIA role ":role"',
             'suggestion' => 'Use a role defined in WAI-ARIA 1.2 or remove the attribute',
         ],
-        'redundant_role' => [
-            'message' => 'Redundant ARIA role ":role" on <:tag>',
-            'suggestion' => 'Remove the role attribute; the element already has this role implicitly',
+        'abstract_role' => [
+            'message' => 'Abstract ARIA role ":role" must not be used in content',
+            'suggestion' => 'Replace the abstract role with a concrete role such as button, link or region',
         ],
         'missing_required_state' => [
             'message' => 'Role ":role" requires the :attribute attribute',
             'suggestion' => 'Add :attribute and keep it in sync with the widget state',
         ],
+        'unsupported_state' => [
+            'message' => 'ARIA state :attribute on <:tag> is not supported by its role',
+            'suggestion' => 'Give the element a role that supports the state, or remove the attribute',
+        ],
         'hidden_focusable' => [
             'message' => 'Focusable <:tag> is hidden from assistive technology with aria-hidden="true"',
-            'suggestion' => 'Remove aria-hidden, or also remove the element from the tab order (tabindex="-1")',
+            'suggestion' => 'Remove aria-hidden, or also remove the element from the tab order (tabindex="-1" or disabled)',
         ],
-        'label_conflict' => [
-            'message' => 'Element has both aria-label and aria-labelledby',
-            'suggestion' => 'Keep one of the two; aria-labelledby takes precedence',
+        'redundant_role' => [
+            'message' => 'Redundant ARIA role ":role" on <:tag>',
+            'suggestion' => 'Remove the role attribute; the element already has this role implicitly',
         ],
         'dangling_idref' => [
             'message' => ':attribute references a non-existent id ":id"',
             'suggestion' => 'Point :attribute to an existing element id',
         ],
-        'unsupported_state' => [
-            'message' => 'ARIA state :attribute on <:tag> without a role that supports it',
-            'suggestion' => 'Add a suitable role or remove the state attribute',
+        'duplicate_id' => [
+            'message' => 'Referenced id ":id" is used more than once',
+            'suggestion' => 'Make the id unique so references point to exactly one element',
         ],
     ],
     'language' => [
