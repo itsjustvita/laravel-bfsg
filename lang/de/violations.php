@@ -343,16 +343,16 @@ return [
     ],
     'focus' => [
         'outline_removed_inline' => [
-            'message' => 'Fokusanzeige per Inline-Style an <:tag> entfernt',
-            'suggestion' => 'outline:none nicht inline setzen; stattdessen einen sichtbaren :focus-visible-Stil bereitstellen',
+            'message' => 'Fokusrahmen per Inline-Style an <:tag> entfernt',
+            'suggestion' => 'outline:none nicht inline setzen; stattdessen einen sichtbaren Fokusstil (outline oder box-shadow) vorsehen',
         ],
         'outline_removed_global' => [
-            'message' => 'Globaler Reset der Fokusanzeige (*:focus { outline: none })',
-            'suggestion' => 'Reset durch einen sichtbaren Fokusstil ersetzen, z. B. :focus-visible { outline: 2px solid }',
+            'message' => 'Globales Zurücksetzen des Fokusrahmens („:selector“) ohne Ersatzindikator',
+            'suggestion' => 'Das Zurücksetzen durch einen sichtbaren Fokusstil für focus-visible ersetzen, z. B. outline: 2px solid',
         ],
         'outline_removed' => [
-            'message' => 'Fokusanzeige für „:selector“ ohne alternative Kennzeichnung entfernt',
-            'suggestion' => 'Sichtbaren Fokusstil (outline, box-shadow oder border) für :selector ergänzen',
+            'message' => 'Fokusrahmen für „:selector“ ohne alternativen Indikator entfernt',
+            'suggestion' => 'Sichtbaren Fokusstil (outline, box-shadow, border oder background) für diesen Selektor ergänzen',
         ],
     ],
     'error_handling' => [
