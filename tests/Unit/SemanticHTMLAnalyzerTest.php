@@ -6,7 +6,6 @@ use ItsJustVita\LaravelBfsg\Analyzers\SemanticHTMLAnalyzer;
 use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
-use ItsJustVita\LaravelBfsg\Violation;
 
 class SemanticHTMLAnalyzerTest extends AnalyzerTestCase
 {
@@ -15,222 +14,80 @@ class SemanticHTMLAnalyzerTest extends AnalyzerTestCase
         return new SemanticHTMLAnalyzer;
     }
 
-    public function test_detects_missing_main_landmark(): void
+    public function test_missing_main_cites_2_4_1(): void
     {
-        $violations = $this->analyze('<html><body><div>Content</div></body></html>');
+        $violations = $this->analyze('<!DOCTYPE html><html><body><div>Content</div></body></html>');
 
         $violation = $this->assertHasViolation($violations, 'semantic.missing_main', severity: Severity::Warning);
-        $this->assertSame('1.3.1', $violation->rule);
+        $this->assertSame('2.4.1', $violation->rule);
         $this->assertNull($violation->element);
-        $this->assertSame([], $violation->params);
+        $this->assertCount(1, $violations);
     }
 
-    public function test_detects_missing_nav_header_and_footer_landmarks(): void
+    public function test_missing_main_is_skipped_on_fragments_and_satisfied_by_role_main(): void
     {
-        $violations = $this->analyze('<html><body><div>Content</div></body></html>');
-
-        foreach (['semantic.missing_nav', 'semantic.missing_header', 'semantic.missing_footer'] as $key) {
-            $violation = $this->assertHasViolation($violations, $key, severity: Severity::Notice);
-            $this->assertSame('1.3.1', $violation->rule);
-            $this->assertNull($violation->element);
-        }
+        $this->assertSame([], $this->analyze('<div>Partial</div>'));
+        $this->assertSame([], $this->analyze('<html><body><div role="MAIN">Content</div></body></html>'));
     }
 
-    public function test_has_main_landmark_produces_no_main_missing_issues(): void
+    public function test_landmark_and_div_heuristics_are_gone(): void
     {
-        $violations = $this->analyze('
-            <html><body>
-                <header><nav><a href="/">Home</a></nav></header>
-                <main><h1>Content</h1><p>Hello</p></main>
-                <footer><p>Footer</p></footer>
-            </body></html>
-        ');
+        $html = '<html><body><main>'.str_repeat('<div>x</div>', 20).'<a role="button" href="#">Act</a></main></body></html>';
 
-        $this->assertNoViolation($violations, 'semantic.missing_main');
-        $this->assertNoViolation($violations, 'semantic.missing_nav');
-        $this->assertNoViolation($violations, 'semantic.missing_header');
-        $this->assertNoViolation($violations, 'semantic.missing_footer');
+        $this->assertSame([], $this->analyze($html));
     }
 
-    public function test_detects_multiple_main_elements(): void
+    public function test_multiple_visible_mains(): void
     {
-        $violations = $this->analyze('
-            <html><body>
-                <main><p>First</p></main>
-                <main><p>Second</p></main>
-            </body></html>
-        ');
+        $violations = $this->analyze('<html><body><main>One</main><main hidden>Hidden</main><div role="main">Two</div></body></html>');
 
-        $violation = $this->assertHasViolation($violations, 'semantic.multiple_main', element: 'main', severity: Severity::Error);
+        $violation = $this->assertHasViolation($violations, 'semantic.multiple_main', element: 'div', severity: Severity::Error);
         $this->assertSame('1.3.1', $violation->rule);
         $this->assertSame(['index' => 2], $violation->params);
         $this->assertViolationCount($violations, 'semantic.multiple_main', 1);
     }
 
-    public function test_detects_section_without_heading(): void
+    public function test_section_without_heading_is_a_notice(): void
     {
-        $violations = $this->analyze('
-            <html><body>
-                <main>
-                    <section><p>Content without heading</p></section>
-                </main>
-            </body></html>
-        ');
+        $html = '<html><body><main><section id="bare"><p>x</p></section><section aria-label="News"><p>x</p></section>'
+            .'<section><h2>Title</h2></section><section><div role="HEADING" aria-level="2">T</div></section></main></body></html>';
 
-        $violation = $this->assertHasViolation($violations, 'semantic.section_without_heading', element: 'section', severity: Severity::Warning);
-        $this->assertSame('2.4.6', $violation->rule);
-        $this->assertSame([], $violation->params);
-    }
+        $violations = $this->analyze($html);
 
-    public function test_section_with_aria_label_is_not_flagged(): void
-    {
-        $violations = $this->analyze('
-            <html><body>
-                <main>
-                    <section aria-label="Latest news"><p>Content</p></section>
-                </main>
-            </body></html>
-        ');
-
-        $this->assertNoViolation($violations, 'semantic.section_without_heading');
-    }
-
-    public function test_detects_excessive_divs(): void
-    {
-        // Create HTML where divs make up more than 40% of elements
-        $divs = str_repeat('<div>x</div>', 20);
-        $violations = $this->analyze("<html><body>{$divs}</body></html>");
-
-        $violation = $this->assertHasViolation($violations, 'semantic.div_ratio', severity: Severity::Notice);
+        $violation = $this->assertHasViolation($violations, 'semantic.section_without_heading', element: 'section#bare', severity: Severity::Notice);
         $this->assertSame('1.3.1', $violation->rule);
-        $this->assertNull($violation->element);
-        $this->assertIsInt($violation->params['ratio']);
-        $this->assertGreaterThan(40, $violation->params['ratio']);
+        $this->assertViolationCount($violations, 'semantic.section_without_heading', 1);
     }
 
-    public function test_detects_button_with_href(): void
+    public function test_empty_lists_use_class_tokens_data_attributes_and_roles(): void
     {
-        $violations = $this->analyze('
-            <html><body>
-                <main><button href="/page">Go</button></main>
-            </body></html>
-        ');
+        $html = '<html><body><main><ul id="plain"></ul><ol></ol>'
+            .'<ul class="swiper-wrapper"></ul><ul class="js-menu menu"></ul><ul data-items></ul><ul role="listbox"></ul>'
+            .'<ul class="navigation-free"></ul><ul class="snavigation"></ul>'
+            .'</main></body></html>';
 
-        $violation = $this->assertHasViolation($violations, 'semantic.button_with_href', element: 'button', severity: Severity::Error);
-        $this->assertSame('1.3.1', $violation->rule);
-        $this->assertSame([], $violation->params);
-    }
+        $violations = $this->analyze($html);
 
-    public function test_detects_anchor_used_as_button(): void
-    {
-        $violations = $this->analyze('
-            <html><body>
-                <main><a href="#" role="button">Open dialog</a></main>
-            </body></html>
-        ');
-
-        $violation = $this->assertHasViolation($violations, 'semantic.anchor_as_button', element: 'a', severity: Severity::Warning);
-        $this->assertSame('1.3.1', $violation->rule);
-        $this->assertSame(['4.1.2'], $violation->related);
-    }
-
-    public function test_anchor_with_role_button_and_real_href_is_not_flagged(): void
-    {
-        $violations = $this->analyze('
-            <html><body>
-                <main><a href="/page" role="button">Go</a></main>
-            </body></html>
-        ');
-
-        $this->assertNoViolation($violations, 'semantic.anchor_as_button');
-    }
-
-    public function test_detects_list_without_li(): void
-    {
-        $violations = $this->analyze('
-            <html><body>
-                <main>
-                    <ul><div>Not a list item</div></ul>
-                    <ol><span>Not a list item</span></ol>
-                </main>
-            </body></html>
-        ');
-
-        $this->assertViolationCount($violations, 'semantic.empty_list', 2);
-        $this->assertSame(['tag' => 'ul'], $this->assertHasViolation($violations, 'semantic.empty_list', element: 'ul')->params);
-        $this->assertSame(['tag' => 'ol'], $this->assertHasViolation($violations, 'semantic.empty_list', element: 'ol')->params);
-    }
-
-    public function test_empty_ul_with_carousel_class_is_not_flagged(): void
-    {
-        // JS-populated lists must be skipped.
-        $violations = $this->analyze('
-            <html><body>
-                <main><ul class="swiper-wrapper carousel"></ul></main>
-            </body></html>
-        ');
-
-        $this->assertNoViolation($violations, 'semantic.empty_list');
-    }
-
-    public function test_empty_ul_with_data_attribute_is_not_flagged(): void
-    {
-        // Any data-* attribute signals likely JS population.
-        $violations = $this->analyze('
-            <html><body>
-                <main><ul data-slick="{}"></ul></main>
-            </body></html>
-        ');
-
-        $this->assertNoViolation($violations, 'semantic.empty_list');
-    }
-
-    public function test_empty_ul_with_listbox_role_is_not_flagged(): void
-    {
-        // listbox/menu/tree roles signal JS population.
-        $violations = $this->analyze('
-            <html><body>
-                <main><ul role="listbox"></ul></main>
-            </body></html>
-        ');
-
-        $this->assertNoViolation($violations, 'semantic.empty_list');
-    }
-
-    public function test_plain_empty_ul_is_still_flagged_as_notice(): void
-    {
-        $violations = $this->analyze('
-            <html><body>
-                <main><ul></ul></main>
-            </body></html>
-        ');
-
-        $this->assertViolationCount($violations, 'semantic.empty_list', 1);
-        $violation = $this->assertHasViolation($violations, 'semantic.empty_list', element: 'ul', severity: Severity::Notice);
-        $this->assertSame('1.3.1', $violation->rule);
+        $violation = $this->assertHasViolation($violations, 'semantic.empty_list', element: 'ul#plain', severity: Severity::Notice);
         $this->assertSame(['tag' => 'ul'], $violation->params);
+        $this->assertViolationCount($violations, 'semantic.empty_list', 4);
     }
 
-    public function test_proper_semantic_html_has_no_error_level_issues(): void
+    public function test_button_with_href_is_a_best_practice_notice(): void
     {
-        $violations = $this->analyze('
-            <html lang="en"><body>
-                <header>
-                    <nav aria-label="Main"><ul><li><a href="/">Home</a></li></ul></nav>
-                </header>
-                <main>
-                    <article>
-                        <h1>Article Title</h1>
-                        <section>
-                            <h2>Section</h2>
-                            <p>Content here</p>
-                        </section>
-                    </article>
-                </main>
-                <footer><p>Footer content</p></footer>
-            </body></html>
-        ');
+        $violations = $this->analyze('<html><body><main><button href="/x">Go</button><button href="">Empty</button></main></body></html>');
 
-        $this->assertSame([], array_filter($violations, fn (Violation $v) => $v->severity === Severity::Error));
+        $violation = $this->assertHasViolation($violations, 'semantic.button_with_href', element: 'button', severity: Severity::Notice);
+        $this->assertSame('4.1.2', $violation->rule);
+        $this->assertSame(['best-practice'], $violation->tags);
+        $this->assertViolationCount($violations, 'semantic.button_with_href', 1);
+    }
+
+    public function test_proper_semantic_html_has_no_findings(): void
+    {
+        $html = '<!DOCTYPE html><html lang="en"><body><header><nav><ul><li><a href="/">Home</a></li></ul></nav></header>'
+            .'<main><article><h1>Title</h1><section><h2>Part</h2><p>x</p></section></article></main><footer>f</footer></body></html>';
+
+        $this->assertSame([], $this->analyze($html));
     }
 }

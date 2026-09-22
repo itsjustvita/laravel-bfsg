@@ -282,43 +282,23 @@ return [
     'semantic' => [
         'missing_main' => [
             'message' => 'Kein <main>-Landmark gefunden',
-            'suggestion' => 'Hauptinhalt in ein <main>-Element einbetten',
+            'suggestion' => 'Hauptinhalt in ein <main>-Element einschließen, damit Nutzende direkt dorthin springen können',
         ],
         'multiple_main' => [
-            'message' => 'Weiteres <main>-Element Nr. :index',
-            'suggestion' => 'Nur ein <main>-Element pro Seite verwenden',
-        ],
-        'missing_nav' => [
-            'message' => 'Kein <nav>-Landmark gefunden',
-            'suggestion' => 'Hauptnavigation in ein <nav>-Element einbetten',
+            'message' => 'Weiteres sichtbares <main>-Landmark #:index',
+            'suggestion' => 'Nur ein sichtbares <main>-Element pro Seite verwenden',
         ],
         'section_without_heading' => [
             'message' => '<section> ohne Überschrift oder zugänglichen Namen',
             'suggestion' => 'Abschnitt mit einer Überschrift beginnen oder ein aria-label vergeben',
         ],
-        'div_ratio' => [
-            'message' => 'Übermäßige Verwendung von <div>-Elementen (:ratio % aller Elemente)',
-            'suggestion' => 'Semantische Elemente (header, nav, main, section, article, footer) statt generischer <div>s bevorzugen',
+        'empty_list' => [
+            'message' => '<:tag> ohne <li>-Einträge',
+            'suggestion' => 'Leere Listen entfernen oder mit Listeneinträgen füllen',
         ],
         'button_with_href' => [
             'message' => '<button> mit href-Attribut',
             'suggestion' => '<a href> für Navigation und <button> für Aktionen verwenden',
-        ],
-        'anchor_as_button' => [
-            'message' => '<a> als Button verwendet (role="button")',
-            'suggestion' => 'Für Aktionen ein echtes <button>-Element verwenden',
-        ],
-        'missing_header' => [
-            'message' => 'Kein <header>-Landmark gefunden',
-            'suggestion' => 'Seitenweites <header>-Element ergänzen',
-        ],
-        'missing_footer' => [
-            'message' => 'Kein <footer>-Landmark gefunden',
-            'suggestion' => 'Seitenweites <footer>-Element ergänzen',
-        ],
-        'empty_list' => [
-            'message' => '<:tag> ohne <li>-Kindelemente',
-            'suggestion' => 'Leere Listen entfernen oder mit Listeneinträgen füllen',
         ],
     ],
     'page_title' => [

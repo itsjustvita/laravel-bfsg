@@ -282,43 +282,23 @@ return [
     'semantic' => [
         'missing_main' => [
             'message' => 'No <main> landmark found',
-            'suggestion' => 'Wrap the primary content in a <main> element',
+            'suggestion' => 'Wrap the primary content in a <main> element so users can jump to it',
         ],
         'multiple_main' => [
-            'message' => 'Additional <main> element #:index',
-            'suggestion' => 'Use a single <main> element per page',
-        ],
-        'missing_nav' => [
-            'message' => 'No <nav> landmark found',
-            'suggestion' => 'Wrap the primary navigation in a <nav> element',
+            'message' => 'Additional visible <main> landmark #:index',
+            'suggestion' => 'Use a single visible <main> element per page',
         ],
         'section_without_heading' => [
             'message' => '<section> without heading or accessible name',
             'suggestion' => 'Start the section with a heading or give it an aria-label',
         ],
-        'div_ratio' => [
-            'message' => 'Excessive use of <div> elements (:ratio% of all elements)',
-            'suggestion' => 'Prefer semantic elements (header, nav, main, section, article, footer) over generic <div>s',
+        'empty_list' => [
+            'message' => '<:tag> without <li> children',
+            'suggestion' => 'Remove empty lists or fill them with list items',
         ],
         'button_with_href' => [
             'message' => '<button> with href attribute',
             'suggestion' => 'Use <a href> for navigation and <button> for actions',
-        ],
-        'anchor_as_button' => [
-            'message' => '<a> used as a button (role="button")',
-            'suggestion' => 'Use a real <button> element for actions',
-        ],
-        'missing_header' => [
-            'message' => 'No <header> landmark found',
-            'suggestion' => 'Add a page-level <header> element',
-        ],
-        'missing_footer' => [
-            'message' => 'No <footer> landmark found',
-            'suggestion' => 'Add a page-level <footer> element',
-        ],
-        'empty_list' => [
-            'message' => '<:tag> without <li> children',
-            'suggestion' => 'Remove empty lists or fill them with list items',
         ],
     ],
     'page_title' => [
