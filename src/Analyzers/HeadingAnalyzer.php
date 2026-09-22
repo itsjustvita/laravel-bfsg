@@ -4,12 +4,13 @@ namespace ItsJustVita\LaravelBfsg\Analyzers;
 
 use DOMElement;
 use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Dom\Roles;
 use ItsJustVita\LaravelBfsg\Dom\Text;
 use ItsJustVita\LaravelBfsg\Severity;
 
 class HeadingAnalyzer extends BaseAnalyzer
 {
-    private const HEADINGS = '//h1|//h2|//h3|//h4|//h5|//h6';
+    private const CANDIDATES = '//h1|//h2|//h3|//h4|//h5|//h6|//*[@role]';
 
     private const MAX_CONTENT = 50;
 
@@ -21,72 +22,75 @@ class HeadingAnalyzer extends BaseAnalyzer
 
     protected function inspect(): void
     {
-        $this->checkHeadingHierarchy();
-        $this->checkForMainHeading();
-        $this->checkHeadingText();
-        $this->checkMultipleH1Tags();
-    }
-
-    protected function checkHeadingHierarchy(): void
-    {
         $previousLevel = 0;
+        $firstLevelOne = null;
 
-        foreach ($this->query(self::HEADINGS) as $heading) {
-            $currentLevel = $this->level($heading);
+        foreach ($this->headings() as [$heading, $level]) {
+            $name = $this->name($heading);
 
-            if ($previousLevel > 0 && $currentLevel > $previousLevel + 1) {
-                $this->report('skipped_level', Severity::Error, '1.3.1', $heading, [
+            if ($previousLevel > 0 && $level > $previousLevel + 1) {
+                $this->report('skipped_level', Severity::Warning, '1.3.1', $heading, [
                     'from' => 'h'.$previousLevel,
-                    'to' => Element::tag($heading),
-                    'content' => $this->content($heading),
+                    'to' => 'h'.$level,
+                    'content' => Text::truncate($name, self::MAX_CONTENT),
                 ]);
             }
 
-            $previousLevel = $currentLevel;
-        }
-    }
+            $previousLevel = $level;
 
-    protected function checkForMainHeading(): void
-    {
-        if ($this->query('//h1') === []) {
-            $this->report('missing_h1', Severity::Warning, '1.3.1', related: ['2.4.6']);
-        }
-    }
-
-    protected function checkHeadingText(): void
-    {
-        foreach ($this->query(self::HEADINGS) as $heading) {
-            $text = $this->text($heading);
-
-            if ($text === '') {
-                $this->report('empty_heading', Severity::Error, '1.3.1', $heading, ['level' => Element::tag($heading)], related: ['2.4.6']);
-            } elseif (Text::length($text) < 3) {
-                $this->report('short_heading', Severity::Warning, '2.4.6', $heading, ['content' => $this->content($heading)]);
+            if ($name === '') {
+                $this->report('empty_heading', Severity::Error, '1.3.1', $heading, ['level' => 'h'.$level], related: ['2.4.6']);
+            } elseif (Text::length($name) < 3) {
+                $this->report('short_heading', Severity::Notice, '2.4.6', $heading, ['content' => $name]);
             }
-        }
-    }
 
-    protected function checkMultipleH1Tags(): void
-    {
-        foreach ($this->query('//h1') as $index => $h1) {
-            if ($index === 0) {
+            if ($level !== 1) {
                 continue;
             }
 
-            $this->report('multiple_h1', Severity::Notice, '1.3.1', $h1, [
-                'index' => $index + 1,
-                'content' => $this->content($h1),
-            ]);
+            if ($firstLevelOne === null) {
+                $firstLevelOne = $heading;
+            } else {
+                $this->report('multiple_h1', Severity::Notice, '1.3.1', $heading, ['content' => Text::truncate($name, self::MAX_CONTENT)]);
+            }
+        }
+
+        if ($firstLevelOne === null && ! $this->isFragment()) {
+            $this->report('missing_h1', Severity::Notice, '1.3.1');
         }
     }
 
-    protected function level(DOMElement $heading): int
+    /**
+     * Visible headings in document order: h1–h6 (unless re-roled) and role="heading" elements.
+     *
+     * @return list<array{0: DOMElement, 1: int}>
+     */
+    protected function headings(): array
     {
-        return (int) ltrim(Element::tag($heading), 'h');
+        $headings = [];
+
+        foreach ($this->queryVisible(self::CANDIDATES) as $element) {
+            if (Roles::of($element) !== 'heading') {
+                continue;
+            }
+
+            $headings[] = [$element, $this->level($element)];
+        }
+
+        return $headings;
     }
 
-    protected function content(DOMElement $heading): string
+    /** aria-level wins; otherwise the tag level; role="heading" without a valid aria-level is level 2. */
+    protected function level(DOMElement $heading): int
     {
-        return Text::truncate($this->text($heading), self::MAX_CONTENT);
+        $ariaLevel = trim($heading->getAttribute('aria-level'));
+
+        if (preg_match('/^[1-9]\d*$/', $ariaLevel) === 1) {
+            return (int) $ariaLevel;
+        }
+
+        $tag = Element::tag($heading);
+
+        return preg_match('/^h([1-6])$/', $tag, $m) === 1 ? (int) $m[1] : 2;
     }
 }

@@ -49,20 +49,20 @@ return [
             'suggestion' => 'Überschriftenebenen der Reihe nach verwenden (h1 → h2 → h3)',
         ],
         'missing_h1' => [
-            'message' => 'Keine h1-Überschrift auf der Seite',
-            'suggestion' => 'Genau eine h1 ergänzen, die den Hauptinhalt der Seite benennt',
+            'message' => 'Keine Überschrift der ersten Ebene auf der Seite',
+            'suggestion' => 'Eine h1 ergänzen, die den Hauptinhalt der Seite benennt',
+        ],
+        'multiple_h1' => [
+            'message' => 'Weitere Überschrift der ersten Ebene („:content“)',
+            'suggestion' => 'Eine h1 pro Seite und h2–h6 für Abschnitte in Betracht ziehen',
         ],
         'empty_heading' => [
             'message' => 'Leere :level-Überschrift',
-            'suggestion' => 'Überschrift mit Text füllen oder entfernen',
+            'suggestion' => 'Der Überschrift Text (oder ein Bild mit Alternativtext) geben oder sie entfernen',
         ],
         'short_heading' => [
             'message' => 'Sehr kurzer Überschriftentext „:content“',
-            'suggestion' => 'Überschrift verwenden, die den folgenden Abschnitt beschreibt',
-        ],
-        'multiple_h1' => [
-            'message' => 'Weitere h1-Überschrift Nr. :index („:content“)',
-            'suggestion' => 'Eine h1 pro Seite verwenden und h2–h6 für Abschnitte',
+            'suggestion' => 'Eine Überschrift verwenden, die den folgenden Abschnitt beschreibt',
         ],
     ],
     'contrast' => [

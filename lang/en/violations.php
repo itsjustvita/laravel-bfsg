@@ -49,20 +49,20 @@ return [
             'suggestion' => 'Use heading levels in order without skipping (h1 → h2 → h3)',
         ],
         'missing_h1' => [
-            'message' => 'No h1 heading found on the page',
-            'suggestion' => 'Add exactly one h1 that names the main content of the page',
+            'message' => 'No level-one heading on the page',
+            'suggestion' => 'Add an h1 that names the main content of the page',
+        ],
+        'multiple_h1' => [
+            'message' => 'Additional level-one heading (":content")',
+            'suggestion' => 'Consider one h1 per page and h2–h6 for sections',
         ],
         'empty_heading' => [
             'message' => 'Empty :level heading',
-            'suggestion' => 'Give the heading text, or remove it',
+            'suggestion' => 'Give the heading text (or an image with alt text), or remove it',
         ],
         'short_heading' => [
             'message' => 'Very short heading text ":content"',
             'suggestion' => 'Use a heading that describes the section it introduces',
-        ],
-        'multiple_h1' => [
-            'message' => 'Additional h1 heading #:index (":content")',
-            'suggestion' => 'Use one h1 per page and h2–h6 for sections',
         ],
     ],
     'contrast' => [
