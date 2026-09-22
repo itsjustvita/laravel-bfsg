@@ -57,4 +57,13 @@ class ColorTest extends TestCase
         $this->assertSame('#808080', $composited->toHex());
         $this->assertSame('#ffffff', Color::parse('transparent')->over(Color::parse('#fff'))->toHex());
     }
+
+    public function test_contrast_ratio_is_unrounded(): void
+    {
+        $ratio = Color::parse('#777')->contrastRatio(Color::parse('#fff'));
+
+        $this->assertEqualsWithDelta(4.4781, $ratio, 0.0001);
+        $this->assertLessThan(4.5, $ratio);
+        $this->assertSame(4.48, Color::parse('#777')->contrastWith(Color::parse('#fff')));
+    }
 }

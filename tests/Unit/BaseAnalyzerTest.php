@@ -96,4 +96,30 @@ class BaseAnalyzerTest extends AnalyzerTestCase
         $this->assertIsString($meta['description']);
         $this->assertIsArray($meta['rules']);
     }
+
+    public function test_query_visible_and_authored_name_helpers(): void
+    {
+        $analyzer = new class extends BaseAnalyzer
+        {
+            protected string $key = 'dummy';
+
+            protected function inspect(): void
+            {
+                foreach ($this->queryVisible('//div[@role="dialog"]') as $dialog) {
+                    if ($this->authoredName($dialog) === '') {
+                        $this->report('unnamed', Severity::Error, '4.1.2', $dialog);
+                    }
+                }
+            }
+        };
+
+        $violations = $analyzer->analyze(HtmlDocument::fromHtml('<html><body>'
+            .'<div role="dialog" id="a"><p>Content only</p></div>'
+            .'<div role="dialog" aria-label="Named">x</div>'
+            .'<div hidden><div role="dialog" id="b">x</div></div>'
+            .'</body></html>'));
+
+        $this->assertCount(1, $violations);
+        $this->assertSame('div#a', $violations[0]->element);
+    }
 }

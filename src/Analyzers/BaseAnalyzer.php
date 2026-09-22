@@ -96,6 +96,19 @@ abstract class BaseAnalyzer implements Analyzer
         return $this->document->query($expression, $context);
     }
 
+    /**
+     * query() without elements that are hidden (Element::isHidden) — the default for every check (§13 rule 1).
+     *
+     * @return list<DOMElement>
+     */
+    protected function queryVisible(string $expression, ?DOMNode $context = null): array
+    {
+        return array_values(array_filter(
+            $this->document->query($expression, $context),
+            fn (DOMElement $element): bool => ! Element::isHidden($element),
+        ));
+    }
+
     protected function isHidden(DOMElement $element): bool
     {
         return Element::isHidden($element);
@@ -104,6 +117,12 @@ abstract class BaseAnalyzer implements Analyzer
     protected function name(DOMElement $element): string
     {
         return AccessibleName::of($element, $this->document);
+    }
+
+    /** Author-supplied name only (aria-labelledby → aria-label → title). */
+    protected function authoredName(DOMElement $element): string
+    {
+        return AccessibleName::authored($element, $this->document);
     }
 
     protected function ownText(DOMElement $element): string

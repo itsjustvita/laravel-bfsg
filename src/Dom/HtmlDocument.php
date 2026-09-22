@@ -13,6 +13,9 @@ final class HtmlDocument
 {
     private const ENCODING_HINT = '<?xml encoding="UTF-8">';
 
+    /** HTML5 void elements unknown to libxml's HTML parser: without an end tag they swallow their following siblings. */
+    private const UNKNOWN_VOID_ELEMENTS = '~<(track|source|wbr|embed|keygen)\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\1\s*>)~i';
+
     private ?DOMXPath $xpath = null;
 
     /** @var array<string, DOMElement>|null */
@@ -39,6 +42,7 @@ final class HtmlDocument
         }
 
         $fragment = $options['fragment'] ?? (preg_match('/<html[\s>]/i', $html) !== 1);
+        $html = self::closeUnknownVoidElements($html);
         $hinted = self::needsEncodingHint($html);
 
         if ($hinted) {
@@ -172,22 +176,62 @@ final class HtmlDocument
         return $this->duplicateIds;
     }
 
-    /** @return list<string> */
+    /**
+     * <style> elements whose media attribute applies to screen (absent, all, screen, feature-only queries);
+     * styles inside <template> or <noscript> never apply.
+     *
+     * @return list<DOMElement>
+     */
+    public function styleElements(): array
+    {
+        return array_values(array_filter(
+            $this->query('//style[not(ancestor::template) and not(ancestor::noscript)]'),
+            fn (DOMElement $style): bool => self::mediaAppliesToScreen($style->getAttribute('media')),
+        ));
+    }
+
+    /** @return list<string> text of every screen stylesheet, in document order */
     public function styleSheets(): array
     {
-        $sheets = [];
+        return array_map(fn (DOMElement $style): string => $style->textContent, $this->styleElements());
+    }
 
-        foreach ($this->query('//style') as $style) {
-            $media = strtolower(trim($style->getAttribute('media')));
+    /**
+     * Whether a media query list (a media attribute or an @media prelude) applies to a screen.
+     * Only the media type and the not/only prefixes are evaluated; media features are ignored.
+     */
+    public static function mediaAppliesToScreen(string $media): bool
+    {
+        $media = strtolower(trim($media));
 
-            if ($media !== '' && ! str_contains($media, 'all') && ! str_contains($media, 'screen')) {
+        if ($media === '') {
+            return true;
+        }
+
+        foreach (explode(',', $media) as $query) {
+            $query = trim($query);
+
+            if ($query === '') {
                 continue;
             }
 
-            $sheets[] = $style->textContent;
+            $negated = false;
+
+            if (str_starts_with($query, 'only ')) {
+                $query = ltrim(substr($query, 5));
+            } elseif (str_starts_with($query, 'not ')) {
+                $negated = true;
+                $query = ltrim(substr($query, 4));
+            }
+
+            $type = str_starts_with($query, '(') ? 'all' : (preg_split('/[\s(]/', $query)[0] ?? '');
+
+            if (in_array($type, ['all', 'screen'], true) !== $negated) {
+                return true;
+            }
         }
 
-        return $sheets;
+        return false;
     }
 
     /**
@@ -243,7 +287,8 @@ final class HtmlDocument
         return '/'.implode('/', array_reverse($parts));
     }
 
-    public function xpathLiteral(string $value): string
+    /** Quote a value for safe use inside an XPath expression; static so CssParser can use it without a document. */
+    public static function xpathLiteral(string $value): string
     {
         if (! str_contains($value, "'")) {
             return "'".$value."'";
@@ -254,6 +299,11 @@ final class HtmlDocument
         }
 
         return "concat('".str_replace("'", "', \"'\", '", $value)."')";
+    }
+
+    private static function closeUnknownVoidElements(string $html): string
+    {
+        return preg_replace_callback(self::UNKNOWN_VOID_ELEMENTS, fn (array $m) => $m[0].'</'.$m[1].'>', $html) ?? $html;
     }
 
     private static function needsEncodingHint(string $html): bool

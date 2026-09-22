@@ -126,4 +126,62 @@ class HtmlDocumentTest extends TestCase
         $this->assertStringStartsWith('concat(', $literal);
         $this->assertCount(1, $doc->query('//label[@for='.$literal.']'));
     }
+
+    public function test_style_elements_apply_the_screen_media_predicate(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><head>'
+            .'<style>a{}</style>'
+            .'<style media="print">b{}</style>'
+            .'<style media="not screen">c{}</style>'
+            .'<style media="(min-width: 768px)">d{}</style>'
+            .'<style media="only screen and (max-width: 600px)">e{}</style>'
+            .'<style media="print, screen">f{}</style>'
+            .'<style media="SCREEN">g{}</style>'
+            .'<style media="speech">h{}</style>'
+            .'</head><body></body></html>');
+
+        $this->assertSame(['a{}', 'd{}', 'e{}', 'f{}', 'g{}'], array_map(fn ($style) => $style->textContent, $doc->styleElements()));
+        $this->assertSame(['a{}', 'd{}', 'e{}', 'f{}', 'g{}'], $doc->styleSheets());
+    }
+
+    public function test_media_applies_to_screen(): void
+    {
+        $this->assertTrue(HtmlDocument::mediaAppliesToScreen(''));
+        $this->assertTrue(HtmlDocument::mediaAppliesToScreen('all'));
+        $this->assertTrue(HtmlDocument::mediaAppliesToScreen('screen and (min-width: 40em)'));
+        $this->assertTrue(HtmlDocument::mediaAppliesToScreen('(prefers-reduced-motion: reduce)'));
+        $this->assertTrue(HtmlDocument::mediaAppliesToScreen('not print'));
+        $this->assertFalse(HtmlDocument::mediaAppliesToScreen('print'));
+        $this->assertFalse(HtmlDocument::mediaAppliesToScreen('not screen'));
+        $this->assertFalse(HtmlDocument::mediaAppliesToScreen('not all and (monochrome)'));
+    }
+
+    public function test_style_elements_inside_template_or_noscript_never_apply(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><head><style>a{}</style><noscript><style>b{}</style></noscript></head>'
+            .'<body><template><style>c{}</style></template><div><style>d{}</style></div></body></html>');
+
+        $this->assertSame(['a{}', 'd{}'], $doc->styleSheets());
+    }
+
+    public function test_xpath_literal_is_callable_statically(): void
+    {
+        $this->assertSame("'a'", HtmlDocument::xpathLiteral('a'));
+        $this->assertSame("'a'", HtmlDocument::fromHtml('<p>x</p>')->xpathLiteral('a'));
+    }
+
+    public function test_unknown_html5_void_elements_do_not_swallow_their_siblings(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body><video id="v"><source id="s" src="a.webm"><track id="t1" kind="captions"><track id="t2" kind="descriptions"></video>'
+            .'<p id="p">Lorem<wbr>ipsum</p><embed id="e" src="x.swf"><p id="after">x</p></body></html>');
+        $byId = $doc->elementsById();
+
+        foreach (['s', 't1', 't2'] as $id) {
+            $this->assertSame('video', $byId[$id]->parentNode->nodeName, $id);
+        }
+
+        $this->assertSame('body', $byId['after']->parentNode->nodeName);
+        $this->assertSame('Loremipsum', $byId['p']->textContent);
+        $this->assertCount(1, $doc->query('//track[@id="t1"]'));
+    }
 }

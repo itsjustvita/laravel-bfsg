@@ -83,4 +83,28 @@ class RolesTest extends TestCase
         $this->assertTrue(Roles::isRoving($this->el('<div role="toolbar"><button data-t tabindex="-1"></button></div>')));
         $this->assertFalse(Roles::isRoving($this->el('<button data-t tabindex="-1">')));
     }
+
+    public function test_of_falls_back_to_the_implicit_role(): void
+    {
+        $this->assertSame('tab', Roles::of($this->el('<button data-t role="tab">')));
+        $this->assertSame('button', Roles::of($this->el('<button data-t role="bogus">')));
+        $this->assertSame('link', Roles::of($this->el('<a data-t href="/">x</a>')));
+        $this->assertNull(Roles::of($this->el('<div data-t>x</div>')));
+    }
+
+    public function test_roving_considers_the_implicit_role_of_the_element(): void
+    {
+        $this->assertTrue(Roles::isRoving($this->el('<input data-t type="radio" name="r" tabindex="-1">')));
+        $this->assertFalse(Roles::isRoving($this->el('<input data-t type="checkbox" tabindex="-1">')));
+    }
+
+    public function test_implicit_roles_for_options_rows_cells_and_meters(): void
+    {
+        $this->assertSame('option', Roles::implicit($this->el('<select><option data-t>a</option></select>')));
+        $this->assertSame('row', Roles::implicit($this->el('<table><tr data-t><td>a</td></tr></table>')));
+        $this->assertSame('cell', Roles::implicit($this->el('<table><tr><td data-t>a</td></tr></table>')));
+        $this->assertSame('columnheader', Roles::implicit($this->el('<table><tr><th data-t>a</th></tr></table>')));
+        $this->assertSame('rowheader', Roles::implicit($this->el('<table><tr><th data-t scope="ROW">a</th></tr></table>')));
+        $this->assertSame('meter', Roles::implicit($this->el('<meter data-t value="1"></meter>')));
+    }
 }

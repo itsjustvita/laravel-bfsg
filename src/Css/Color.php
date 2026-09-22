@@ -94,12 +94,19 @@ final class Color
         return 0.2126 * $channel($this->r) + 0.7152 * $channel($this->g) + 0.0722 * $channel($this->b);
     }
 
-    public function contrastWith(self $other): float
+    /** Unrounded WCAG contrast ratio; compare thresholds against this value. */
+    public function contrastRatio(self $other): float
     {
         $l1 = $this->luminance();
         $l2 = $other->luminance();
 
-        return round((max($l1, $l2) + 0.05) / (min($l1, $l2) + 0.05), 2);
+        return (max($l1, $l2) + 0.05) / (min($l1, $l2) + 0.05);
+    }
+
+    /** Contrast ratio rounded to two decimals, for display. */
+    public function contrastWith(self $other): float
+    {
+        return round($this->contrastRatio($other), 2);
     }
 
     public function over(self $background): self

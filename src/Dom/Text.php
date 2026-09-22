@@ -4,7 +4,7 @@ namespace ItsJustVita\LaravelBfsg\Dom;
 
 final class Text
 {
-    private const TRAILING = '/[\s\.,:;!?…»›>»\x{2192}\x{2794}\x{27A1}\-–—]+$/u';
+    private const TRAILING = '/[\s\.,:;!?…»›>\x{2192}\x{2794}\x{27A1}\-–—]+$/u';
 
     public static function normalize(string $text): string
     {
@@ -31,6 +31,26 @@ final class Text
     public static function stripTrailingPunctuation(string $text): string
     {
         return rtrim(preg_replace(self::TRAILING, '', $text) ?? $text);
+    }
+
+    /** Case-insensitive whole-word (or whole-phrase) match; letters and digits delimit words. */
+    public static function containsWord(string $text, string $phrase): bool
+    {
+        $pattern = '/(?<![\pL\pN])'.preg_quote(self::lower(self::normalize($phrase)), '/').'(?![\pL\pN])/u';
+
+        return preg_match($pattern, self::lower(self::normalize($text))) === 1;
+    }
+
+    /** @param  list<string>  $phrases */
+    public static function containsAnyWord(string $text, array $phrases): bool
+    {
+        foreach ($phrases as $phrase) {
+            if (self::containsWord($text, $phrase)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function isBlank(?string $text): bool

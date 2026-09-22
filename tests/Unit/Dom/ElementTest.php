@@ -103,4 +103,27 @@ class ElementTest extends TestCase
         $this->assertNull(Element::closest($input, 'form'));
         $this->assertSame('input', Element::tag($input));
     }
+
+    public function test_hidden_style_must_be_a_whole_declaration(): void
+    {
+        $this->assertTrue(Element::isHidden($this->el('<p data-t style="color:red; display : none !important">x</p>')));
+        $this->assertTrue(Element::isHidden($this->el('<p data-t style="VISIBILITY:HIDDEN">x</p>')));
+        $this->assertFalse(Element::isHidden($this->el('<p data-t style="--display:none">x</p>')));
+        $this->assertFalse(Element::isHidden($this->el('<p data-t style="display: none-ish">x</p>')));
+        $this->assertFalse(Element::isHidden($this->el('<p data-t style="content-visibility: hidden">x</p>')));
+    }
+
+    public function test_not_rendered_ignores_aria_hidden(): void
+    {
+        $this->assertFalse(Element::isNotRendered($this->el('<div aria-hidden="true"><a data-t href="/">x</a></div>')));
+        $this->assertTrue(Element::isHidden($this->el('<div aria-hidden="TRUE"><a data-t href="/">x</a></div>')));
+        $this->assertTrue(Element::isNotRendered($this->el('<div hidden><a data-t href="/">x</a></div>')));
+        $this->assertTrue(Element::isNotRendered($this->el('<div style="display:none"><a data-t href="/">x</a></div>')));
+    }
+
+    public function test_idrefs_split_on_any_whitespace(): void
+    {
+        $this->assertSame(['a', 'b', 'c'], Element::idrefs($this->el("<p data-t aria-describedby=\" a\tb\n c \">x</p>"), 'aria-describedby'));
+        $this->assertSame([], Element::idrefs($this->el('<p data-t>x</p>'), 'aria-describedby'));
+    }
 }

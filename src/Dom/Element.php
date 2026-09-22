@@ -10,6 +10,9 @@ final class Element
 {
     private const HIDDEN_CONTAINERS = ['template', 'noscript', 'head'];
 
+    /** display:none / visibility:hidden as a whole declaration of an inline style attribute. */
+    private const HIDDEN_STYLE = '/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)\s*(?:!\s*important\s*)?(?:;|$)/';
+
     private const INTERACTIVE_TAGS = ['button', 'select', 'textarea', 'summary', 'iframe'];
 
     public static function tag(DOMElement $element): string
@@ -58,29 +61,45 @@ final class Element
         return Text::normalize($element->textContent);
     }
 
-    public static function isHidden(DOMElement $element): bool
+    /**
+     * Hidden from everyone: self or ancestor carries the hidden attribute, an inline display:none /
+     * visibility:hidden declaration, or sits inside template/noscript/head.
+     */
+    public static function isNotRendered(DOMElement $element): bool
     {
         for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
-            if (in_array(self::tag($node), self::HIDDEN_CONTAINERS, true)) {
+            if (in_array(self::tag($node), self::HIDDEN_CONTAINERS, true) || $node->hasAttribute('hidden')) {
                 return true;
             }
 
-            if ($node->hasAttribute('hidden')) {
-                return true;
-            }
-
-            if (self::enumAttr($node, 'aria-hidden') === 'true') {
-                return true;
-            }
-
-            $style = strtolower($node->getAttribute('style'));
-
-            if (preg_match('/display\s*:\s*none|visibility\s*:\s*hidden/', $style) === 1) {
+            if (preg_match(self::HIDDEN_STYLE, strtolower($node->getAttribute('style'))) === 1) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** Not rendered, or removed from the accessibility tree by aria-hidden="true" on self or an ancestor. */
+    public static function isHidden(DOMElement $element): bool
+    {
+        if (self::isNotRendered($element)) {
+            return true;
+        }
+
+        for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
+            if (self::enumAttr($node, 'aria-hidden') === 'true') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return list<string> IDREF tokens of an attribute, split on any whitespace */
+    public static function idrefs(DOMElement $element, string $attribute): array
+    {
+        return preg_split('/\s+/', trim($element->getAttribute($attribute)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
     }
 
     /** @return list<string> */

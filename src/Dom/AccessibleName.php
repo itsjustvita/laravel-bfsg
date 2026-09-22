@@ -13,24 +13,10 @@ final class AccessibleName
 {
     public static function of(DOMElement $element, HtmlDocument $document): string
     {
-        $labelledby = trim($element->getAttribute('aria-labelledby'));
+        $name = self::fromLabelledBy($element, $document);
 
-        if ($labelledby !== '') {
-            $parts = [];
-
-            foreach (preg_split('/\s+/', $labelledby, -1, PREG_SPLIT_NO_EMPTY) as $id) {
-                $reference = $document->elementsById()[$id] ?? null;
-
-                if ($reference !== null) {
-                    $parts[] = $reference === $element ? self::native($element, $document) : self::content($reference, true);
-                }
-            }
-
-            $name = Text::normalize(implode(' ', $parts));
-
-            if ($name !== '') {
-                return $name;
-            }
+        if ($name !== '') {
+            return $name;
         }
 
         $label = Text::normalize($element->getAttribute('aria-label'));
@@ -46,6 +32,38 @@ final class AccessibleName
         }
 
         return Text::normalize($element->getAttribute('title'));
+    }
+
+    /**
+     * Name from author-supplied attributes only (aria-labelledby → aria-label → title), for elements
+     * that never take their name from content: dialogs, regions, groups, iframes.
+     */
+    public static function authored(DOMElement $element, HtmlDocument $document): string
+    {
+        $name = self::fromLabelledBy($element, $document);
+
+        if ($name !== '') {
+            return $name;
+        }
+
+        $label = Text::normalize($element->getAttribute('aria-label'));
+
+        return $label !== '' ? $label : Text::normalize($element->getAttribute('title'));
+    }
+
+    private static function fromLabelledBy(DOMElement $element, HtmlDocument $document): string
+    {
+        $parts = [];
+
+        foreach (Element::idrefs($element, 'aria-labelledby') as $id) {
+            $reference = $document->elementsById()[$id] ?? null;
+
+            if ($reference !== null) {
+                $parts[] = $reference === $element ? self::native($element, $document) : self::content($reference, true);
+            }
+        }
+
+        return Text::normalize(implode(' ', $parts));
     }
 
     private static function native(DOMElement $element, HtmlDocument $document): string

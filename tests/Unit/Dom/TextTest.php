@@ -42,4 +42,21 @@ class TextTest extends TestCase
         $this->assertSame(2, Text::length('§5'));
         $this->assertSame(1, Text::length('→'));
     }
+
+    public function test_trailing_marker_class_has_no_duplicates_and_still_strips_guillemets(): void
+    {
+        $this->assertSame('Weiter', Text::stripTrailingPunctuation('Weiter »»'));
+        $this->assertSame('Weiter', Text::stripTrailingPunctuation('Weiter ›'));
+    }
+
+    public function test_contains_word_matches_whole_words_case_insensitively(): void
+    {
+        $this->assertTrue(Text::containsWord('Zum Inhalt springen', 'zum inhalt'));
+        $this->assertTrue(Text::containsWord('ZUM MENÜ', 'zum menü'));
+        $this->assertTrue(Text::containsWord('Skip to content', 'skip'));
+        $this->assertFalse(Text::containsWord('Skipper', 'skip'));
+        $this->assertFalse(Text::containsWord('Hauptmenü', 'menü'));
+        $this->assertTrue(Text::containsAnyWord('Bericht (PDF, 2 MB)', ['download', 'pdf']));
+        $this->assertFalse(Text::containsAnyWord('Bericht', ['download', 'pdf']));
+    }
 }

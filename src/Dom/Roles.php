@@ -89,6 +89,12 @@ final class Roles
         return null;
     }
 
+    /** Explicit (effective) role, falling back to the implicit role of the element. */
+    public static function of(DOMElement $element): ?string
+    {
+        return self::effective($element) ?? self::implicit($element);
+    }
+
     public static function implicit(DOMElement $element): ?string
     {
         $tag = Element::tag($element);
@@ -113,6 +119,11 @@ final class Roles
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6' => 'heading',
             'hr' => 'separator',
             'progress' => 'progressbar',
+            'meter' => 'meter',
+            'option' => 'option',
+            'tr' => 'row',
+            'td' => 'cell',
+            'th' => Element::enumAttr($element, 'scope') === 'row' ? 'rowheader' : 'columnheader',
             'textarea' => 'textbox',
             'fieldset', 'details' => 'group',
             'select' => ($element->hasAttribute('multiple') || (int) $element->getAttribute('size') > 1) ? 'listbox' : 'combobox',
@@ -140,7 +151,7 @@ final class Roles
     /** Whether tabindex="-1" on this element is part of a roving-tabindex widget. */
     public static function isRoving(DOMElement $element): bool
     {
-        $role = self::effective($element);
+        $role = self::of($element);
 
         if ($role !== null && in_array($role, self::ROVING, true)) {
             return true;

@@ -62,4 +62,21 @@ class AccessibleNameTest extends TestCase
         $this->assertSame('Grafik', $this->nameOf('<figure data-t><img src="x" alt=""><figcaption>Grafik</figcaption></figure>'));
         $this->assertSame('Anrede', $this->nameOf('<fieldset data-t><legend>Anrede</legend></fieldset>'));
     }
+
+    public function test_authored_name_ignores_content_and_native_sources(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body><h2 id="t">Anmelden</h2>'
+            .'<div role="dialog" aria-labelledby="t" id="a"><p>Inhalt</p></div>'
+            .'<div role="dialog" id="b"><p>Inhalt</p></div>'
+            .'<iframe id="c" title=" Karte "></iframe>'
+            .'<section id="d" aria-label="Neuigkeiten"><h2>x</h2></section>'
+            .'</body></html>');
+        $byId = $doc->elementsById();
+
+        $this->assertSame('Anmelden', AccessibleName::authored($byId['a'], $doc));
+        $this->assertSame('', AccessibleName::authored($byId['b'], $doc));
+        $this->assertSame('Inhalt', AccessibleName::of($byId['b'], $doc));
+        $this->assertSame('Karte', AccessibleName::authored($byId['c'], $doc));
+        $this->assertSame('Neuigkeiten', AccessibleName::authored($byId['d'], $doc));
+    }
 }
