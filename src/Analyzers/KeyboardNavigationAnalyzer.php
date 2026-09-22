@@ -2,182 +2,226 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
+use DOMAttr;
 use DOMElement;
 use ItsJustVita\LaravelBfsg\Dom\Element;
+use ItsJustVita\LaravelBfsg\Dom\Roles;
+use ItsJustVita\LaravelBfsg\Dom\Text;
 use ItsJustVita\LaravelBfsg\Severity;
 
 class KeyboardNavigationAnalyzer extends BaseAnalyzer
 {
+    /** Whole-word (or whole-phrase) skip link patterns, English + German. */
+    public const SKIP_LINK_PATTERNS = [
+        'skip', 'jump to', 'überspringen', 'zum inhalt', 'zum hauptinhalt', 'zur navigation', 'zum menü', 'direkt zu', 'direkt zum',
+    ];
+
+    /** Elements that handle clicks natively or whose click is delegated by the browser. */
+    private const CLICK_EXEMPT_TAGS = ['a', 'summary', 'label', 'details', 'area', 'option', 'html', 'body'];
+
+    private const WIDGET_ROLES = ['button', 'link', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'option', 'slider', 'textbox', 'combobox'];
+
+    private const KEY_HANDLERS = ['onkeydown', 'onkeyup', 'onkeypress'];
+
+    private const MOUSE_QUERY = '//*[@onmouseover or @onmouseout or @onmousedown or @onmouseup or @onmouseenter or @onmouseleave]';
+
+    private const KEYBOARD_EQUIVALENTS = ['onkeydown', 'onkeyup', 'onkeypress', 'onfocus', 'onblur', 'onfocusin', 'onfocusout'];
+
+    private const INTERACTIVE_DESCENDANTS = './/a[@href]|.//button|.//input|.//select|.//textarea|.//*[@tabindex]';
+
     protected string $key = 'keyboard';
 
     protected string $description = 'Keyboard operability, focus order and bypass blocks';
 
     protected array $rules = ['2.1.1', '2.4.1', '2.4.3', '4.1.2'];
 
-    // Interactive elements that should be keyboard accessible
-    protected const INTERACTIVE_ELEMENTS = [
-        'a', 'button', 'input', 'select', 'textarea',
-        'audio', 'video', 'iframe', 'embed', 'object',
-    ];
-
-    // Elements that can receive tabindex
-    protected const FOCUSABLE_ROLES = [
-        'button', 'link', 'textbox', 'menuitem', 'tab',
-        'checkbox', 'radio', 'combobox', 'slider',
-    ];
-
-    /**
-     * Skip link text patterns (matched case-insensitive via mb_stripos).
-     * English + German variants — extend for other languages as needed.
-     */
-    protected const SKIP_LINK_PATTERNS = [
-        // English
-        'skip',
-        'jump',
-        'main',
-        // German
-        'überspringen',
-        'zum inhalt',
-        'zum hauptinhalt',
-        'zur navigation',
-        'zum menü',
-        'inhalt springen',
-    ];
-
     protected function inspect(): void
     {
         $this->checkSkipLinks();
-        $this->checkFocusTraps();
-        $this->checkInteractiveElements();
-        $this->checkPositiveTabindex();
+        $this->checkTabindex();
+        $this->checkDialogs();
         $this->checkClickHandlers();
+        $this->checkWidgetRoles();
+        $this->checkAnchors();
+        $this->checkMouseHandlers();
     }
 
     protected function checkSkipLinks(): void
     {
-        // Check if there's a skip link at the beginning of the page
-        foreach ($this->query('//body//a[position() <= 3]') as $link) {
-            $href = $link->getAttribute('href');
-            $text = $this->text($link);
+        if ($this->isFragment()) {
+            return;
+        }
 
-            if (! str_starts_with($href, '#') || $text === '') {
+        $found = false;
+
+        foreach ($this->query('(//a[@href])[position() <= 3]') as $link) {
+            $href = trim($link->getAttribute('href'));
+
+            if (! str_starts_with($href, '#') || ! Text::containsAnyWord($this->name($link), self::SKIP_LINK_PATTERNS)) {
                 continue;
             }
 
-            foreach (self::SKIP_LINK_PATTERNS as $pattern) {
-                // mb_stripos handles umlauts (ü, ö, ä) safely, case-insensitive.
-                if (mb_stripos($text, $pattern) !== false) {
-                    return;
-                }
+            $found = true;
+
+            if (! $this->targetExists(rawurldecode(substr($href, 1)))) {
+                $this->report('skip_link_target_missing', Severity::Error, '2.4.1', $link, ['href' => $href]);
             }
         }
 
-        $this->report('missing_skip_link', Severity::Warning, '2.4.1');
-    }
-
-    protected function checkFocusTraps(): void
-    {
-        // Modals/dialogs without proper focus management
-        foreach ($this->query('//*[@role="dialog" or @role="alertdialog" or contains(@class, "modal")]') as $modal) {
-            if ($modal->getAttribute('aria-modal') !== 'true') {
-                $this->report('dialog_missing_aria_modal', Severity::Error, '2.1.2', $modal);
-            }
-
-            if (! $modal->hasAttribute('aria-label') && ! $modal->hasAttribute('aria-labelledby')) {
-                $this->report('dialog_missing_name', Severity::Error, '4.1.2', $modal);
-            }
+        if (! $found && ! $this->hasMainLandmark()) {
+            $this->report('missing_skip_link', Severity::Notice, '2.4.1');
         }
     }
 
-    protected function checkInteractiveElements(): void
+    protected function checkTabindex(): void
     {
-        foreach (self::INTERACTIVE_ELEMENTS as $tag) {
-            foreach ($this->query('//'.$tag) as $element) {
-                if ($element->hasAttribute('disabled')) {
-                    continue;
-                }
+        foreach ($this->queryVisible('//*[@tabindex]') as $element) {
+            $tabindex = Element::tabindex($element);
 
-                // Negative tabindex on interactive elements removes them from the tab order
-                if ($element->getAttribute('tabindex') === '-1') {
-                    $this->report('negative_tabindex_on_interactive', Severity::Warning, '2.1.1', $element, [
-                        'tag' => Element::tag($element),
-                    ]);
-                }
+            if ($tabindex !== null && $tabindex > 0) {
+                $this->report('positive_tabindex', Severity::Warning, '2.4.3', $element, ['value' => $tabindex]);
 
-                // Check links without href — many modern interactive <a> elements use
-                // tabindex="0" + keyboard handlers and ARE keyboard-accessible.
-                if ($tag === 'a' && ! $element->hasAttribute('href') && ! $this->isKeyboardAccessibleAnchor($element)) {
-                    $this->report('anchor_not_focusable', Severity::Warning, '2.1.1', $element);
-                }
+                continue;
+            }
+
+            if ($tabindex === -1
+                && Element::isNativelyInteractive($element)
+                && Element::tag($element) !== 'iframe'
+                && ! Element::isDisabled($element)
+                && ! Roles::isRoving($element)) {
+                $this->report('negative_tabindex_on_interactive', Severity::Notice, '2.1.1', $element, ['tag' => Element::tag($element)]);
             }
         }
     }
 
-    /**
-     * Is an <a> without href wired up to be keyboard-accessible?
-     * Accept: tabindex="0" + at least one keyboard handler, OR
-     *         tabindex="0" + role="button" (button-styled anchor).
-     */
-    protected function isKeyboardAccessibleAnchor(DOMElement $anchor): bool
+    protected function checkDialogs(): void
     {
-        if ($anchor->getAttribute('tabindex') !== '0') {
-            return false;
-        }
+        foreach ($this->queryVisible('//dialog|//*[@role]') as $element) {
+            $isElement = Element::tag($element) === 'dialog';
+            $role = Roles::effective($element);
 
-        if ($anchor->getAttribute('role') === 'button') {
-            return true;
-        }
+            if (! $isElement && ! in_array($role, ['dialog', 'alertdialog'], true)) {
+                continue;
+            }
 
-        return $anchor->hasAttribute('onkeydown')
-            || $anchor->hasAttribute('onkeyup')
-            || $anchor->hasAttribute('onkeypress');
-    }
+            if ($this->authoredName($element) === '') {
+                $this->report('dialog_missing_name', Severity::Error, '4.1.2', $element);
+            }
 
-    protected function checkPositiveTabindex(): void
-    {
-        // Positive tabindex is generally an anti-pattern
-        foreach ($this->query('//*[@tabindex and @tabindex > 0]') as $element) {
-            $this->report('positive_tabindex', Severity::Warning, '2.4.3', $element, [
-                'value' => (int) $element->getAttribute('tabindex'),
-            ]);
+            if (! $isElement && Element::enumAttr($element, 'aria-modal') !== 'true') {
+                $this->report('dialog_missing_aria_modal', Severity::Warning, '4.1.2', $element);
+            }
         }
     }
 
     protected function checkClickHandlers(): void
     {
-        // Click handlers on non-interactive elements
-        foreach ($this->query('//*[@onclick]') as $element) {
-            if (in_array(Element::tag($element), self::INTERACTIVE_ELEMENTS, true)) {
+        foreach ($this->queryVisible('//*[@onclick]') as $element) {
+            $tag = Element::tag($element);
+
+            if (in_array($tag, self::CLICK_EXEMPT_TAGS, true) || Element::isNativelyInteractive($element)) {
                 continue;
             }
 
-            if (in_array($element->getAttribute('role'), self::FOCUSABLE_ROLES, true)) {
+            $tabindex = Element::tabindex($element);
+            $focusable = $tabindex !== null && $tabindex >= 0;
+
+            if ($focusable && (in_array(Roles::effective($element), ['button', 'link'], true) || $this->hasAny($element, self::KEY_HANDLERS))) {
                 continue;
             }
 
-            // Focusable through tabindex?
-            if ($element->hasAttribute('tabindex') && $element->getAttribute('tabindex') !== '-1') {
+            $delegates = $this->query(self::INTERACTIVE_DESCENDANTS, $element) !== [];
+            $this->report('click_without_keyboard', $delegates ? Severity::Warning : Severity::Error, '2.1.1', $element, ['tag' => $tag]);
+        }
+    }
+
+    protected function checkWidgetRoles(): void
+    {
+        foreach ($this->queryVisible('//*[@role]') as $element) {
+            $role = Roles::effective($element);
+
+            if (! in_array($role, self::WIDGET_ROLES, true)
+                || $element->hasAttribute('tabindex')
+                || $element->hasAttribute('onclick')
+                || Element::isNativelyInteractive($element)
+                || Element::tag($element) === 'a'
+                || Element::enumAttr($element, 'aria-disabled') === 'true'
+                || Roles::isRoving($element)
+                || $this->query('ancestor::*[@aria-activedescendant]', $element) !== []) {
                 continue;
             }
 
-            $this->report('click_without_keyboard', Severity::Error, '2.1.1', $element, [
-                'tag' => Element::tag($element),
-            ]);
+            $this->report('role_without_tabindex', Severity::Warning, '2.1.1', $element, ['role' => $role, 'tag' => Element::tag($element)]);
+        }
+    }
+
+    protected function checkAnchors(): void
+    {
+        foreach ($this->queryVisible('//a[not(@href)]') as $anchor) {
+            $interactive = $this->hasEventHandler($anchor)
+                || in_array(Roles::effective($anchor), ['button', 'link'], true)
+                || $anchor->hasAttribute('tabindex');
+
+            if (! $interactive || Element::isFocusable($anchor) || Roles::isRoving($anchor)) {
+                continue;
+            }
+
+            $this->report('anchor_not_focusable', Severity::Warning, '2.1.1', $anchor);
+        }
+    }
+
+    protected function checkMouseHandlers(): void
+    {
+        foreach ($this->queryVisible(self::MOUSE_QUERY) as $element) {
+            if (Element::isNativelyInteractive($element) || $this->hasAny($element, self::KEYBOARD_EQUIVALENTS)) {
+                continue;
+            }
+
+            $this->report('mouse_only_handler', Severity::Notice, '2.1.1', $element, ['tag' => Element::tag($element)]);
+        }
+    }
+
+    protected function hasMainLandmark(): bool
+    {
+        foreach ($this->query('//main|//*[@role]') as $element) {
+            if (Roles::of($element) === 'main') {
+                return true;
+            }
         }
 
-        // Elements with mouse events but no keyboard equivalent
-        foreach ($this->query('//*[@onmouseover or @onmouseout or @onmousedown or @onmouseup]') as $element) {
-            $hasKeyboardEvents = $element->hasAttribute('onkeydown')
-                || $element->hasAttribute('onkeyup')
-                || $element->hasAttribute('onkeypress')
-                || $element->hasAttribute('onfocus')
-                || $element->hasAttribute('onblur');
+        return false;
+    }
 
-            if (! $hasKeyboardEvents) {
-                $this->report('mouse_only_handler', Severity::Warning, '2.1.1', $element, [
-                    'tag' => Element::tag($element),
-                ]);
+    protected function targetExists(string $id): bool
+    {
+        if ($id === '') {
+            return false;
+        }
+
+        return isset($this->document->elementsById()[$id])
+            || $this->query('//a[@name='.$this->document->xpathLiteral($id).']') !== [];
+    }
+
+    /** @param  list<string>  $attributes */
+    protected function hasAny(DOMElement $element, array $attributes): bool
+    {
+        foreach ($attributes as $attribute) {
+            if ($element->hasAttribute($attribute)) {
+                return true;
             }
         }
+
+        return false;
+    }
+
+    protected function hasEventHandler(DOMElement $element): bool
+    {
+        foreach ($element->attributes as $attribute) {
+            if ($attribute instanceof DOMAttr && str_starts_with(strtolower($attribute->nodeName), 'on')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -115,36 +115,44 @@ return [
     ],
     'keyboard' => [
         'missing_skip_link' => [
-            'message' => 'Kein Sprunglink am Seitenanfang gefunden',
-            'suggestion' => 'Einen Link wie <a href="#main">Zum Hauptinhalt springen</a> als erstes fokussierbares Element ergänzen',
+            'message' => 'Kein main-Landmark und kein Sprunglink am Seitenanfang',
+            'suggestion' => 'Ein <main>-Element oder einen Link wie <a href="#content">Zum Inhalt springen</a> als einen der ersten Links ergänzen',
         ],
-        'dialog_missing_aria_modal' => [
-            'message' => 'Dialog ohne aria-modal="true"',
-            'suggestion' => 'aria-modal="true" ergänzen und den Fokus im geöffneten Dialog steuern',
-        ],
-        'dialog_missing_name' => [
-            'message' => 'Dialog ohne zugänglichen Namen',
-            'suggestion' => 'aria-labelledby auf den Dialogtitel setzen oder aria-label ergänzen',
-        ],
-        'negative_tabindex_on_interactive' => [
-            'message' => 'Interaktives <:tag> aus der Tab-Reihenfolge entfernt (tabindex="-1")',
-            'suggestion' => 'tabindex="-1" entfernen, sofern der Fokus nicht per Script gesteuert wird',
-        ],
-        'anchor_not_focusable' => [
-            'message' => 'Anker ohne href ist nicht per Tastatur erreichbar',
-            'suggestion' => 'href ergänzen oder einen <button> mit Click-Handler verwenden',
+        'skip_link_target_missing' => [
+            'message' => 'Ziel :href des Sprunglinks existiert nicht',
+            'suggestion' => 'Sprunglink auf die id des Hauptinhalts verweisen lassen',
         ],
         'positive_tabindex' => [
             'message' => 'Positiver tabindex (:value) überschreibt die natürliche Fokusreihenfolge',
             'suggestion' => 'tabindex="0" verwenden oder die Elemente im Quelltext umsortieren',
         ],
+        'negative_tabindex_on_interactive' => [
+            'message' => 'Interaktives <:tag> aus der Tab-Reihenfolge entfernt (tabindex="-1")',
+            'suggestion' => 'tabindex="-1" entfernen, sofern der Fokus nicht per Skript verwaltet wird',
+        ],
+        'dialog_missing_name' => [
+            'message' => 'Dialog ohne zugänglichen Namen',
+            'suggestion' => 'aria-labelledby mit Verweis auf den Dialogtitel oder aria-label ergänzen',
+        ],
+        'dialog_missing_aria_modal' => [
+            'message' => 'Dialog-Rolle ohne aria-modal="true"',
+            'suggestion' => 'aria-modal="true" ergänzen und den Fokus im geöffneten Dialog halten oder <dialog> verwenden',
+        ],
         'click_without_keyboard' => [
-            'message' => 'Nicht interaktives <:tag> mit Click-Handler ist nicht per Tastatur bedienbar',
-            'suggestion' => '<button> oder <a> verwenden oder tabindex="0", eine Rolle und einen Tastatur-Handler ergänzen',
+            'message' => '<:tag> mit Klick-Handler ist nicht per Tastatur bedienbar',
+            'suggestion' => '<button> oder <a href> verwenden oder tabindex="0", eine Rolle und einen Tastatur-Handler ergänzen',
+        ],
+        'role_without_tabindex' => [
+            'message' => '<:tag> mit Rolle „:role“ ist nicht fokussierbar',
+            'suggestion' => 'tabindex="0" ergänzen (oder in zusammengesetzten Widgets den Fokus mit tabindex="-1" verwalten) oder das native Element verwenden',
+        ],
+        'anchor_not_focusable' => [
+            'message' => 'Anker ohne href wird als Bedienelement genutzt, ist aber nicht fokussierbar',
+            'suggestion' => 'href ergänzen oder einen <button> mit Klick-Handler verwenden',
         ],
         'mouse_only_handler' => [
-            'message' => '<:tag> hat Maus-Handler, aber kein Tastatur-Äquivalent',
-            'suggestion' => 'onfocus/onblur/onkeydown-Handler passend zu den Maus-Events ergänzen',
+            'message' => '<:tag> hat Maus-Ereignisse, aber keine Tastatur-Entsprechung',
+            'suggestion' => 'onfocus-/onblur-/onkeydown-Handler ergänzen, die den Maus-Ereignissen entsprechen',
         ],
     ],
     'aria' => [

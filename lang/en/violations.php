@@ -115,32 +115,40 @@ return [
     ],
     'keyboard' => [
         'missing_skip_link' => [
-            'message' => 'No skip link found at the beginning of the page',
-            'suggestion' => 'Add a link such as <a href="#main">Skip to main content</a> as the first focusable element',
+            'message' => 'No main landmark and no skip link at the beginning of the page',
+            'suggestion' => 'Add a <main> element, or a link such as <a href="#content">Skip to main content</a> as one of the first links',
         ],
-        'dialog_missing_aria_modal' => [
-            'message' => 'Dialog without aria-modal="true"',
-            'suggestion' => 'Add aria-modal="true" and manage focus while the dialog is open',
-        ],
-        'dialog_missing_name' => [
-            'message' => 'Dialog without accessible name',
-            'suggestion' => 'Add aria-labelledby pointing to the dialog title, or aria-label',
-        ],
-        'negative_tabindex_on_interactive' => [
-            'message' => 'Interactive <:tag> removed from the tab order (tabindex="-1")',
-            'suggestion' => 'Remove tabindex="-1" unless focus is managed by a script',
-        ],
-        'anchor_not_focusable' => [
-            'message' => 'Anchor without href is not keyboard accessible',
-            'suggestion' => 'Add an href, or use a <button> with a click handler',
+        'skip_link_target_missing' => [
+            'message' => 'Skip link target :href does not exist',
+            'suggestion' => 'Point the skip link to the id of the main content container',
         ],
         'positive_tabindex' => [
             'message' => 'Positive tabindex (:value) overrides the natural focus order',
             'suggestion' => 'Use tabindex="0" or reorder the elements in the source',
         ],
+        'negative_tabindex_on_interactive' => [
+            'message' => 'Interactive <:tag> removed from the tab order (tabindex="-1")',
+            'suggestion' => 'Remove tabindex="-1" unless focus is managed by a script',
+        ],
+        'dialog_missing_name' => [
+            'message' => 'Dialog without accessible name',
+            'suggestion' => 'Add aria-labelledby pointing to the dialog title, or aria-label',
+        ],
+        'dialog_missing_aria_modal' => [
+            'message' => 'Dialog role without aria-modal="true"',
+            'suggestion' => 'Add aria-modal="true" and keep focus inside the dialog while it is open, or use <dialog>',
+        ],
         'click_without_keyboard' => [
-            'message' => 'Non-interactive <:tag> with click handler is not keyboard accessible',
-            'suggestion' => 'Use a <button> or <a>, or add tabindex="0", a role and a keyboard handler',
+            'message' => '<:tag> with click handler is not operable by keyboard',
+            'suggestion' => 'Use a <button> or <a href>, or add tabindex="0", a role and a keyboard handler',
+        ],
+        'role_without_tabindex' => [
+            'message' => '<:tag> with role ":role" is not focusable',
+            'suggestion' => 'Add tabindex="0" (or manage focus with tabindex="-1" in composite widgets), or use the native element',
+        ],
+        'anchor_not_focusable' => [
+            'message' => 'Anchor without href is used as a control but cannot receive focus',
+            'suggestion' => 'Add an href, or use a <button> with a click handler',
         ],
         'mouse_only_handler' => [
             'message' => '<:tag> has mouse event handlers but no keyboard equivalent',
