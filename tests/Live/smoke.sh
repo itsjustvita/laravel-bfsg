@@ -199,6 +199,15 @@ if echo "$LOG_RUN" | grep 'BFSG: ' | grep -q 'images.missing_alt'; then fail "mi
 if echo "$LOG_RUN" | grep -q 'BFSG: [0-9]* violations on http://localhost'; then fail "middleware: analyzed an in-process request of bfsg:check"; fi
 pass "middleware: terminate() stores broken and clean pages, logs counts only, skips in-process checks"
 
+# 7c. Blade component: bare <img> with its attributes once, <figure> only with a caption, no redundant role,
+#     and the page passes the package's own analyzers
+curl -s "$BASE/live/component" >"$WORK/component.html"
+grep -q '<img src="/lake.jpg" alt="Mountain lake at sunrise" class="rounded" width="300" id="bfsg-plain">' "$WORK/component.html" || { grep -n '<img\|<figure' "$WORK/component.html"; fail "component: plain image not rendered as a bare <img>"; }
+[ "$(grep -c '<figure' "$WORK/component.html")" = "1" ] || fail "component: expected exactly one <figure> (the captioned image)"
+if grep -q 'role="presentation"' "$WORK/component.html"; then fail "component: decorative image carries a redundant role"; fi
+check component 0 /live/component --fail-on=notice
+pass "Blade component renders clean markup that passes the package's own analyzers"
+
 # 8. MCP server over stdio: snake_case tools with annotations, current version, analyze_url of an app path in-process
 cat >"$WORK/mcp.in" <<'JSON'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"bfsg-live","version":"1"}}}

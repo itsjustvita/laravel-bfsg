@@ -9,6 +9,7 @@ Route::get('/', fn () => view('welcome'));
 Route::middleware('bfsg')->prefix('live')->group(function () {
     Route::view('/accessible', 'bfsg-live.accessible');
     Route::view('/broken', 'bfsg-live.broken');
+    Route::view('/component', 'bfsg-live.component');
     Route::get('/json', fn () => response()->json(['ok' => true, 'items' => [1, 2, 3]]));
     Route::get('/download', function () {
         $path = storage_path('app/bfsg-live-download.txt');

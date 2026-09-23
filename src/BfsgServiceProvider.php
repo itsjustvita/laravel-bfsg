@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg;
 
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\ServiceProvider;
 use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgHistoryCommand;
@@ -91,10 +92,8 @@ class BfsgServiceProvider extends ServiceProvider
         // Register the middleware alias
         $this->app['router']->aliasMiddleware('bfsg', CheckAccessibility::class);
 
-        // Register Blade components
-        $this->loadViewComponentsAs('bfsg', [
-            AccessibleImage::class,
-        ]);
+        // <x-bfsg-accessible-image>
+        Blade::component('bfsg-accessible-image', AccessibleImage::class);
 
         // Auto-register MCP tools with Laravel Boost if available
         if (class_exists(BoostServiceProvider::class) && $this->mcpAvailable()) {

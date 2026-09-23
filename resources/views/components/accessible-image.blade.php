@@ -1,18 +1,12 @@
-<figure {{ $attributes->class('bfsg-image') }}>
-    <img 
-        src="{{ $src }}"
-        @if($decorative)
-            alt=""
-            role="presentation"
-        @else
-            alt="{{ $alt }}"
-        @endif
-        @if($loading)
-            loading="{{ $loading }}"
-        @endif
-        {{ $attributes->except('class') }}
-    >
-    @if($caption)
-        <figcaption>{{ $caption }}</figcaption>
-    @endif
+@php
+    $extra = trim(($decorative ? 'aria-hidden="true" ' : '').($loading !== null ? 'loading="'.e($loading).'" ' : '').$attributes->toHtml());
+    $img = '<img src="'.e($src).'" alt="'.e($decorative ? '' : $alt).'"'.($extra === '' ? '' : ' '.$extra).'>';
+@endphp
+@if($hasCaption())
+<figure>
+    {!! $img !!}
+    <figcaption>{{ $caption }}</figcaption>
 </figure>
+@else
+{!! $img !!}
+@endif
