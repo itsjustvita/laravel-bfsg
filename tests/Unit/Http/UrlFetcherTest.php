@@ -459,4 +459,23 @@ class UrlFetcherTest extends TestCase
         $this->assertSame($store, app('session')->driver());
         $this->assertSame('kept', session('outer'));
     }
+
+    public function test_repeated_in_process_fetches_do_not_grow_the_request_rebinding_callbacks(): void
+    {
+        config()->set('app.key', 'base64:'.base64_encode(str_repeat('k', 32)));
+        $this->app['router']->middleware('web')->get('/who', fn () => response('<html><body>'.(auth()->check() ? 'IN' : 'GUEST').'</body></html>'));
+        $count = fn () => (fn () => count($this->reboundCallbacks['request'] ?? []))->call($this->app);
+        auth()->guard(); // the caller's guard (and its callback) exists before the fetches
+        // A service first resolved by a fetch keeps its callback, once (the URL generator's; it must follow the request)
+        $this->fetcher()->fetch('/who');
+        $before = $count();
+
+        for ($i = 0; $i < 20; $i++) {
+            $this->fetcher()->fetch('/who', new FetchOptions(actingAs: $i % 2 === 0 ? new GenericUser(['id' => $i + 1]) : null));
+        }
+
+        $this->assertSame($before, $count(), 'a long-running MCP server must not collect one callback per fetch');
+        $this->assertStringContainsString('GUEST', $this->fetcher()->fetch('/who')->html);
+        $this->assertSame('http://localhost/x', url('/x'));
+    }
 }

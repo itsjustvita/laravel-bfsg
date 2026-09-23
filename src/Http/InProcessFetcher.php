@@ -2,11 +2,14 @@
 
 namespace ItsJustVita\LaravelBfsg\Http;
 
+use Closure;
 use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Contracts\Auth\Guard;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Facade;
+use ReflectionFunction;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -45,6 +48,7 @@ class InProcessFetcher
         $previousRequest = $this->app->bound('request') ? $this->app->make('request') : null;
         $previousGuard = $auth->getDefaultDriver();
         $previous = $this->snapshot();
+        $rebindings = $this->requestRebindings();
         $this->reset();
 
         try {
@@ -68,6 +72,7 @@ class InProcessFetcher
             $this->reset();
             $auth->shouldUse($previousGuard);
             $this->restore($previous);
+            $this->trimRequestRebindings($rebindings);
 
             if ($previousRequest !== null) {
                 $this->app->instance('request', $previousRequest);
@@ -109,6 +114,41 @@ class InProcessFetcher
         if ($previous['store'] !== null) {
             $this->app->instance('session.store', $previous['store']);
         }
+    }
+
+    /**
+     * Number of `request` rebinding callbacks the container holds. Every guard the fetch creates registers one
+     * (AuthManager: `$app->refresh('request', $guard, 'setRequest')`), so a long-running process such as the MCP
+     * server would otherwise collect one per fetch, each keeping a discarded guard (and its user) alive.
+     */
+    private function requestRebindings(): int
+    {
+        return (fn () => count($this->reboundCallbacks['request'] ?? []))->call($this->app);
+    }
+
+    /**
+     * Drop the `request` rebinding callbacks the fetch registered for its own guards (discarded by restore()), keeping
+     * the caller's first $count and any other callback registered meanwhile (e.g. by a singleton resolved for the
+     * first time during the fetch, which must keep following the current request).
+     */
+    private function trimRequestRebindings(int $count): void
+    {
+        (function (int $count) {
+            $callbacks = $this->reboundCallbacks['request'] ?? [];
+            $kept = array_slice($callbacks, 0, $count);
+
+            foreach (array_slice($callbacks, $count) as $callback) {
+                $target = $callback instanceof Closure ? ((new ReflectionFunction($callback))->getClosureUsedVariables()['target'] ?? null) : null;
+
+                if (! $target instanceof Guard) {
+                    $kept[] = $callback;
+                }
+            }
+
+            if ($callbacks !== []) {
+                $this->reboundCallbacks['request'] = $kept;
+            }
+        })->call($this->app, $count);
     }
 
     /** Forget resolved guards (and their users) and start from a fresh session store. */
