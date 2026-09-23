@@ -37,11 +37,19 @@ final class Element
 
     /**
      * outerHTML, whitespace-collapsed and truncated to $max characters. Serialization stops once enough markup
-     * exists for the snippet, so a finding on <html> or <body> does not serialize the whole page.
+     * exists for the snippet, so a finding on <html> or <body> does not serialize the whole page; a cut snippet
+     * always ends with "…" and closes no element after the cut.
      */
     public static function snippet(DOMElement $element, int $max = 120): string
     {
-        return Text::truncate(Text::normalize(self::boundedHtml($element, $max * 4)), $max);
+        $truncated = false;
+        $html = Text::normalize(self::boundedHtml($element, $max * 4, $truncated));
+
+        if (! $truncated) {
+            return Text::truncate($html, $max);
+        }
+
+        return mb_strlen($html) < $max ? $html.'…' : mb_strimwidth($html, 0, $max, '…', 'UTF-8');
     }
 
     /** @param  string[]  $tokens  class tokens, compared case-insensitively */
@@ -210,8 +218,11 @@ final class Element
         return null;
     }
 
-    /** Serialize a node like saveHTML(), but stop descending once $budget bytes are written (unclosed then). */
-    private static function boundedHtml(DOMNode $node, int $budget): string
+    /**
+     * Serialize a node like saveHTML(), but stop once $budget bytes are written: $truncated is then set and
+     * neither the cut element nor any of its ancestors emits more content or a closing tag.
+     */
+    private static function boundedHtml(DOMNode $node, int $budget, bool &$truncated): string
     {
         $document = $node->ownerDocument;
 
@@ -229,13 +240,17 @@ final class Element
 
         foreach ($node->childNodes as $child) {
             if (strlen($html) >= $budget) {
+                $truncated = true;
+            }
+
+            if ($truncated) {
                 return $html;
             }
 
-            $html .= self::boundedHtml($child, $budget - strlen($html));
+            $html .= self::boundedHtml($child, $budget - strlen($html), $truncated);
         }
 
-        return $html.$close;
+        return $truncated ? $html : $html.$close;
     }
 
     public static function isElement(?DOMNode $node): bool

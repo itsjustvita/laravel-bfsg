@@ -19,7 +19,7 @@ final class HtmlDocument
      * Comments and raw-text elements (script, style, textarea, title, xmp) are matched first and kept verbatim, so
      * a "<source" inside JavaScript, CSS or a comment is never touched.
      */
-    private const UNKNOWN_VOID_ELEMENTS = '~<!--.*?-->|<(script|style|textarea|title|xmp)\b[^>]*>.*?</\1\s*>|<(track|source|wbr|embed|keygen)\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\2\s*>)~is';
+    private const UNKNOWN_VOID_ELEMENTS = '~<!--.*?-->|<(script|style|textarea|title|xmp)(?![\w-])[^>]*>.*?</\1\s*>|<(track|source|wbr|embed|keygen)(?![\w-])(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\2\s*>)~is';
 
     private ?DOMXPath $xpath = null;
 

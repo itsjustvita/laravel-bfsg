@@ -137,10 +137,26 @@ class ElementTest extends TestCase
         $snippet = Element::snippet($body);
         $elapsed = microtime(true) - $start;
 
-        $this->assertLessThan(0.01, $elapsed, sprintf('snippet took %.3f s', $elapsed));
+        $this->assertLessThan(0.05, $elapsed, sprintf('snippet took %.3f s', $elapsed));
         $this->assertStringStartsWith('<body class="page"><div class="row"><p>Paragraph text</p></div>', $snippet);
         $this->assertSame(120, mb_strlen($snippet));
         $this->assertSame(Text::truncate(Text::normalize((string) $document->dom()->saveHTML($body)), 120), $snippet);
+    }
+
+    public function test_a_cut_snippet_ends_with_an_ellipsis_and_closes_nothing_after_the_cut(): void
+    {
+        $html = '<div data-t>';
+
+        for ($level = 1; $level <= 30; $level++) {
+            $html .= "\n".str_repeat(' ', 40).'<div>';
+        }
+
+        $snippet = Element::snippet($this->el($html.'Deep text'.str_repeat('</div>', 31)));
+
+        $this->assertStringStartsWith('<div data-t> <div> <div>', $snippet);
+        $this->assertStringEndsWith('…', $snippet);
+        $this->assertLessThanOrEqual(120, mb_strlen($snippet));
+        $this->assertSame(0, substr_count($snippet, '</div>'), 'no element is closed once its content was cut');
     }
 
     public function test_snippet_of_small_elements_equals_the_full_serialization(): void

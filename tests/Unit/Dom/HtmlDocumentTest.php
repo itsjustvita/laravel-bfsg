@@ -209,4 +209,14 @@ class HtmlDocumentTest extends TestCase
         $this->assertSame('video', $byId['t']->parentNode->nodeName);
         $this->assertSame('body', $byId['after']->parentNode->nodeName);
     }
+
+    public function test_custom_elements_named_like_raw_text_elements_are_not_raw_text(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body><script-loader><video id="v"><source id="s" src="a.webm"><track id="t" kind="captions"></video></script-loader>'
+            .'<style-guide><p id="p">x</p></style-guide><script>var x = 1;</script><style>p { color: red }</style></body></html>');
+        $byId = $doc->elementsById();
+
+        $this->assertSame('video', $byId['t']->parentNode->nodeName, 'the source inside <script-loader> is closed');
+        $this->assertSame('video', $byId['s']->parentNode->nodeName);
+    }
 }
