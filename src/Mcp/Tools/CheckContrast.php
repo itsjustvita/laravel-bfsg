@@ -10,6 +10,8 @@ use Laravel\Mcp\Server\Tool;
 
 class CheckContrast extends Tool
 {
+    protected string $name = 'check_contrast';
+
     protected string $description = 'Check the contrast ratio between a foreground and background color. Returns ratio and WCAG AA/AAA pass/fail for normal and large text.';
 
     public function schema(JsonSchema $schema): array

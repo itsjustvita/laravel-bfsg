@@ -14,6 +14,8 @@ use Laravel\Mcp\Server\Tool;
 
 class GenerateReport extends Tool
 {
+    protected string $name = 'generate_report';
+
     protected string $description = 'Analyze a URL and generate a formatted accessibility report. Supports json, html, markdown, and pdf formats. Optionally saves results to database.';
 
     public function schema(JsonSchema $schema): array

@@ -32,13 +32,13 @@
   },
   "require-dev": {
     "barryvdh/laravel-dompdf": "^3.0",
-    "laravel/mcp": "^0.6.4",
+    "laravel/mcp": "^0.6.4 || ^1.0",
     "laravel/pint": "^1.0",
     "orchestra/testbench": "^10.0 || ^11.0",
     "phpunit/phpunit": "^11.5 || ^12.0"
   },
   "suggest": {
-    "laravel/mcp": "Required for the MCP server and the bfsg:mcp-server command (^0.6.4)",
+    "laravel/mcp": "Required for the MCP server and the bfsg:mcp-server command (^0.6.4 || ^1.0)",
     "barryvdh/laravel-dompdf": "Required for PDF report generation (^3.0)",
     "pestphp/pest-plugin-browser": "Required for browser-based accessibility testing of SPAs (^0.1)"
   },

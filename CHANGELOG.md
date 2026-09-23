@@ -46,6 +46,8 @@ Phases 1 (foundation) and 2 (analyzer round) of v3. See UPGRADE.md (written in P
 
 ### Fixed
 - Installs in a fresh Laravel 13 app without downgrading Guzzle: the unused direct `guzzlehttp/guzzle ^7.8` requirement is gone (HTTP goes through `illuminate/http`, which allows Guzzle 7 and 8). Install the branch as `itsjustvita/laravel-bfsg:3.x-dev` (Composer normalises branch `v3` to `3.x-dev`; `dev-v3` does not resolve).
+- `bfsg:mcp-server` works with laravel/mcp 1.x (it crashed with a `StdioTransport` TypeError): the command starts the server through laravel/mcp's `Registrar` (handle `bfsg`), which builds the stdio transport for the installed version. Supported: `laravel/mcp ^0.6.4 || ^1.0`.
+- MCP tools carry the documented snake_case names (`analyze_html`, `analyze_url`, `check_contrast`, `list_analyzers`, `get_history`, `get_report`, `generate_report`); they were exposed as kebab-case (`analyze-html`, …) before.
 
 ## [2.2.4] - 2026-09-18
 

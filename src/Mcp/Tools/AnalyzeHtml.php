@@ -11,6 +11,8 @@ use Laravel\Mcp\Server\Tool;
 
 class AnalyzeHtml extends Tool
 {
+    protected string $name = 'analyze_html';
+
     protected string $description = 'Analyze raw HTML for WCAG/BFSG accessibility violations. Returns violations grouped by analyzer, compliance score (0-100), and letter grade (A+ to F).';
 
     public function schema(JsonSchema $schema): array

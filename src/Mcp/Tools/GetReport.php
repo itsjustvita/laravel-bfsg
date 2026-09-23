@@ -12,6 +12,8 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 #[IsReadOnly]
 class GetReport extends Tool
 {
+    protected string $name = 'get_report';
+
     protected string $description = 'Get a single stored accessibility report with all its violations.';
 
     public function schema(JsonSchema $schema): array

@@ -12,6 +12,8 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 #[IsReadOnly]
 class ListAnalyzers extends Tool
 {
+    protected string $name = 'list_analyzers';
+
     protected string $description = 'List every available BFSG/WCAG accessibility analyzer with its WCAG rules and enabled/disabled status.';
 
     public function schema(JsonSchema $schema): array

@@ -194,7 +194,7 @@ Laravel BFSG includes a built-in MCP (Model Context Protocol) server that allows
 
 ### Setup
 
-Start the MCP server:
+The MCP server needs `laravel/mcp` (`composer require laravel/mcp`; 0.6.4+ and 1.x are supported). Start it:
 
 ```bash
 php artisan bfsg:mcp-server
@@ -213,6 +213,8 @@ Add to your Claude Code MCP configuration (`.claude/settings.json` or project se
   }
 }
 ```
+
+`bfsg:mcp-server` registers the server with laravel/mcp's local-server registry under the handle `bfsg`, so `Mcp::local('bfsg', \ItsJustVita\LaravelBfsg\Mcp\BfsgMcpServer::class)` in `routes/ai.php` plus `php artisan mcp:start bfsg` works as well.
 
 ### Available Tools
 

@@ -12,6 +12,8 @@ use Laravel\Mcp\Server\Tool;
 
 class AnalyzeUrl extends Tool
 {
+    protected string $name = 'analyze_url';
+
     protected string $description = 'Fetch a URL and analyze its HTML for WCAG/BFSG accessibility violations.';
 
     public function schema(JsonSchema $schema): array

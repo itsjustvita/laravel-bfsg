@@ -12,6 +12,8 @@ use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 #[IsReadOnly]
 class GetHistory extends Tool
 {
+    protected string $name = 'get_history';
+
     protected string $description = 'Retrieve stored accessibility check reports from the database. Optionally filter by URL.';
 
     public function schema(JsonSchema $schema): array
