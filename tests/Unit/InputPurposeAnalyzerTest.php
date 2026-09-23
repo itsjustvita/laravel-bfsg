@@ -86,4 +86,17 @@ class InputPurposeAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<form><input type="email" name="email" autocomplete="email"><input name="vorname" autocomplete="given-name"><input name="search"></form>'));
     }
+
+    public function test_names_of_things_other_than_people_are_not_personal(): void
+    {
+        $violations = $this->analyze('<form><input name="product_name"><input name="category[name]"><input name="file-name"><input name="projekt_name">'
+            .'<input name="first_name"><input name="contact_name"><input name="name"></form>');
+
+        $this->assertSame(['first_name', 'contact_name', 'name'], array_map(fn ($v) => $v->params['name'], $violations));
+    }
+
+    public function test_search_fields_are_never_personal(): void
+    {
+        $this->assertSame([], $this->analyze('<form role="search"><input name="name"></form><search><input name="email"></search><input type="search" name="city">'));
+    }
 }

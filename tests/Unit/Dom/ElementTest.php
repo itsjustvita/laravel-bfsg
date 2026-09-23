@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit\Dom;
 use DOMElement;
 use ItsJustVita\LaravelBfsg\Dom\Element;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Dom\Text;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class ElementTest extends TestCase
@@ -125,5 +126,39 @@ class ElementTest extends TestCase
     {
         $this->assertSame(['a', 'b', 'c'], Element::idrefs($this->el("<p data-t aria-describedby=\" a\tb\n c \">x</p>"), 'aria-describedby'));
         $this->assertSame([], Element::idrefs($this->el('<p data-t>x</p>'), 'aria-describedby'));
+    }
+
+    public function test_snippet_stops_serializing_large_subtrees(): void
+    {
+        $document = HtmlDocument::fromHtml('<html lang="en"><body class="page">'.str_repeat('<div class="row"><p>Paragraph text</p></div>', 60000).'</body></html>');
+        $body = $document->body();
+
+        $start = microtime(true);
+        $snippet = Element::snippet($body);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(0.01, $elapsed, sprintf('snippet took %.3f s', $elapsed));
+        $this->assertStringStartsWith('<body class="page"><div class="row"><p>Paragraph text</p></div>', $snippet);
+        $this->assertSame(120, mb_strlen($snippet));
+        $this->assertSame(Text::truncate(Text::normalize((string) $document->dom()->saveHTML($body)), 120), $snippet);
+    }
+
+    public function test_snippet_of_small_elements_equals_the_full_serialization(): void
+    {
+        foreach (['<img data-t src="a.jpg" alt="">', '<input data-t type="checkbox" checked disabled>', '<p data-t>a &amp; b <br> c</p>', '<a data-t href="/x?a=1&amp;b=2">x</a>', '<table data-t><tr><td>1</td></tr></table>'] as $html) {
+            $element = $this->el($html);
+
+            $this->assertSame(Text::truncate(Text::normalize((string) $element->ownerDocument->saveHTML($element)), 120), Element::snippet($element), $html);
+        }
+    }
+
+    public function test_has_any_class_token_is_case_insensitive_and_whole_token(): void
+    {
+        $element = $this->el('<div data-t class="Alert  alert-success">x</div>');
+
+        $this->assertTrue(Element::hasAnyClassToken($element, ['toast', 'alert']));
+        $this->assertTrue(Element::hasAnyClassToken($element, ['ALERT-SUCCESS']));
+        $this->assertFalse(Element::hasAnyClassToken($element, ['success', 'aler']));
+        $this->assertFalse(Element::hasAnyClassToken($this->el('<div data-t>x</div>'), ['alert']));
     }
 }

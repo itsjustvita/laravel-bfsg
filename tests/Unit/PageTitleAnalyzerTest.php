@@ -50,8 +50,16 @@ class PageTitleAnalyzerTest extends AnalyzerTestCase
 
     public function test_generic_titles_en_and_de(): void
     {
-        foreach (['Home', 'Startseite', 'Willkommen!', 'Home | Acme', 'Startseite – Firma', 'UNTITLED DOCUMENT'] as $title) {
+        foreach (['Home', 'Startseite', 'Willkommen!', 'UNTITLED DOCUMENT', 'Home | Welcome', 'Startseite - Willkommen'] as $title) {
             $violation = $this->assertHasViolation($this->analyze($this->titled($title)), 'page_title.generic_title', severity: Severity::Warning);
+            $this->assertSame(['title' => $title], $violation->params, $title);
+        }
+    }
+
+    public function test_a_generic_page_segment_next_to_the_site_name_is_a_notice(): void
+    {
+        foreach (['Home | Acme', 'Startseite – Firma'] as $title) {
+            $violation = $this->assertHasViolation($this->analyze($this->titled($title)), 'page_title.generic_title', element: 'title', severity: Severity::Notice);
             $this->assertSame(['title' => $title], $violation->params, $title);
         }
     }

@@ -62,26 +62,38 @@ class PageTitleAnalyzer extends BaseAnalyzer
             $this->report('short_title', Severity::Warning, '2.4.2', $title, ['length' => $length]);
         } elseif ($this->isGeneric($text)) {
             $this->report('generic_title', Severity::Warning, '2.4.2', $title, ['title' => $text]);
+        } elseif ($this->hasGenericPageSegment($text)) {
+            $this->report('generic_title', Severity::Notice, '2.4.2', $title, ['title' => $text]);
         } elseif ($length > self::MAX_LENGTH) {
             $this->report('long_title', Severity::Notice, '2.4.2', $title, ['length' => $length]);
         }
     }
 
-    /** The whole title, or — for titles of at most two words — its first segment before | - – — is generic. */
+    /** The whole title is generic, or every segment between | - – — is ("Home | Welcome"). */
     protected function isGeneric(string $title): bool
     {
-        $candidates = [$title];
+        $segments = $this->segments($title);
 
-        if (preg_match_all('/[\pL\pN]+/u', $title) <= 2) {
-            $candidates[] = preg_split('/\s*[|\-–—]\s*/u', $title)[0] ?? $title;
-        }
+        return $this->generic($title) || ($segments !== [] && array_filter($segments, fn (string $segment) => ! $this->generic($segment)) === []);
+    }
 
-        foreach ($candidates as $candidate) {
-            if (in_array(Text::lower(Text::stripTrailingPunctuation(Text::normalize($candidate))), self::GENERIC_TITLES, true)) {
-                return true;
-            }
-        }
+    /**
+     * A title of at most two words whose first segment is generic but whose other segment names the site
+     * ("Home | Acme", "Startseite – Firma"): it identifies the home page of a site, so it is only a notice.
+     */
+    protected function hasGenericPageSegment(string $title): bool
+    {
+        return preg_match_all('/[\pL\pN]+/u', $title) <= 2 && $this->generic($this->segments($title)[0] ?? $title);
+    }
 
-        return false;
+    /** @return list<string> */
+    protected function segments(string $title): array
+    {
+        return array_values(array_filter(array_map('trim', preg_split('/\s*[|\-–—]\s*/u', $title) ?: []), fn (string $segment) => $segment !== ''));
+    }
+
+    protected function generic(string $text): bool
+    {
+        return in_array(Text::lower(Text::stripTrailingPunctuation(Text::normalize($text))), self::GENERIC_TITLES, true);
     }
 }

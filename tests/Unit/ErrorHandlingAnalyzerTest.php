@@ -37,6 +37,12 @@ class ErrorHandlingAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($violations, 'error_handling.no_error_strategy', element: 'form#f');
     }
 
+    public function test_hidden_formnovalidate_controls_do_not_count_as_bypass(): void
+    {
+        $this->assertSame([], $this->analyze('<form><input type="email" name="e" aria-label="E-Mail"><button formnovalidate hidden>Draft</button>'
+            .'<div style="display:none"><button formnovalidate>Skip</button></div></form>'));
+    }
+
     public function test_forms_without_validated_fields_are_not_reported(): void
     {
         $this->assertSame([], $this->analyze('<form novalidate><input type="text" name="q"><input type="hidden" name="t" required></form>'));

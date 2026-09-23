@@ -121,7 +121,7 @@ class AriaAnalyzerTest extends AnalyzerTestCase
 
         $violations = $this->analyze($html);
 
-        $violation = $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'div#multi', severity: Severity::Error);
+        $violation = $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'div#multi', severity: Severity::Warning);
         $this->assertSame('1.3.1', $violation->rule);
         $this->assertSame(['4.1.2'], $violation->related);
         $this->assertSame(['attribute' => 'aria-describedby', 'id' => 'gone'], $violation->params);
@@ -174,5 +174,16 @@ class AriaAnalyzerTest extends AnalyzerTestCase
 
         $this->assertHasViolation($violations, 'aria.hidden_focusable', element: 'button#open');
         $this->assertViolationCount($violations, 'aria.hidden_focusable', 1);
+    }
+
+    public function test_dangling_naming_references_are_errors_and_description_references_warnings(): void
+    {
+        $violations = $this->analyze('<input id="a" aria-labelledby="gone"><input id="b" aria-describedby="email-error">'
+            .'<div id="c" role="listbox" tabindex="0" aria-label="Options" aria-activedescendant="opt-9"></div><input id="d" aria-describedby="x" aria-labelledby="y">');
+
+        $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'input#a', severity: Severity::Error);
+        $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'input#b', severity: Severity::Warning);
+        $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'div#c', severity: Severity::Error);
+        $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'input#d', severity: Severity::Error);
     }
 }

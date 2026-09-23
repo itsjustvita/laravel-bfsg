@@ -194,4 +194,19 @@ class HtmlDocumentTest extends TestCase
         $this->assertNotSame($document->cssParser(), $other->cssParser());
         $this->assertSame(['p'], array_column($document->cssParser()->rules(), 'selector'));
     }
+
+    public function test_void_element_closing_leaves_scripts_styles_and_comments_alone(): void
+    {
+        $script = 'var html = "<source src=a.mp4><track kind=captions>";';
+        $doc = HtmlDocument::fromHtml('<html><head><style>/* <wbr> */ .x { content: "<embed>" }</style></head><body>'
+            .'<!-- <source src="old.mp4"> --><script>'.$script.'</script>'
+            .'<video id="v"><source id="s" src="a.webm"><track id="t" kind="captions"></video><p id="after">x</p></body></html>');
+        $byId = $doc->elementsById();
+
+        $this->assertSame($script, $doc->query('//script')[0]->textContent);
+        $this->assertSame('/* <wbr> */ .x { content: "<embed>" }', $doc->styleSheets()[0]);
+        $this->assertSame(' <source src="old.mp4"> ', $doc->xpath()->query('//comment()')->item(0)->nodeValue);
+        $this->assertSame('video', $byId['t']->parentNode->nodeName);
+        $this->assertSame('body', $byId['after']->parentNode->nodeName);
+    }
 }

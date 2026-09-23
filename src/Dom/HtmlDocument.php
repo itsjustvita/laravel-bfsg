@@ -14,8 +14,12 @@ final class HtmlDocument
 {
     private const ENCODING_HINT = '<?xml encoding="UTF-8">';
 
-    /** HTML5 void elements unknown to libxml's HTML parser: without an end tag they swallow their following siblings. */
-    private const UNKNOWN_VOID_ELEMENTS = '~<(track|source|wbr|embed|keygen)\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\1\s*>)~i';
+    /**
+     * HTML5 void elements unknown to libxml's HTML parser: without an end tag they swallow their following siblings.
+     * Comments and raw-text elements (script, style, textarea, title, xmp) are matched first and kept verbatim, so
+     * a "<source" inside JavaScript, CSS or a comment is never touched.
+     */
+    private const UNKNOWN_VOID_ELEMENTS = '~<!--.*?-->|<(script|style|textarea|title|xmp)\b[^>]*>.*?</\1\s*>|<(track|source|wbr|embed|keygen)\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\2\s*>)~is';
 
     private ?DOMXPath $xpath = null;
 
@@ -336,7 +340,12 @@ final class HtmlDocument
 
     private static function closeUnknownVoidElements(string $html): string
     {
-        return preg_replace_callback(self::UNKNOWN_VOID_ELEMENTS, fn (array $m) => $m[0].'</'.$m[1].'>', $html) ?? $html;
+        return preg_replace_callback(
+            self::UNKNOWN_VOID_ELEMENTS,
+            fn (array $m) => ($m[2] ?? null) === null ? $m[0] : $m[0].'</'.$m[2].'>',
+            $html,
+            flags: PREG_UNMATCHED_AS_NULL,
+        ) ?? $html;
     }
 
     private static function needsEncodingHint(string $html): bool

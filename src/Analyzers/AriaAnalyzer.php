@@ -15,6 +15,9 @@ class AriaAnalyzer extends BaseAnalyzer
         'aria-activedescendant', 'aria-errormessage', 'aria-details', 'aria-flowto',
     ];
 
+    /** References that name an element or point at its active descendant: a dangling one is a definite failure. */
+    private const NAMING_IDREF_ATTRIBUTES = ['aria-labelledby', 'aria-activedescendant'];
+
     private const IDREF_QUERY = '//*[@aria-labelledby or @aria-describedby or @aria-controls or @aria-owns or @aria-activedescendant or @aria-errormessage or @aria-details or @aria-flowto]';
 
     private const STATES = ['aria-checked', 'aria-selected', 'aria-pressed', 'aria-expanded', 'aria-valuenow'];
@@ -142,7 +145,11 @@ class AriaAnalyzer extends BaseAnalyzer
         }
     }
 
-    /** One finding per element: the first dangling reference is the parameter, all of them go into meta. */
+    /**
+     * One finding per element: the first dangling reference is the parameter, all of them go into meta. An error when
+     * a naming reference dangles; a warning when only descriptions, error messages, details, controls, owns or flowto
+     * do — Blade's @error pattern references the message element before validation has rendered it.
+     */
     protected function checkIdReferences(): void
     {
         $byId = $this->document->elementsById();
@@ -159,7 +166,8 @@ class AriaAnalyzer extends BaseAnalyzer
             }
 
             if ($dangling !== []) {
-                $this->report('dangling_idref', Severity::Error, '1.3.1', $element, $dangling[0], ['references' => $dangling], related: ['4.1.2']);
+                $naming = array_filter($dangling, fn (array $reference) => in_array($reference['attribute'], self::NAMING_IDREF_ATTRIBUTES, true)) !== [];
+                $this->report('dangling_idref', $naming ? Severity::Error : Severity::Warning, '1.3.1', $element, $dangling[0], ['references' => $dangling], related: ['4.1.2']);
             }
         }
     }

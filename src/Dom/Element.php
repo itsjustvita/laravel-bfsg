@@ -35,11 +35,19 @@ final class Element
         return $description;
     }
 
+    /**
+     * outerHTML, whitespace-collapsed and truncated to $max characters. Serialization stops once enough markup
+     * exists for the snippet, so a finding on <html> or <body> does not serialize the whole page.
+     */
     public static function snippet(DOMElement $element, int $max = 120): string
     {
-        $html = $element->ownerDocument?->saveHTML($element) ?: '';
+        return Text::truncate(Text::normalize(self::boundedHtml($element, $max * 4)), $max);
+    }
 
-        return Text::truncate(Text::normalize($html), $max);
+    /** @param  string[]  $tokens  class tokens, compared case-insensitively */
+    public static function hasAnyClassToken(DOMElement $element, array $tokens): bool
+    {
+        return array_intersect(array_map('strtolower', self::classTokens($element)), array_map('strtolower', $tokens)) !== [];
     }
 
     /** Text of the element's own text nodes only. */
@@ -200,6 +208,34 @@ final class Element
         }
 
         return null;
+    }
+
+    /** Serialize a node like saveHTML(), but stop descending once $budget bytes are written (unclosed then). */
+    private static function boundedHtml(DOMNode $node, int $budget): string
+    {
+        $document = $node->ownerDocument;
+
+        if ($document === null) {
+            return '';
+        }
+
+        if (! $node instanceof DOMElement || ! $node->hasChildNodes()) {
+            return $document->saveHTML($node) ?: '';
+        }
+
+        $shell = $document->saveHTML($node->cloneNode(false)) ?: '';
+        $close = '</'.$node->nodeName.'>';
+        $html = str_ends_with($shell, $close) ? substr($shell, 0, -strlen($close)) : $shell;
+
+        foreach ($node->childNodes as $child) {
+            if (strlen($html) >= $budget) {
+                return $html;
+            }
+
+            $html .= self::boundedHtml($child, $budget - strlen($html));
+        }
+
+        return $html.$close;
     }
 
     public static function isElement(?DOMNode $node): bool

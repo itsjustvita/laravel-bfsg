@@ -162,4 +162,19 @@ class LinkAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<nav><a href="/about">About our company</a><a href="/contact">Kontakt aufnehmen</a></nav>'));
     }
+
+    public function test_language_switchers_are_not_non_descriptive(): void
+    {
+        $this->assertSame([], $this->analyze('<nav aria-label="Sprache"><a href="/en" hreflang="en">EN</a><a href="/fr" lang="fr">FR</a><a href="/de" hreflang="de">Deutsch</a></nav>'));
+        $this->assertHasViolation($this->analyze('<a href="/en">EN</a>'), 'links.non_descriptive');
+    }
+
+    public function test_page_numbers_inside_navigation_are_judged_in_context(): void
+    {
+        $violations = $this->analyze('<nav aria-label="Pagination"><span>1</span><a href="?page=2">2</a><a href="?page=3">3</a></nav>'
+            .'<div role="navigation" aria-label="Seiten"><a href="?seite=2">2</a></div><a href="?page=4">4</a>');
+
+        $this->assertViolationCount($violations, 'links.non_descriptive_in_context', 3);
+        $this->assertViolationCount($violations, 'links.non_descriptive', 1);
+    }
 }

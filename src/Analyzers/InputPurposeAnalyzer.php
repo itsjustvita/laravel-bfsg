@@ -9,7 +9,7 @@ use ItsJustVita\LaravelBfsg\Severity;
 class InputPurposeAnalyzer extends BaseAnalyzer
 {
     /** Input types for which missing_autocomplete applies (absent type = text). */
-    private const TEXT_LIKE_TYPES = ['text', 'email', 'tel', 'url', 'password', 'number', 'date', 'search'];
+    private const TEXT_LIKE_TYPES = ['text', 'email', 'tel', 'url', 'password', 'number', 'date'];
 
     /** name/id tokens that indicate personal data (English + German). `cc-*` is matched as a prefix. */
     public const PERSONAL_TOKENS = [
@@ -17,6 +17,18 @@ class InputPurposeAnalyzer extends BaseAnalyzer
         'mobile', 'handy', 'street', 'strasse', 'straße', 'address', 'adresse', 'zip', 'plz', 'postal', 'city',
         'ort', 'stadt', 'country', 'land', 'birthday', 'geburtstag', 'geburtsdatum', 'company', 'firma',
         'organization', 'username', 'benutzername',
+    ];
+
+    /**
+     * Nouns that make a `name` token name something other than a person ("product_name", "category[name]"):
+     * such fields do not collect information about the user (1.3.5 applies to the user's own data only).
+     */
+    public const NON_PERSON_NAME_QUALIFIERS = [
+        'product', 'category', 'file', 'filename', 'project', 'team', 'page', 'site', 'app', 'tag', 'item', 'article',
+        'event', 'group', 'role', 'route', 'field', 'column', 'table', 'key', 'domain', 'host', 'server', 'database',
+        'db', 'brand', 'model', 'variant', 'plan', 'task', 'list', 'folder', 'document', 'image', 'attribute', 'option',
+        'setting', 'menu', 'template', 'course', 'room', 'venue', 'channel', 'queue', 'job', 'label', 'layer', 'shop',
+        'store', 'produkt', 'kategorie', 'datei', 'projekt', 'seite', 'artikel', 'gruppe', 'rolle', 'feld', 'vorlage',
     ];
 
     /** Autofill field names of the HTML standard. */
@@ -47,6 +59,10 @@ class InputPurposeAnalyzer extends BaseAnalyzer
     protected function inspect(): void
     {
         foreach ($this->queryVisible('//input|//select|//textarea') as $field) {
+            if ($this->insideSearch($field)) {
+                continue;
+            }
+
             $value = trim($field->getAttribute('autocomplete'));
 
             if ($value !== '' && ! $this->isValidAutocomplete($value)) {
@@ -119,8 +135,25 @@ class InputPurposeAnalyzer extends BaseAnalyzer
             }
 
             $tokens = preg_split('/[_\-\[\]\s.]+/u', $value, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $personal = array_values(array_unique(array_intersect($tokens, self::PERSONAL_TOKENS)));
 
-            if (array_intersect($tokens, self::PERSONAL_TOKENS) !== []) {
+            if ($personal === ['name'] && array_intersect($tokens, self::NON_PERSON_NAME_QUALIFIERS) !== []) {
+                continue;
+            }
+
+            if ($personal !== []) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Fields of a search form or search landmark never collect data about the user. */
+    protected function insideSearch(DOMElement $field): bool
+    {
+        for ($node = $field; $node instanceof DOMElement; $node = $node->parentNode) {
+            if (Element::tag($node) === 'search' || Element::enumAttr($node, 'role') === 'search') {
                 return true;
             }
         }

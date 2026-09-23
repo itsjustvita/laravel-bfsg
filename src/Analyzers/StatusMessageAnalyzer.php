@@ -41,7 +41,7 @@ class StatusMessageAnalyzer extends BaseAnalyzer
 
     protected function isMessageContainer(DOMElement $element): bool
     {
-        return array_intersect(array_map('strtolower', Element::classTokens($element)), self::MESSAGE_CLASS_TOKENS) !== [];
+        return Element::hasAnyClassToken($element, self::MESSAGE_CLASS_TOKENS);
     }
 
     /** Only the outermost message container is reported. */

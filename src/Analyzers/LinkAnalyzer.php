@@ -69,10 +69,15 @@ class LinkAnalyzer extends BaseAnalyzer
         $subject = $authored !== '' ? $authored : $name;
         $normalized = Text::lower(Text::stripTrailingPunctuation($subject));
 
+        // Language switchers ("DE", "EN") declare their purpose through hreflang/lang.
+        if ($link->hasAttribute('hreflang') || $link->hasAttribute('lang')) {
+            return;
+        }
+
         if (in_array($normalized, self::GENERIC_NAMES, true) || Text::length($normalized) < 3) {
             $params = ['text' => Text::truncate($subject, self::MAX_TEXT), 'href' => $href];
 
-            if ($this->hasContext($link)) {
+            if ($this->hasContext($link) || ($this->isPageNumber($normalized) && $this->insideNavigation($link))) {
                 $this->report('non_descriptive_in_context', Severity::Notice, '2.4.4', $link, $params);
             } else {
                 $this->report('non_descriptive', Severity::Warning, '2.4.4', $link, $params);
@@ -98,6 +103,23 @@ class LinkAnalyzer extends BaseAnalyzer
         $previous = Element::previousElement($link);
 
         return $previous !== null && in_array(Element::tag($previous), self::HEADINGS, true);
+    }
+
+    /** Pagination: a link named only by a number. */
+    protected function isPageNumber(string $name): bool
+    {
+        return preg_match('/^\d+$/', $name) === 1;
+    }
+
+    protected function insideNavigation(DOMElement $link): bool
+    {
+        for ($node = $link->parentNode; $node instanceof DOMElement; $node = $node->parentNode) {
+            if (Roles::of($node) === 'navigation') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function checkNewWindow(DOMElement $link, string $name, string $href): void

@@ -45,7 +45,7 @@ class ErrorHandlingAnalyzer extends BaseAnalyzer
     /** Only forms that switch off native validation must bring their own error identification. */
     protected function bypassesBrowserValidation(DOMElement $form): bool
     {
-        return $form->hasAttribute('novalidate') || $this->query('.//*[@formnovalidate]', $form) !== [];
+        return $form->hasAttribute('novalidate') || $this->queryVisible('.//*[@formnovalidate]', $form) !== [];
     }
 
     /** @return list<DOMElement> fields with required, aria-required, pattern, or a validated input type */
@@ -87,7 +87,7 @@ class ErrorHandlingAnalyzer extends BaseAnalyzer
         }
 
         foreach ($this->query('.//*[@class]', $form) as $element) {
-            if (array_intersect(array_map('strtolower', Element::classTokens($element)), self::ERROR_CLASS_TOKENS) !== []) {
+            if (Element::hasAnyClassToken($element, self::ERROR_CLASS_TOKENS)) {
                 return true;
             }
         }
