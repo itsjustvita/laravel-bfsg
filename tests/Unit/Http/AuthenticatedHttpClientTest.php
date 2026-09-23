@@ -76,12 +76,56 @@ class AuthenticatedHttpClientTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request['username'] === 'jane' && $request['pass'] === 'pw' && ! isset($request['email']));
     }
 
-    public function test_form_login_with_a_2xx_answer_needs_a_session_cookie(): void
+    public function test_form_login_with_a_2xx_answer_needs_a_session_cookie_and_no_login_form(): void
     {
         $this->fakeLogin(['<html>ok</html>', 200]);
 
         $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p'); // app_session from the login page
         $this->assertSame('no_session', $this->failure(fn () => $this->client()->loginWithForm('https://other.example.com/login', 'u', 'p'))->reason);
+    }
+
+    public function test_a_2xx_answer_that_renders_the_login_form_again_is_a_failure(): void
+    {
+        $this->fakeLogin([self::LOGIN_PAGE, 200]); // "These credentials do not match" re-rendered with 200, guest session unchanged
+
+        $this->assertSame('credentials', $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'wrong'))->reason);
+    }
+
+    public function test_a_2xx_login_form_with_a_regenerated_session_is_a_success(): void
+    {
+        $this->fakeLogin([self::LOGIN_PAGE, 200, ['Set-Cookie' => 'app_session=regenerated; Path=/']]);
+
+        $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p');
+        $this->addToAssertionCount(1);
+    }
+
+    public function test_a_two_factor_challenge_is_a_failure(): void
+    {
+        $this->fakeLogin(['', 302, ['Location' => '/two-factor-challenge']]);
+        $this->assertSame('two_factor', $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p'))->reason);
+    }
+
+    public function test_a_json_two_factor_answer_is_a_failure(): void
+    {
+        Http::fake(['*' => Http::response(['two_factor' => true], 200, ['Set-Cookie' => 'api_session=pending; Path=/'])]);
+        $this->assertSame('two_factor', $this->failure(fn () => $this->client()->loginWithJson('https://api.example.com/login', 'u', 'p'))->reason);
+    }
+
+    public function test_json_login_redirected_back_to_the_login_page_is_a_failure(): void
+    {
+        Http::fake(['*' => Http::response('', 302, ['Location' => '/login', 'Set-Cookie' => 'api_session=guest; Path=/'])]);
+
+        $this->assertSame('credentials', $this->failure(fn () => $this->client()->loginWithJson('https://api.example.com/login', 'u', 'p'))->reason);
+    }
+
+    public function test_sanctum_login_needs_a_regenerated_session(): void
+    {
+        Http::fake([
+            'https://spa.example.com/sanctum/csrf-cookie' => Http::response('', 204, ['Set-Cookie' => ['XSRF-TOKEN=abc; Path=/', 'spa_session=guest; Path=/']]),
+            '*' => Http::response('', 204),
+        ]);
+
+        $this->assertSame('no_session', $this->failure(fn () => $this->client()->loginWithSanctum('https://spa.example.com', 'u', 'p'))->reason);
     }
 
     public function test_form_login_failures_name_their_cause(): void

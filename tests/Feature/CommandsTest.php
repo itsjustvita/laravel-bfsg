@@ -339,7 +339,7 @@ class CommandsTest extends TestCase
     {
         Http::fake([
             'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, ['Set-Cookie' => ['XSRF-TOKEN=csrf; Path=/', 'laravel_session=abc; Path=/']]),
-            'https://app.example.com/login' => Http::response(['message' => 'ok'], 200),
+            'https://app.example.com/login' => Http::response(['message' => 'ok'], 200, ['Set-Cookie' => 'laravel_session=regenerated; Path=/']),
             'https://app.example.com/dashboard' => Http::response(self::ACCESSIBLE, 200),
             '*' => Http::response('Not Found', 404),
         ]);

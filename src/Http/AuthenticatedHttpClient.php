@@ -122,9 +122,10 @@ class AuthenticatedHttpClient
             $data['_token'] = $token;
         }
 
+        $before = $this->sessionCookies($loginUrl);
         $response = $this->attempt($loginUrl, fn () => $this->postForm($loginUrl, $data, $this->csrfHeaders($loginUrl, ['Accept' => 'text/html,application/xhtml+xml', 'Referer' => $loginUrl])));
 
-        $this->assertLoggedIn($response, $loginUrl);
+        $this->assertLoggedIn($response, $loginUrl, $before);
     }
 
     /**
@@ -139,9 +140,10 @@ class AuthenticatedHttpClient
     public function loginWithJson(string $loginUrl, string $user, string $password, array $fields = [], array $fieldNames = []): void
     {
         $data = array_merge($fields, [($fieldNames['username'] ?? 'email') => $user, ($fieldNames['password'] ?? 'password') => $password]);
+        $before = $this->sessionCookies($loginUrl);
         $response = $this->attempt($loginUrl, fn () => $this->postJson($loginUrl, $data, $this->csrfHeaders($loginUrl, ['X-Requested-With' => 'XMLHttpRequest'])));
 
-        $this->acceptTokenOrSession($response, $loginUrl);
+        $this->acceptTokenOrSession($response, $loginUrl, $before);
     }
 
     /**
@@ -166,9 +168,10 @@ class AuthenticatedHttpClient
 
         $data = [($fieldNames['username'] ?? 'email') => $user, ($fieldNames['password'] ?? 'password') => $password];
         $headers = $this->csrfHeaders($loginUrl, ['X-Requested-With' => 'XMLHttpRequest', 'Origin' => $origin, 'Referer' => $origin.'/']);
+        $before = $this->sessionCookies($loginUrl);
         $response = $this->attempt($loginUrl, fn () => $this->postJson($loginUrl, $data, $headers));
 
-        $this->acceptTokenOrSession($response, $loginUrl);
+        $this->acceptTokenOrSession($response, $loginUrl, $before);
     }
 
     /** @param  string|null  $origin  the only origin the token is sent to; null = the origin of the next request */
@@ -322,32 +325,57 @@ class AuthenticatedHttpClient
         }
     }
 
-    private function assertLoggedIn(Response $response, string $loginUrl): void
+    /**
+     * A redirect away from the login page (not to a two-factor challenge) is a login. A 2xx answer is one when the
+     * session cookie changed (Laravel regenerates the session ID on login), or when a session cookie is present
+     * and the answer does not contain a password field (a re-rendered login form means the login failed).
+     *
+     * @param  array<string, string>  $before  session cookies before the POST
+     */
+    private function assertLoggedIn(Response $response, string $loginUrl, array $before): void
     {
         $this->rejectFailures($response, $loginUrl);
 
         if ($response->redirect()) {
-            $location = (string) UriResolver::resolve(Utils::uriFor($loginUrl), Utils::uriFor($response->header('Location')));
-
-            if ($response->header('Location') !== '' && $this->samePath($location, $loginUrl)) {
-                throw AuthenticationFailed::credentials($loginUrl, null);
-            }
+            $this->rejectRedirectBack($response, $loginUrl);
 
             return;
         }
 
-        if ($response->successful() && $this->hasSessionCookie($loginUrl)) {
-            return;
+        if ($response->successful()) {
+            $passwordField = preg_match('/<input\b[^>]*\btype\s*=\s*["\']?password\b/i', $response->body()) === 1;
+
+            if ($this->sessionChanged($loginUrl, $before) || (! $passwordField && $this->hasSessionCookie($loginUrl))) {
+                return;
+            }
+
+            if ($passwordField) {
+                throw AuthenticationFailed::credentials($loginUrl, $response->status());
+            }
         }
 
         throw AuthenticationFailed::noSession($loginUrl, $response->status());
     }
 
-    private function acceptTokenOrSession(Response $response, string $loginUrl): void
+    /**
+     * JSON and Sanctum logins: a token in the answer, or a 2xx/redirect with a regenerated session cookie.
+     *
+     * @param  array<string, string>  $before  session cookies before the POST
+     */
+    private function acceptTokenOrSession(Response $response, string $loginUrl, array $before): void
     {
         $this->rejectFailures($response, $loginUrl);
 
         $json = $response->json();
+
+        if (is_array($json) && ($json['two_factor'] ?? false) === true) {
+            throw AuthenticationFailed::twoFactor($loginUrl);
+        }
+
+        if ($response->redirect()) {
+            $this->rejectRedirectBack($response, $loginUrl);
+        }
+
         $token = is_array($json) ? ($json['token'] ?? $json['access_token'] ?? ($json['data']['token'] ?? null)) : null;
 
         if (is_string($token) && $token !== '') {
@@ -356,11 +384,41 @@ class AuthenticatedHttpClient
             return;
         }
 
-        if (($response->successful() || $response->redirect()) && $this->hasSessionCookie($loginUrl)) {
+        if (($response->successful() || $response->redirect()) && $this->sessionChanged($loginUrl, $before)) {
             return;
         }
 
         throw AuthenticationFailed::noSession($loginUrl, $response->status());
+    }
+
+    /** A redirect back to the login page means invalid credentials, one to a two-factor challenge an unfinished login. */
+    private function rejectRedirectBack(Response $response, string $loginUrl): void
+    {
+        if ($response->header('Location') === '') {
+            return;
+        }
+
+        $location = (string) UriResolver::resolve(Utils::uriFor($loginUrl), Utils::uriFor($response->header('Location')));
+
+        if ($this->samePath($location, $loginUrl)) {
+            throw AuthenticationFailed::credentials($loginUrl, null);
+        }
+
+        if (preg_match('~two[-_]?factor~i', (string) parse_url($location, PHP_URL_PATH)) === 1) {
+            throw AuthenticationFailed::twoFactor($loginUrl);
+        }
+    }
+
+    /** @param  array<string, string>  $before */
+    private function sessionChanged(string $loginUrl, array $before): bool
+    {
+        foreach ($this->sessionCookies($loginUrl) as $name => $value) {
+            if (($before[$name] ?? null) !== $value) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function rejectFailures(Response $response, string $loginUrl): void

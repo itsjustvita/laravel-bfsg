@@ -7,7 +7,7 @@ use RuntimeException;
 /** A login attempt failed; `reason` names the cause for callers that branch on it. */
 final class AuthenticationFailed extends RuntimeException
 {
-    /** @param  'csrf'|'credentials'|'validation'|'no_session'|'login_page'|'connection'  $reason */
+    /** @param  'csrf'|'credentials'|'validation'|'no_session'|'two_factor'|'login_page'|'connection'  $reason */
     public function __construct(string $message, public readonly string $reason, public readonly ?int $status = null)
     {
         parent::__construct($message);
@@ -31,6 +31,11 @@ final class AuthenticationFailed extends RuntimeException
     public static function noSession(string $url, int $status): self
     {
         return new self("Login at {$url} returned HTTP {$status} without a session cookie or token.", 'no_session', $status);
+    }
+
+    public static function twoFactor(string $url): self
+    {
+        return new self("Login at {$url} asks for a second factor (two-factor authentication); use --session or a token instead.", 'two_factor');
     }
 
     public static function loginPage(string $url, int $status): self
