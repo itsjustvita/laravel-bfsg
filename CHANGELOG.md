@@ -44,6 +44,9 @@ Phases 1 (foundation) and 2 (analyzer round) of v3. See UPGRADE.md (written in P
 - `bfsg.compliance_level=AAA` now drives the contrast thresholds (7:1 / 4.5:1).
 - Fixture corpus (`tests/Fixtures`) with expected keys for Bootstrap, Tailwind v4, TYPO3, a Laravel form, an ARIA data grid and a card pattern.
 
+### Fixed
+- Installs in a fresh Laravel 13 app without downgrading Guzzle: the unused direct `guzzlehttp/guzzle ^7.8` requirement is gone (HTTP goes through `illuminate/http`, which allows Guzzle 7 and 8). Install the branch as `itsjustvita/laravel-bfsg:3.x-dev` (Composer normalises branch `v3` to `3.x-dev`; `dev-v3` does not resolve).
+
 ## [2.2.4] - 2026-09-18
 
 Re-release of 2.2.3 with the CI matrix fix. The 2.2.3 tag was moved after Packagist had
