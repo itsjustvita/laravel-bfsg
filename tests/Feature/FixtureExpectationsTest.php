@@ -6,14 +6,12 @@ use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Severity;
-use ItsJustVita\LaravelBfsg\Tests\Support\Phase2Progress;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use ItsJustVita\LaravelBfsg\Violation;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
  * Spec §14 fixture corpus: keys that must and must not appear per fixture (Appendix A end state).
- * Only keys of analyzers listed in Phase2Progress::DONE are asserted until the closing task.
  */
 class FixtureExpectationsTest extends TestCase
 {
@@ -124,11 +122,11 @@ class FixtureExpectationsTest extends TestCase
     {
         $keys = $this->keys($this->analyzeFixture($file));
 
-        foreach (Phase2Progress::filter($present) as $key) {
+        foreach ($present as $key) {
             $this->assertContains($key, $keys, "$file: expected $key. Found: ".implode(', ', $keys));
         }
 
-        foreach (Phase2Progress::filter($absent) as $key) {
+        foreach ($absent as $key) {
             $this->assertNotContains($key, $keys, "$file: unexpected $key");
         }
 
@@ -164,7 +162,7 @@ class FixtureExpectationsTest extends TestCase
     #[DataProvider('fixtures')]
     public function test_fingerprints_are_unique(string $file, array $present, array $absent): void
     {
-        $fingerprints = array_map(fn (Violation $violation) => $violation->fingerprint().' '.$violation->key.' '.$violation->selector, Phase2Progress::violations($this->analyzeFixture($file)->all()));
+        $fingerprints = array_map(fn (Violation $violation) => $violation->fingerprint().' '.$violation->key.' '.$violation->selector, $this->analyzeFixture($file)->all());
 
         $this->assertSame([], array_values(array_diff_key($fingerprints, array_unique($fingerprints))), "$file: duplicate findings");
     }
@@ -181,7 +179,7 @@ class FixtureExpectationsTest extends TestCase
         $bfsg = new Bfsg;
         $analyzers = $bfsg->analyzers();
 
-        foreach (Phase2Progress::violations($bfsg->analyze((string) file_get_contents(__DIR__.'/../Fixtures/'.$file))->all()) as $violation) {
+        foreach ($bfsg->analyze((string) file_get_contents(__DIR__.'/../Fixtures/'.$file))->all() as $violation) {
             $analyzer = $analyzers[$violation->analyzer];
 
             if ($violation->rule !== null && $analyzer instanceof BaseAnalyzer) {

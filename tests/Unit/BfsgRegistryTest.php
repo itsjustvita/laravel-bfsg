@@ -101,4 +101,37 @@ class BfsgRegistryTest extends TestCase
         $this->assertInstanceOf(AnalysisResult::class, BfsgFacade::analyze('<html><body><h1>x</h1></body></html>'));
         $this->assertArrayHasKey('bfsg', app('router')->getMiddleware());
     }
+
+    public function test_keys_lists_the_registry_without_resolving_it(): void
+    {
+        $bfsg = (new Bfsg)->except(['contrast']);
+
+        $this->assertSame(array_values(array_diff(array_keys(Bfsg::ANALYZERS), ['contrast'])), $bfsg->keys());
+        $this->assertSame(['images', 'custom'], (new Bfsg)->only(['images'])->register('custom', ImageAnalyzer::class)->keys());
+    }
+
+    public function test_the_singleton_reads_settings_live_but_keeps_its_registry(): void
+    {
+        $bfsg = app(Bfsg::class);
+        $html = '<html><body><h1>t</h1><div id="chat"><img src="x.jpg"></div></body></html>';
+
+        $this->assertCount(1, $bfsg->analyze($html)->forAnalyzer('images'));
+
+        config()->set('bfsg.ignored_selectors', ['#chat']);
+        config()->set('bfsg.locale', 'de');
+        config()->set('bfsg.checks.images', false);
+
+        $result = $bfsg->analyze($html);
+        $this->assertSame([], $result->forAnalyzer('images'), 'ignored_selectors changed at runtime apply to the singleton');
+        $this->assertSame('de', $result->locale(), 'bfsg.locale changed at runtime applies to the singleton');
+        $this->assertContains('images', $bfsg->keys(), 'the registry is fixed when the singleton is built');
+    }
+
+    public function test_an_explicit_config_array_is_a_snapshot(): void
+    {
+        $bfsg = new Bfsg(app(), null, ['locale' => 'en', 'ignored_selectors' => []]);
+        config()->set('bfsg.locale', 'de');
+
+        $this->assertSame('en', $bfsg->analyze('<p>x</p>')->locale());
+    }
 }

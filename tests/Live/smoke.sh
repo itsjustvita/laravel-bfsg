@@ -2,6 +2,8 @@
 # Live smoke test of laravel-bfsg inside a real Laravel app (prepared by tests/Live/setup.sh).
 # Usage: tests/Live/smoke.sh <app-dir>. Exits non-zero with a message on the first failure.
 # Not part of phpunit: it needs a full application, a web server and a network port.
+# No `set -e` on purpose: several steps expect non-zero exit codes (bfsg:check exits 1 or 2 by design),
+# so every step checks its own result and calls fail() with a message instead.
 set -uo pipefail
 
 LIVE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

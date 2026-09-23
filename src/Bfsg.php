@@ -46,8 +46,8 @@ class Bfsg
 
     private Container $container;
 
-    /** @var array<string, mixed> the `bfsg` config array */
-    private array $config;
+    /** @var array<string, mixed>|null explicit `bfsg` config array; null = read the container's config live */
+    private ?array $config;
 
     /** @var array<string, Analyzer|class-string<Analyzer>> key => instance or class name */
     private array $analyzers = [];
@@ -56,14 +56,18 @@ class Bfsg
     private array $instances = [];
 
     /**
+     * The registry (which analyzers run) is fixed at construction from `$checks` or `bfsg.checks`; every other
+     * setting (locale, ignored selectors) is read when analyze() runs, from `$config` when one is given and
+     * otherwise live from the container's config repository, so runtime config changes apply to the singleton.
+     *
      * @param  array<string, bool>|null  $checks  registry key => enabled (defaults to config bfsg.checks)
-     * @param  array<string, mixed>|null  $config  the bfsg config array (defaults to config('bfsg'))
+     * @param  array<string, mixed>|null  $config  a fixed bfsg config array (defaults to the live config('bfsg'))
      */
     public function __construct(?Container $container = null, ?array $checks = null, ?array $config = null)
     {
         $this->container = $container ?? \Illuminate\Container\Container::getInstance();
-        $this->config = $config ?? ($this->container->bound('config') ? (array) $this->container->make('config')->get('bfsg', []) : []);
-        $checks ??= $this->config['checks'] ?? [];
+        $this->config = $config;
+        $checks ??= (array) $this->setting('bfsg.checks', []);
 
         foreach (self::ANALYZERS as $key => $class) {
             if ($checks[$key] ?? true) {
@@ -112,6 +116,12 @@ class Bfsg
         return $clone;
     }
 
+    /** @return list<string> registry keys in execution order, without resolving the analyzers */
+    public function keys(): array
+    {
+        return array_keys($this->analyzers);
+    }
+
     /** @return array<string, Analyzer> resolved analyzer instances in registry order */
     public function analyzers(): array
     {
@@ -131,7 +141,7 @@ class Bfsg
     {
         $document = HtmlDocument::fromHtml($html, [
             'fragment' => $options['fragment'] ?? null,
-            'ignoredSelectors' => $options['ignoredSelectors'] ?? ($this->config['ignored_selectors'] ?? []),
+            'ignoredSelectors' => $options['ignoredSelectors'] ?? (array) $this->setting('bfsg.ignored_selectors', []),
         ]);
 
         return $this->analyzeDocument($document, $options);
@@ -143,7 +153,7 @@ class Bfsg
     public function analyzeDocument(HtmlDocument $document, array $options = []): AnalysisResult
     {
         $url = $options['url'] ?? null;
-        $locale = $options['locale'] ?? ($this->config['locale'] ?? null);
+        $locale = $options['locale'] ?? ($this->setting('bfsg.locale') ?: null);
 
         if ($document->isEmpty()) {
             return new AnalysisResult([], [], $url, $locale);
@@ -168,6 +178,16 @@ class Bfsg
     public function isAccessible(string $html): bool
     {
         return $this->analyze($html)->isAccessible();
+    }
+
+    /** A `bfsg.*` setting from the explicit config array, or live from the container's config repository. */
+    private function setting(string $key, mixed $default = null): mixed
+    {
+        if ($this->config !== null) {
+            return data_get($this->config, substr($key, strlen('bfsg.')), $default);
+        }
+
+        return $this->container->bound('config') ? $this->container->make('config')->get($key, $default) : $default;
     }
 
     private function resolve(string $key): Analyzer

@@ -31,10 +31,8 @@ class BfsgServiceProvider extends ServiceProvider
             __DIR__.'/../config/bfsg.php', 'bfsg'
         );
 
-        // Register main class as singleton
-        $this->app->singleton(Bfsg::class, function ($app) {
-            return new Bfsg($app, $app['config']->get('bfsg.checks', []), $app['config']->get('bfsg', []));
-        });
+        // One registry per application; settings other than bfsg.checks are read live (see Bfsg::__construct)
+        $this->app->singleton(Bfsg::class, fn ($app) => new Bfsg($app));
         $this->app->alias(Bfsg::class, 'bfsg');
     }
 

@@ -3,7 +3,6 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
 use ItsJustVita\LaravelBfsg\Bfsg;
-use ItsJustVita\LaravelBfsg\Tests\Support\Phase2Progress;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use ReflectionClass;
 
@@ -61,10 +60,5 @@ class AnalyzerSourcePolicyTest extends TestCase
             $this->assertNotSame('', $meta['description'], $class);
             $this->assertNotSame([], $meta['rules'], $class);
         }
-    }
-
-    public function test_phase2_gate_covers_every_analyzer(): void
-    {
-        $this->assertSame(array_keys(Bfsg::ANALYZERS), Phase2Progress::DONE);
     }
 }

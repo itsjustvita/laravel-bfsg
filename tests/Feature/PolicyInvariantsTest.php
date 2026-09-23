@@ -3,13 +3,12 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
 use ItsJustVita\LaravelBfsg\Bfsg;
-use ItsJustVita\LaravelBfsg\Tests\Support\Phase2Progress;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use ItsJustVita\LaravelBfsg\Violation;
 
 /**
  * Global analyzer policy (spec §13) exercised across all analyzers at once: hidden subtrees, fragments,
- * case-insensitive enumerated attributes. Gated by Phase2Progress::DONE until the closing task.
+ * case-insensitive enumerated attributes.
  */
 class PolicyInvariantsTest extends TestCase
 {
@@ -31,10 +30,10 @@ class PolicyInvariantsTest extends TestCase
         return '<!DOCTYPE html><html lang="en"><head><title>Policy invariants | Test suite</title></head><body><main><h1>Policy</h1>'.$body.'</main></body></html>';
     }
 
-    /** @return list<string> keys of finished analyzers, sorted */
+    /** @return list<string> keys of every finding, sorted */
     private function keys(string $html): array
     {
-        $keys = array_map(fn (Violation $violation) => $violation->key, Phase2Progress::violations((new Bfsg)->analyze($html)->all()));
+        $keys = array_map(fn (Violation $violation) => $violation->key, (new Bfsg)->analyze($html)->all());
         sort($keys);
 
         return $keys;

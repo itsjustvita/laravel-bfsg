@@ -6,30 +6,31 @@ use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class ConfigKeysTest extends TestCase
 {
-    /** @return list<string> dotted paths of every leaf and every branch in config/bfsg.php */
-    private function paths(array $config, string $prefix = ''): array
+    /** Settings that src/ reads as one array; their children are data, not keys of their own. */
+    private const WHOLE_ARRAYS = ['checks', 'scoring.weights'];
+
+    /** @return list<string> dotted paths of every setting (a value that is not a map with string keys) */
+    private function leaves(array $config, string $prefix = ''): array
     {
         $paths = [];
 
         foreach ($config as $key => $value) {
-            if (is_int($key)) {
-                continue; // list items (ignored_selectors, ignored_paths)
-            }
-
             $path = $prefix === '' ? $key : $prefix.'.'.$key;
-            $paths[] = $path;
 
-            if (is_array($value)) {
-                $paths = array_merge($paths, $this->paths($value, $path));
+            if (is_array($value) && $value !== [] && ! array_is_list($value) && ! in_array($path, self::WHOLE_ARRAYS, true)) {
+                $paths = array_merge($paths, $this->leaves($value, $path));
+
+                continue;
             }
+
+            $paths[] = $path;
         }
 
         return $paths;
     }
 
-    public function test_every_config_key_is_read_somewhere_in_src(): void
+    private function source(): string
     {
-        $config = require __DIR__.'/../../config/bfsg.php';
         $source = '';
 
         foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(__DIR__.'/../../src')) as $file) {
@@ -38,21 +39,23 @@ class ConfigKeysTest extends TestCase
             }
         }
 
-        foreach ($this->paths($config) as $path) {
-            if (str_starts_with($path, 'checks.') || str_starts_with($path, 'scoring.weights.')) {
-                continue; // read as whole arrays
-            }
+        return $source;
+    }
 
-            // Read directly, read as part of a longer key, or read through a parent array.
-            $found = str_contains($source, "'bfsg.$path'") || str_contains($source, "'bfsg.$path.");
-            $segments = explode('.', $path);
+    public function test_every_config_setting_is_read_by_its_full_key_somewhere_in_src(): void
+    {
+        $config = require __DIR__.'/../../config/bfsg.php';
+        $source = $this->source();
 
-            while (! $found && count($segments) > 1) {
-                array_pop($segments);
-                $found = str_contains($source, "'bfsg.".implode('.', $segments)."'");
-            }
-
-            $this->assertTrue($found, "config key bfsg.$path is never read in src/");
+        foreach ($this->leaves($config) as $path) {
+            $this->assertStringContainsString("'bfsg.$path'", $source, "config setting bfsg.$path is never read in src/ (a read of a parent array does not count)");
         }
+    }
+
+    public function test_leaves_do_not_climb_to_parents(): void
+    {
+        $leaves = $this->leaves(['a' => ['b' => 1, 'c' => ['d' => true]], 'list' => ['x', 'y'], 'checks' => ['images' => true]]);
+
+        $this->assertSame(['a.b', 'a.c.d', 'list', 'checks'], $leaves);
     }
 }
