@@ -92,4 +92,22 @@ class ColorTest extends TestCase
         $this->assertSame(0.0, Color::fromBackground('transparent')[0]->a);
         $this->assertSame([null, false], Color::fromBackground('url(red.png)'));
     }
+
+    public function test_parses_oklch_and_oklab(): void
+    {
+        $this->assertSame('#d1d5dc', Color::parse('oklch(87.2% .01 258.338)')->toHex(), 'Tailwind v4 gray-300');
+        $this->assertSame('#4f39f6', Color::parse('OKLCH(51.1% 0.262 276.966)')->toHex(), 'Tailwind v4 indigo-600');
+        $this->assertSame('#ffffff', Color::parse('oklch(1 0 0)')->toHex());
+        $this->assertSame('#000000', Color::parse('oklch(0% 0 none)')->toHex());
+        $this->assertSame('#ff0000', Color::parse('oklch(62.8% 0.2577 29.23deg)')->toHex(), 'out-of-gamut channels are clamped');
+        $this->assertSame(Color::parse('oklch(50% 0.1 180)')->toHex(), Color::parse('oklch(50% 0.1 0.5turn)')->toHex());
+        $this->assertEqualsWithDelta(0.5, Color::parse('oklab(0.5 0.1 -0.1 / 50%)')->a, 0.001);
+        $this->assertSame('#717171', Color::parse('oklab(55% 0 0)')->toHex());
+        $this->assertNull(Color::parse('oklch(bad)'));
+        $this->assertNull(Color::parse('oklch(50% 0.1)'));
+
+        [$color, $approximate] = Color::fromBackground('oklch(98.5% 0.002 247.839) url(x.png)');
+        $this->assertSame('#f9fafb', $color->toHex());
+        $this->assertFalse($approximate);
+    }
 }

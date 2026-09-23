@@ -65,6 +65,12 @@ class CssParser
     /** @var array<string, array<string, list<int>>> node path => property => cascade weight of the winner */
     private array $weightCache = [];
 
+    /** @var array<string, string>|null custom property name => value, from :root / html / :host */
+    private ?array $customProperties = null;
+
+    /** Selectors whose custom properties are resolved globally (Tailwind v4 and most design systems declare them here). */
+    private const ROOT_SELECTORS = [':root', 'html', ':host'];
+
     /**
      * Parse every screen stylesheet of the document. Only tokenizes and collects rules: the element index
      * is built lazily by the first call that needs it (declarationsFor, colour/font resolution, hidesElement).
@@ -78,6 +84,7 @@ class CssParser
         $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
+        $this->customProperties = null;
 
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
             foreach ($this->parseStylesheet($css, count($this->rules)) as $rule) {
@@ -104,7 +111,7 @@ class CssParser
 
         $this->indexBuilds++;
         $indexedRules = 0;
-        $byClass = null;
+        $tokens = null;
 
         foreach ($this->rules as $position => $rule) {
             if (! $this->isIndexable($rule)) {
@@ -123,12 +130,7 @@ class CssParser
                 continue;
             }
 
-            // Fast path for a lone class selector (the bulk of utility CSS): one class map instead of one XPath per rule.
-            $elements = preg_match('/^\.((?:[\w-]|\\\\.)+)$/', $rule['selector'], $m) === 1
-                ? ($byClass ??= $this->elementsByClass())[$this->unescape($m[1])] ?? []
-                : $this->document->query($expression);
-
-            foreach ($elements as $element) {
+            foreach ($this->elementsMatching($rule['selector'], $expression, $tokens) as $element) {
                 $this->index[$this->nodeKey($element)][] = $position;
             }
         }
@@ -202,7 +204,8 @@ class CssParser
                 continue;
             }
 
-            $name = strtolower(trim(substr($declaration, 0, $colon)));
+            $name = trim(substr($declaration, 0, $colon));
+            $name = str_starts_with($name, '--') ? $name : strtolower($name); // custom properties are case-sensitive
             $value = trim(substr($declaration, $colon + 1));
             $important = false;
 
@@ -211,7 +214,7 @@ class CssParser
                 $value = trim(preg_replace('/!\s*important\s*$/i', '', $value) ?? $value);
             }
 
-            if ($name === '' || $value === '' || preg_match('/^-?[a-z_][a-z0-9_-]*$/', $name) !== 1) {
+            if ($name === '' || $value === '' || preg_match('/^(?:--[\w-]+|-?[a-z_][a-z0-9_-]*)$/', $name) !== 1) {
                 continue;
             }
 
@@ -256,25 +259,49 @@ class CssParser
      */
     public function simpleSelectorToXpath(string $selector): ?string
     {
+        $compounds = $this->compounds($selector);
+
+        if ($compounds === null) {
+            return null;
+        }
+
+        $xpath = '';
+
+        foreach ($compounds as $compound) {
+            $xpath .= ($compound['combinator'] === '>' ? '/' : '//').$compound['xpath'];
+        }
+
+        return $xpath;
+    }
+
+    /**
+     * The compounds of a supported selector, left to right; `combinator` joins a compound to the previous one
+     * ('' for the first, ' ' descendant, '>' child). Null when any part is unsupported.
+     *
+     * @return list<array{combinator: string, xpath: string, raw: string}>|null
+     */
+    private function compounds(string $selector): ?array
+    {
         $selector = trim($selector);
 
         if ($selector === '') {
             return null;
         }
 
-        $xpath = '';
+        $compounds = [];
         $position = 0;
         $length = strlen($selector);
-        $axis = '//';
+        $combinator = '';
 
         while ($position < $length) {
+            $start = $position;
             $compound = $this->compoundToXpath($selector, $position);
 
             if ($compound === null) {
                 return null;
             }
 
-            $xpath .= $axis.$compound;
+            $compounds[] = ['combinator' => $combinator, 'xpath' => $compound, 'raw' => substr($selector, $start, $position - $start)];
             $whitespace = $this->skipWhitespace($selector, $position);
 
             if ($position >= $length) {
@@ -284,15 +311,15 @@ class CssParser
             if ($selector[$position] === '>') {
                 $position++;
                 $this->skipWhitespace($selector, $position);
-                $axis = '/';
+                $combinator = '>';
             } elseif ($whitespace) {
-                $axis = '//';
+                $combinator = ' ';
             } else {
                 return null;
             }
         }
 
-        return $xpath;
+        return $compounds;
     }
 
     /** @return array<string, array{value: string, important: bool}> cascaded declarations of the element itself */
@@ -475,18 +502,161 @@ class CssParser
         }
     }
 
-    /** @return array<string, list<DOMElement>> class name => elements carrying it, in document order */
-    private function elementsByClass(): array
+    /**
+     * Elements a rule applies to. Rules are bucketed by their rightmost compound: a lone class is answered by the
+     * class map; a selector whose rightmost compound names a class or an id only tests the elements carrying that
+     * token, with a reverse (self::/ancestor::/parent::) expression; everything else is one document query.
+     *
+     * @param  array{class: array<string, list<DOMElement>>, id: array<string, list<DOMElement>>}|null  $tokens  built on first use
+     * @return list<DOMElement>
+     */
+    private function elementsMatching(string $selector, string $expression, ?array &$tokens): array
     {
-        $map = [];
+        if (preg_match('/^\.((?:[\w-]|\\\\.)+)$/', $selector, $m) === 1) {
+            return ($tokens ??= $this->elementsByToken())['class'][$this->unescape($m[1])] ?? [];
+        }
 
-        foreach ($this->document?->query('//*[@class]') ?? [] as $element) {
+        $match = $this->matchExpression($selector);
+
+        if ($match === null || $match['bucket'] === null) {
+            return $this->document?->query($expression) ?? [];
+        }
+
+        [$type, $token] = $match['bucket'];
+        $xpath = $this->document->xpath();
+
+        return array_values(array_filter(
+            ($tokens ??= $this->elementsByToken())[$type][$token] ?? [],
+            fn (DOMElement $element): bool => $xpath->evaluate('boolean('.$match['expression'].')', $element) === true,
+        ));
+    }
+
+    /** @return array{class: array<string, list<DOMElement>>, id: array<string, list<DOMElement>>} token => elements, in document order */
+    private function elementsByToken(): array
+    {
+        $map = ['class' => [], 'id' => []];
+
+        foreach ($this->document?->query('//*[@class or @id]') ?? [] as $element) {
             foreach (array_unique(preg_split('/[ \t\n\r]+/', $element->getAttribute('class'), -1, PREG_SPLIT_NO_EMPTY) ?: []) as $class) {
-                $map[$class][] = $element;
+                $map['class'][$class][] = $element;
+            }
+
+            if ($element->getAttribute('id') !== '') {
+                $map['id'][$element->getAttribute('id')][] = $element;
             }
         }
 
         return $map;
+    }
+
+    /**
+     * A selector of the supported subset as an expression evaluated with the candidate element as context node
+     * (`self::c[ancestor::b[parent::a]]` for `a > b c`), plus the bucket of its rightmost compound: its first id,
+     * else its first class, else null.
+     *
+     * @return array{expression: string, bucket: array{0: 'class'|'id', 1: string}|null}|null
+     */
+    public function matchExpression(string $selector): ?array
+    {
+        $compounds = $this->compounds($selector);
+
+        if ($compounds === null) {
+            return null;
+        }
+
+        $last = array_pop($compounds);
+        $inner = '';
+
+        foreach ($compounds as $index => $compound) {
+            $axis = (($compounds[$index + 1] ?? $last)['combinator'] === '>') ? 'parent' : 'ancestor';
+            $inner = $axis.'::'.$compound['xpath'].($inner === '' ? '' : '['.$inner.']');
+        }
+
+        $bucket = null;
+        $ident = '((?:[\w-]|\\\\.|[^\x00-\x7F])+)';
+
+        if (preg_match('/#'.$ident.'/', $last['raw'], $m) === 1) {
+            $bucket = ['id', $this->unescape($m[1])];
+        } elseif (preg_match('/\.'.$ident.'/', preg_replace('/:not\([^()]*\)/i', '', $last['raw']) ?? $last['raw'], $m) === 1) {
+            $bucket = ['class', $this->unescape($m[1])];
+        }
+
+        return ['expression' => 'self::'.$last['xpath'].($inner === '' ? '' : '['.$inner.']'), 'bucket' => $bucket];
+    }
+
+    /**
+     * Resolve every var(--name[, fallback]) in a value against the root custom properties (fallbacks used for
+     * undefined names, nested references followed up to 8 levels). Null when a reference cannot be resolved.
+     */
+    public function resolveVariables(string $value, int $depth = 0): ?string
+    {
+        if (stripos($value, 'var(') === false) {
+            return $value;
+        }
+
+        if ($depth > 8) {
+            return null;
+        }
+
+        $resolved = '';
+        $position = 0;
+
+        while (($start = stripos($value, 'var(', $position)) !== false) {
+            $end = $this->closingParenthesis($value, $start + 3);
+
+            if ($end === null) {
+                return null;
+            }
+
+            $inner = substr($value, $start + 4, $end - $start - 4);
+            $parts = $this->splitTopLevel($inner, ',');
+            $name = trim($parts[0] ?? '');
+            $comma = strpos($inner, ',');
+            $fallback = $comma === false ? null : trim(substr($inner, $comma + 1));
+            $replacement = $this->customProperties()[$name] ?? $fallback;
+            $replacement = $replacement === null ? null : $this->resolveVariables($replacement, $depth + 1);
+
+            if ($replacement === null) {
+                return null;
+            }
+
+            $resolved .= substr($value, $position, $start - $position).$replacement;
+            $position = $end + 1;
+        }
+
+        return $resolved.substr($value, $position);
+    }
+
+    /** @return array<string, string> custom properties declared on :root, html or :host (cascade winner) and on <html style> */
+    public function customProperties(): array
+    {
+        if ($this->customProperties !== null) {
+            return $this->customProperties;
+        }
+
+        $winners = [];
+
+        foreach ($this->rules as $rule) {
+            if (! in_array(strtolower($rule['selector']), self::ROOT_SELECTORS, true)) {
+                continue;
+            }
+
+            foreach ($rule['properties'] as $name => $declaration) {
+                if (str_starts_with($name, '--')) {
+                    $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']]);
+                }
+            }
+        }
+
+        $root = $this->document?->root();
+
+        foreach ($root === null ? [] : $this->inlineStyle($root) as $name => $declaration) {
+            if (str_starts_with($name, '--')) {
+                $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX]);
+            }
+        }
+
+        return $this->customProperties = array_map(fn (array $winner) => $winner['declaration']['value'], $winners);
     }
 
     /** @param  array{properties: array<string, array{value: string, important: bool}>}  $rule */
@@ -534,6 +704,12 @@ class CssParser
             return $this->backgroundCache[$key] = [$parent, $approximate];
         }
 
+        $value = $this->resolveVariables($value);
+
+        if ($value === null) {
+            return $this->backgroundCache[$key] = [$parent, true];
+        }
+
         [$own, $ownApproximate] = Color::fromBackground($value);
 
         if ($own === null || $own->a <= 0) {
@@ -562,7 +738,8 @@ class CssParser
             return $this->foregroundCache[$key] = [$parent, $approximate];
         }
 
-        $own = Color::isUnresolvable($value) ? null : Color::parse($value);
+        $value = $this->resolveVariables($value);
+        $own = $value === null || Color::isUnresolvable($value) ? null : Color::parse($value);
 
         if ($own === null) {
             return $this->foregroundCache[$key] = [$parent, true];
@@ -726,6 +903,34 @@ class CssParser
             '|=' => '('.$attr.'='.$literal.' or starts-with('.$attr.', '.HtmlDocument::xpathLiteral($value.'-').'))',
             default => null,
         };
+    }
+
+    /** Index of the parenthesis closing the one at $open (quotes respected), or null. */
+    private function closingParenthesis(string $value, int $open): ?int
+    {
+        $depth = 0;
+        $quote = null;
+        $length = strlen($value);
+
+        for ($i = $open; $i < $length; $i++) {
+            $char = $value[$i];
+
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    $i++;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '(') {
+                $depth++;
+            } elseif ($char === ')' && --$depth === 0) {
+                return $i;
+            }
+        }
+
+        return null;
     }
 
     private function unescape(string $identifier): string

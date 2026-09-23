@@ -304,4 +304,65 @@ class CssParserTest extends TestCase
         $this->assertTrue($parser->hidesElement($byId['p1']));
         $this->assertFalse($parser->hidesElement($byId['p2']));
     }
+
+    public function test_custom_properties_resolve_from_the_root_with_fallbacks(): void
+    {
+        $root = ':root { --fg: #222; --muted: var(--gray-500); --gray-500: oklch(55% 0 0); --Brand: #0000ff } html { --bg: #fafafa }';
+
+        $this->assertSame(['#222222', '#ffffff', false], $this->colors($root.' p { color: var(--fg) }', '<p id="t">x</p>'));
+        $this->assertSame(['#717171', '#ffffff', false], $this->colors($root.' p { color: var(--muted) }', '<p id="t">x</p>'), 'nested references');
+        $this->assertSame(['#0000ff', '#fafafa', false], $this->colors($root.' p { color: var(--Brand); background: var(--bg) }', '<p id="t">x</p>'), 'names are case-sensitive and kept');
+        $this->assertSame(['#333333', '#ffffff', false], $this->colors($root.' p { color: var(--missing, #333) }', '<p id="t">x</p>'), 'fallback for an undefined name');
+        $this->assertSame(['#444444', '#ffffff', false], $this->colors($root.' p { color: var(--missing, var(--also-missing, #444)) }', '<p id="t">x</p>'));
+        $this->assertSame(['#000000', '#ffffff', true], $this->colors($root.' p { color: var(--brand) }', '<p id="t">x</p>'), 'undefined without fallback stays approximate');
+        $this->assertSame(['#000000', '#ffffff', true], $this->colors('.dark { --fg: #fff } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'), 'element-scoped properties are not resolved');
+    }
+
+    public function test_custom_properties_follow_the_cascade_and_the_html_style_attribute(): void
+    {
+        $document = HtmlDocument::fromHtml('<html style="--c: #111"><head><style>:root { --a: #aaa !important; --b: #bbb } :root { --a: #ccc; --b: #ddd }</style></head><body></body></html>');
+        $parser = (new CssParser)->parse($document);
+
+        $this->assertSame(['--a' => '#aaa', '--b' => '#ddd', '--c' => '#111'], $parser->customProperties());
+        $this->assertSame('1px solid #ddd', $parser->resolveVariables('1px solid var(--b)'));
+        $this->assertNull($parser->resolveVariables('var(--nope)'));
+        $this->assertNull($parser->resolveVariables('var(--b'));
+    }
+
+    public function test_match_expressions_bucket_by_the_rightmost_compound(): void
+    {
+        $parser = new CssParser;
+
+        $this->assertSame(['class', 'title'], $parser->matchExpression('.card > h2.title')['bucket']);
+        $this->assertSame(['id', 'main'], $parser->matchExpression('body div#main.wide')['bucket']);
+        $this->assertNull($parser->matchExpression('nav a')['bucket']);
+        $this->assertSame(['class', 'x'], $parser->matchExpression('p:not(.y).x')['bucket']);
+        $this->assertNull($parser->matchExpression('a:hover'));
+        $this->assertStringStartsWith('self::', $parser->matchExpression('.a .b')['expression']);
+    }
+
+    public function test_bucketed_rules_match_exactly_what_the_document_query_matches(): void
+    {
+        $selectors = ['.card .title', '.card > .title', 'section .card .title', 'main > section > .card', '#hero .title', 'div.card:first-child .title',
+            '.card :not(.title).meta', 'ul > li.item', 'ul li.item.active', '.list .item:last-child', '[data-x] .title', ':root .title', 'body #hero'];
+        $body = '<main><section id="hero"><div class="card"><h2 class="title">A</h2><p class="meta">m</p></div><div class="card"><div><h3 class="title">B</h3></div></div></section>'
+            .'<section><ul class="list"><li class="item">1</li><li class="item active">2</li></ul><div data-x><span class="title">C</span></div></section></main>';
+        $css = implode(' ', array_map(fn (string $selector) => $selector.' { color: #123456 }', $selectors));
+        [$parser, $document] = $this->parsed($css, $body);
+        $parser->buildIndex();
+
+        foreach ($selectors as $position => $selector) {
+            $expected = array_map(fn (DOMElement $element) => $element->getNodePath(), $document->query($parser->simpleSelectorToXpath($selector)));
+            $actual = [];
+
+            foreach ($document->query('//*') as $element) {
+                if (in_array($position, (fn () => $this->index[$element->getNodePath()] ?? [])->call($parser), true)) {
+                    $actual[] = $element->getNodePath();
+                }
+            }
+
+            $this->assertSame($expected, $actual, $selector);
+            $this->assertNotSame([], $expected, "$selector should match something in the fixture");
+        }
+    }
 }

@@ -60,4 +60,30 @@ class CssIndexBudgetTest extends TestCase
         $this->assertSame(1, $injected->indexBuilds());
         $this->assertSame(0, $document->cssParser()->indexBuilds());
     }
+
+    public function test_descendant_selectors_are_bucketed_by_their_rightmost_compound(): void
+    {
+        $css = '';
+
+        for ($i = 0; $i < 2000; $i++) {
+            $css .= sprintf('.w%d .t%d { color: #%06x } ', $i % 400, $i, ($i * 97) % 0x555555);
+        }
+
+        $body = '';
+
+        for ($i = 0; $i < 1000; $i++) {
+            $body .= sprintf('<div class="w%d"><p class="t%d">Text %d</p><span class="t%d">More</span></div>', $i % 400, $i, $i, ($i * 7) % 2000);
+        }
+
+        $document = HtmlDocument::fromHtml('<html lang="en"><head><title>Large</title><style>'.$css.'</style></head><body><main>'.$body.'</main></body></html>');
+
+        $start = microtime(true);
+        $document->cssParser()->buildIndex();
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(1.0, $elapsed, sprintf('index build took %.2f s', $elapsed));
+
+        $paragraph = $document->query('//div[@class="w5"]/p[@class="t5"]')[0];
+        $this->assertSame('#0001e5', $document->cssParser()->declarationsFor($paragraph)['color']['value']);
+    }
 }

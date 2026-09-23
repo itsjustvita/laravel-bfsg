@@ -80,6 +80,10 @@ final class Color
             return self::fromChannels($m[1], true);
         }
 
+        if (preg_match('/^(oklch|oklab)\((.+)\)$/', $value, $m) === 1) {
+            return self::fromOklab($m[2], $m[1] === 'oklch');
+        }
+
         return null;
     }
 
@@ -122,7 +126,7 @@ final class Color
 
     private static function firstColor(string $text): ?self
     {
-        preg_match_all('/#[0-9a-f]{3,8}\b|(?:rgba?|hsla?)\([^)]*\)|[a-z]+/', $text, $matches);
+        preg_match_all('/#[0-9a-f]{3,8}\b|(?:rgba?|hsla?|oklch|oklab)\([^)]*\)|[a-z]+/', $text, $matches);
 
         foreach ($matches[0] as $token) {
             if ($token === 'transparent' || $token[0] === '#' || str_contains($token, '(') || isset(self::NAMED[$token])) {
@@ -217,6 +221,65 @@ final class Color
         }
 
         return new self(self::number($parts[0], 255), self::number($parts[1], 255), self::number($parts[2], 255), max(0.0, min(1.0, $alpha)));
+    }
+
+    /**
+     * oklab(L a b [/ alpha]) or oklch(L C H [/ alpha]) → sRGB, clamped to the gamut. L is 0..1 or a percentage;
+     * a, b and C accept percentages of 0.4; H is in degrees unless it carries deg/rad/grad/turn; `none` is 0.
+     */
+    private static function fromOklab(string $inner, bool $polar): ?self
+    {
+        $inner = str_replace('/', ' / ', $inner);
+        $parts = preg_split('/\s+/', trim($inner), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $slash = array_search('/', $parts, true);
+        $alpha = $slash === false ? 1.0 : self::number($parts[$slash + 1] ?? '1', 1);
+        $channels = array_values(array_map(fn (string $part) => $part === 'none' ? '0' : $part, $slash === false ? $parts : array_slice($parts, 0, $slash)));
+
+        if (count($channels) !== 3 || preg_grep('/^-?(\d*\.?\d+)(%|deg|rad|grad|turn)?$/', $channels) !== $channels) {
+            return null;
+        }
+
+        $lightness = self::number($channels[0], 1);
+
+        if ($polar) {
+            $chroma = self::number($channels[1], 0.4);
+            $hue = deg2rad(self::degrees($channels[2]));
+            [$a, $b] = [$chroma * cos($hue), $chroma * sin($hue)];
+        } else {
+            [$a, $b] = [self::number($channels[1], 0.4), self::number($channels[2], 0.4)];
+        }
+
+        $l = ($lightness + 0.3963377774 * $a + 0.2158037573 * $b) ** 3;
+        $m = ($lightness - 0.1055613458 * $a - 0.0638541728 * $b) ** 3;
+        $s = ($lightness - 0.0894841775 * $a - 1.2914855480 * $b) ** 3;
+
+        $linear = [
+            4.0767416621 * $l - 3.3077115913 * $m + 0.2309699292 * $s,
+            -1.2684380046 * $l + 2.6097574011 * $m - 0.3413193965 * $s,
+            -0.0041960863 * $l - 0.7034186147 * $m + 1.7076147010 * $s,
+        ];
+
+        [$red, $green, $blue] = array_map(function (float $channel): float {
+            $channel = max(0.0, min(1.0, $channel));
+            $gamma = $channel <= 0.0031308 ? 12.92 * $channel : 1.055 * $channel ** (1 / 2.4) - 0.055;
+
+            return max(0.0, min(255.0, $gamma * 255));
+        }, $linear);
+
+        return new self($red, $green, $blue, max(0.0, min(1.0, $alpha)));
+    }
+
+    /** A CSS <angle> or bare number (degrees) in degrees. */
+    private static function degrees(string $token): float
+    {
+        preg_match('/^(-?\d*\.?\d+)(deg|rad|grad|turn)?$/', $token, $m);
+
+        return match ($m[2] ?? '') {
+            'rad' => rad2deg((float) $m[1]),
+            'grad' => (float) $m[1] * 0.9,
+            'turn' => (float) $m[1] * 360,
+            default => (float) ($m[1] ?? 0),
+        };
     }
 
     /** "50%" → 50 % of $scale, plain numbers unchanged. */

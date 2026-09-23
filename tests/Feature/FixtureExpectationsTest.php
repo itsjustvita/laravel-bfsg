@@ -134,10 +134,8 @@ class FixtureExpectationsTest extends TestCase
     }
 
     /**
-     * Tailwind v4 utilities: the literal-hex text-gray-400 is measured definitely (error). The real v4
-     * text-gray-300 (color: var(--color-gray-300), an oklch() theme variable) cannot be resolved yet, so its
-     * colour falls back to the inherited black and yields nothing — var()/oklch resolution is Phase 3 work;
-     * once it lands this element becomes a contrast.insufficient finding.
+     * Tailwind v4 utilities: the literal-hex text-gray-400 and the real v4 text-gray-300 (color: var(--color-gray-300),
+     * an oklch() theme variable declared on :root inside @layer theme) are both measured definitely (error).
      */
     public function test_tailwind_v4_contrast_by_element(): void
     {
@@ -147,10 +145,13 @@ class FixtureExpectationsTest extends TestCase
         ));
         $byElement = array_combine(array_map(fn (Violation $violation) => (string) $violation->element, $contrast), $contrast);
 
-        $this->assertArrayHasKey('p#fineprint.text-sm.text-gray-400', $byElement);
-        $this->assertSame(Severity::Error, $byElement['p#fineprint.text-sm.text-gray-400']->severity);
-        $this->assertFalse($byElement['p#fineprint.text-sm.text-gray-400']->meta['approximate']);
-        $this->assertSame([], array_filter(array_keys($byElement), fn (string $element) => str_contains($element, 'v4-muted')), 'var()/oklch text yields nothing until Phase 3');
+        foreach (['p#fineprint.text-sm.text-gray-400', 'p#v4-muted.text-sm.text-gray-300'] as $element) {
+            $this->assertArrayHasKey($element, $byElement);
+            $this->assertSame(Severity::Error, $byElement[$element]->severity, $element);
+            $this->assertFalse($byElement[$element]->meta['approximate'], $element);
+        }
+
+        $this->assertSame('#d1d5dc', $byElement['p#v4-muted.text-sm.text-gray-300']->params['foreground']);
     }
 
     /**
