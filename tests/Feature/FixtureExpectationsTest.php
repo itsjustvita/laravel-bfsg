@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\Phase2Progress;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use ItsJustVita\LaravelBfsg\Violation;
@@ -132,6 +133,26 @@ class FixtureExpectationsTest extends TestCase
         }
 
         $this->addToAssertionCount(1);
+    }
+
+    /**
+     * Tailwind v4 utilities: the literal-hex text-gray-400 is measured definitely (error). The real v4
+     * text-gray-300 (color: var(--color-gray-300), an oklch() theme variable) cannot be resolved yet, so its
+     * colour falls back to the inherited black and yields nothing — var()/oklch resolution is Phase 3 work;
+     * once it lands this element becomes a contrast.insufficient finding.
+     */
+    public function test_tailwind_v4_contrast_by_element(): void
+    {
+        $contrast = array_values(array_filter(
+            $this->analyzeFixture('tailwind-v4-marketing.html')->all(),
+            fn (Violation $violation) => $violation->key === 'contrast.insufficient',
+        ));
+        $byElement = array_combine(array_map(fn (Violation $violation) => (string) $violation->element, $contrast), $contrast);
+
+        $this->assertArrayHasKey('p#fineprint.text-sm.text-gray-400', $byElement);
+        $this->assertSame(Severity::Error, $byElement['p#fineprint.text-sm.text-gray-400']->severity);
+        $this->assertFalse($byElement['p#fineprint.text-sm.text-gray-400']->meta['approximate']);
+        $this->assertSame([], array_filter(array_keys($byElement), fn (string $element) => str_contains($element, 'v4-muted')), 'var()/oklch text yields nothing until Phase 3');
     }
 
     /**

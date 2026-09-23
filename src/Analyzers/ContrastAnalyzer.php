@@ -78,9 +78,16 @@ class ContrastAnalyzer extends BaseAnalyzer
             $tags[] = 'approximate';
         }
 
+        // An approximate measurement (unresolved var(), gradient, image, truncated index) is a warning, not an error.
+        $severity = match (true) {
+            ! $failsAa => Severity::Notice,
+            $colors['approximate'] => Severity::Warning,
+            default => Severity::Error,
+        };
+
         $this->report(
             'insufficient',
-            $failsAa ? Severity::Error : Severity::Notice,
+            $severity,
             $failsAa ? '1.4.3' : '1.4.6',
             $element,
             [

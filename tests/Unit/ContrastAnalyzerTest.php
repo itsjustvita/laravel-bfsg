@@ -101,6 +101,18 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame(['approximate'], $approximate->tags);
     }
 
+    public function test_definite_failures_are_errors_and_approximate_ones_warnings(): void
+    {
+        $definite = $this->assertHasViolation($this->analyze($this->page('.muted { color: #cccccc }', '<p class="muted">Definite</p>')), 'contrast.insufficient');
+        $this->assertSame(Severity::Error, $definite->severity);
+
+        $approximate = $this->assertHasViolation($this->analyze($this->page('.box { color: #cccccc; background-color: #dddddd } .box p { color: var(--muted) }', '<div class="box"><p>Approximate</p></div>')), 'contrast.insufficient');
+        $this->assertTrue($approximate->meta['approximate']);
+        $this->assertSame(Severity::Warning, $approximate->severity);
+        $this->assertSame('1.4.3', $approximate->rule);
+        $this->assertSame(['ratio' => '1.18', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#dddddd'], $approximate->params);
+    }
+
     public function test_aaa_level_reports_notices_with_the_aaa_tag(): void
     {
         $analyzer = new ContrastAnalyzer(level: 'AAA');
