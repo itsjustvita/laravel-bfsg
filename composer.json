@@ -20,6 +20,8 @@
     "ext-dom": "*",
     "ext-libxml": "*",
     "ext-mbstring": "*",
+    "guzzlehttp/guzzle": "^7.8.2 || ^8.0",
+    "guzzlehttp/psr7": "^2.6.2 || ^3.0",
     "illuminate/console": "^12.0 || ^13.0",
     "illuminate/contracts": "^12.0 || ^13.0",
     "illuminate/database": "^12.0 || ^13.0",

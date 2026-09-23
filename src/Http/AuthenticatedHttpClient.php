@@ -2,317 +2,370 @@
 
 namespace ItsJustVita\LaravelBfsg\Http;
 
-use Exception;
+use Closure;
+use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Cookie\SetCookie;
+use GuzzleHttp\Psr7\Request as PsrRequest;
+use GuzzleHttp\Psr7\UriResolver;
+use GuzzleHttp\Psr7\Utils;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Http;
 
+/**
+ * HTTP client for bfsg:check, MCP and UrlFetcher: one cookie jar, one request factory (timeout, TLS verification,
+ * user agent, no automatic redirects) and the login flows. Cookies are stored and sent by the client itself, so
+ * they behave the same with a real transport and with Http::fake().
+ */
 class AuthenticatedHttpClient
 {
-    protected array $cookies = [];
+    private CookieJar $jar;
 
-    protected ?string $bearerToken = null;
+    /** @var array<string, string> headers sent with every request (Authorization, API keys, custom headers) */
+    private array $headers = [];
 
-    protected array $headers = [];
+    private int $timeout;
 
-    protected ?string $sessionCookie = null;
+    private bool $verifySsl;
 
-    protected bool $verifySsl = true;
+    private string $userAgent;
 
-    /**
-     * Toggle TLS certificate verification for every request this client sends
-     */
-    public function setVerifySsl(bool $verifySsl): static
+    public function __construct(?int $timeout = null, ?bool $verifySsl = null, ?string $userAgent = null)
+    {
+        $this->timeout = $timeout ?? (int) config('bfsg.fetch.timeout', 30);
+        $this->verifySsl = $verifySsl ?? filter_var(config('bfsg.fetch.verify_ssl', true), FILTER_VALIDATE_BOOL);
+        $this->userAgent = $userAgent ?? (string) config('bfsg.fetch.user_agent', 'laravel-bfsg');
+        $this->jar = new CookieJar;
+    }
+
+    public function withVerifySsl(bool $verifySsl): static
     {
         $this->verifySsl = $verifySsl;
 
         return $this;
     }
 
-    /**
-     * Base request carrying the settings shared by every call
-     */
-    protected function request(): PendingRequest
+    public function verifiesSsl(): bool
     {
-        $request = Http::timeout(30);
+        return $this->verifySsl;
+    }
 
-        if (! $this->verifySsl) {
-            $request = $request->withoutVerifying();
-        }
+    public function cookies(): CookieJar
+    {
+        return $this->jar;
+    }
 
-        return $request;
+    /** The factory every request is built from. */
+    public function request(): PendingRequest
+    {
+        return Http::timeout($this->timeout)
+            ->withUserAgent($this->userAgent)
+            ->withOptions(['verify' => $this->verifySsl, 'allow_redirects' => false])
+            ->withHeaders($this->headers);
+    }
+
+    /** @param  array<string, string>  $headers */
+    public function get(string $url, array $headers = []): Response
+    {
+        return $this->dispatch('GET', $url, $headers, fn (PendingRequest $request) => $request->get($url));
     }
 
     /**
-     * Authenticate using email and password (or custom fields)
+     * @param  array<string, mixed>  $data
+     * @param  array<string, string>  $headers
      */
-    public function authenticateWithCredentials(
-        string $loginUrl,
-        string $email,
-        string $password,
-        array $additionalFields = [],
-        array $customFieldNames = []
-    ): bool {
-        // Support custom field names for different auth providers
-        $emailField = $customFieldNames['email_field'] ?? 'email';
-        $passwordField = $customFieldNames['password_field'] ?? 'password';
+    public function postForm(string $url, array $data, array $headers = []): Response
+    {
+        return $this->dispatch('POST', $url, $headers, fn (PendingRequest $request) => $request->asForm()->post($url, $data));
+    }
 
-        $postData = array_merge([
-            $emailField => $email,
-            $passwordField => $password,
-        ], $additionalFields);
+    /**
+     * @param  array<string, mixed>  $data
+     * @param  array<string, string>  $headers
+     */
+    public function postJson(string $url, array $data, array $headers = []): Response
+    {
+        return $this->dispatch('POST', $url, $headers, fn (PendingRequest $request) => $request->asJson()->acceptJson()->post($url, $data));
+    }
 
-        // Check if it's JSON or form-based authentication
-        $isJsonAuth = $customFieldNames['json_auth'] ?? false;
+    /**
+     * Form login: GET the login page (session cookie, `_token` field, XSRF-TOKEN cookie), then POST the credentials
+     * without following redirects. Success is a redirect away from the login page, or a 2xx with a session cookie.
+     *
+     * @param  array<string, mixed>  $fields  extra form fields
+     * @param  array{username?: string, password?: string}  $fieldNames
+     *
+     * @throws AuthenticationFailed
+     */
+    public function loginWithForm(string $loginUrl, string $user, string $password, array $fields = [], array $fieldNames = []): void
+    {
+        $page = $this->attempt($loginUrl, fn () => $this->get($loginUrl, ['Accept' => 'text/html,application/xhtml+xml']));
 
-        if ($isJsonAuth) {
-            $response = $this->request()->withHeaders([
-                'Accept' => 'application/json',
-                'X-Requested-With' => 'XMLHttpRequest',
-            ])->post($loginUrl, $postData);
-        } else {
-            $response = $this->request()->asForm()->withHeaders([
-                'Accept' => 'text/html,application/xhtml+xml',
-            ])->post($loginUrl, $postData);
+        if ($page->clientError() || $page->serverError()) {
+            throw AuthenticationFailed::loginPage($loginUrl, $page->status());
         }
 
-        if ($response->failed() && $response->status() >= 500) {
-            throw new Exception('Failed to authenticate: Could not connect to login URL');
+        $data = array_merge($fields, [($fieldNames['username'] ?? 'email') => $user, ($fieldNames['password'] ?? 'password') => $password]);
+        $token = $this->csrfField($page->body());
+
+        if ($token !== null) {
+            $data['_token'] = $token;
         }
 
-        // Extract cookies from response headers
-        $this->extractCookiesFromResponse($response);
+        $response = $this->attempt($loginUrl, fn () => $this->postForm($loginUrl, $data, $this->csrfHeaders($loginUrl, ['Accept' => 'text/html,application/xhtml+xml', 'Referer' => $loginUrl])));
 
-        // For JSON responses, check for token
-        if ($isJsonAuth) {
-            $responseData = $response->json();
+        $this->assertLoggedIn($response, $loginUrl);
+    }
 
-            // Check for JWT/Bearer token in response
-            if (isset($responseData['token'])) {
-                $this->bearerToken = $responseData['token'];
-                $this->headers['Authorization'] = "Bearer {$responseData['token']}";
+    /**
+     * JSON login (API guards, JWT): a token in the response (`token`, `access_token`, `data.token`) becomes the
+     * bearer token; otherwise a session cookie must have been set.
+     *
+     * @param  array<string, mixed>  $fields
+     * @param  array{username?: string, password?: string}  $fieldNames
+     *
+     * @throws AuthenticationFailed
+     */
+    public function loginWithJson(string $loginUrl, string $user, string $password, array $fields = [], array $fieldNames = []): void
+    {
+        $data = array_merge($fields, [($fieldNames['username'] ?? 'email') => $user, ($fieldNames['password'] ?? 'password') => $password]);
+        $response = $this->attempt($loginUrl, fn () => $this->postJson($loginUrl, $data, $this->csrfHeaders($loginUrl, ['X-Requested-With' => 'XMLHttpRequest'])));
 
+        $this->acceptTokenOrSession($response, $loginUrl);
+    }
+
+    /**
+     * Sanctum SPA login: GET {origin}/sanctum/csrf-cookie, then POST {origin}{loginPath} with the XSRF token,
+     * Origin and Referer (Sanctum's stateful check), sharing one cookie jar.
+     *
+     * @param  array{username?: string, password?: string}  $fieldNames
+     *
+     * @throws AuthenticationFailed
+     */
+    public function loginWithSanctum(string $origin, string $user, string $password, string $loginPath = '/login', array $fieldNames = []): void
+    {
+        $origin = rtrim($origin, '/');
+        $csrfUrl = $origin.'/sanctum/csrf-cookie';
+        $loginUrl = $origin.'/'.ltrim($loginPath, '/');
+
+        $this->attempt($csrfUrl, fn () => $this->get($csrfUrl, ['Accept' => 'application/json', 'X-Requested-With' => 'XMLHttpRequest']));
+
+        if ($this->cookieValue($csrfUrl, 'XSRF-TOKEN') === null) {
+            throw AuthenticationFailed::csrf($csrfUrl, null);
+        }
+
+        $data = [($fieldNames['username'] ?? 'email') => $user, ($fieldNames['password'] ?? 'password') => $password];
+        $headers = $this->csrfHeaders($loginUrl, ['X-Requested-With' => 'XMLHttpRequest', 'Origin' => $origin, 'Referer' => $origin.'/']);
+        $response = $this->attempt($loginUrl, fn () => $this->postJson($loginUrl, $data, $headers));
+
+        $this->acceptTokenOrSession($response, $loginUrl);
+    }
+
+    public function withBearer(string $token): static
+    {
+        $this->headers['Authorization'] = 'Bearer '.$token;
+
+        return $this;
+    }
+
+    /** JWTs are bearer tokens (RFC 6750); tymon/jwt-auth and Passport read `Authorization: Bearer`. */
+    public function withJwt(string $token): static
+    {
+        return $this->withBearer($token);
+    }
+
+    public function withApiKey(string $key, string $header = 'X-API-Key'): static
+    {
+        $this->headers[$header] = $key;
+
+        return $this;
+    }
+
+    /** @param  array<string, string>  $headers */
+    public function withHeaders(array $headers): static
+    {
+        $this->headers = array_merge($this->headers, $headers);
+
+        return $this;
+    }
+
+    /** An existing session cookie, scoped to the host of $url. */
+    public function withSessionCookie(string $name, string $value, string $url): static
+    {
+        $this->jar->setCookie(new SetCookie([
+            'Name' => $name,
+            'Value' => $value,
+            'Domain' => (string) parse_url($url, PHP_URL_HOST),
+            'Path' => '/',
+        ]));
+
+        return $this;
+    }
+
+    /** @return array<string, string> */
+    public function headers(): array
+    {
+        return $this->headers;
+    }
+
+    /** Whether the jar holds a session cookie for the host of $url: `*_session`, `PHPSESSID`, or the app's session cookie. */
+    public function hasSessionCookie(string $url): bool
+    {
+        $host = (string) parse_url($url, PHP_URL_HOST);
+        $appCookie = $host !== '' && $host === parse_url((string) config('app.url'), PHP_URL_HOST) ? (string) config('session.cookie') : null;
+
+        foreach ($this->jar as $cookie) {
+            $name = (string) $cookie->getName();
+
+            if ($cookie->matchesDomain($host) && (preg_match('/_session$/i', $name) === 1 || $name === 'PHPSESSID' || $name === $appCookie)) {
                 return true;
             }
+        }
 
-            // Check for access_token (OAuth style)
-            if (isset($responseData['access_token'])) {
-                $this->bearerToken = $responseData['access_token'];
-                $this->headers['Authorization'] = "Bearer {$responseData['access_token']}";
+        return false;
+    }
 
-                return true;
+    /** @return array{email: ?string, password: ?string, token: ?string} BFSG_AUTH_EMAIL, BFSG_AUTH_PASSWORD, BFSG_AUTH_TOKEN */
+    public static function credentialsFromEnv(): array
+    {
+        $read = fn (string $name): ?string => is_string($value = Env::get($name)) && $value !== '' ? $value : null;
+
+        return ['email' => $read('BFSG_AUTH_EMAIL'), 'password' => $read('BFSG_AUTH_PASSWORD'), 'token' => $read('BFSG_AUTH_TOKEN')];
+    }
+
+    /** @param  array<string, string>  $headers */
+    private function dispatch(string $method, string $url, array $headers, Closure $send): Response
+    {
+        $psr = $this->jar->withCookieHeader(new PsrRequest($method, $url));
+        $request = $this->request()->withHeaders($headers);
+
+        if ($psr->hasHeader('Cookie')) {
+            $request->withHeaders(['Cookie' => $psr->getHeaderLine('Cookie')]);
+        }
+
+        $response = $send($request);
+        $this->jar->extractCookies($psr, $response->toPsrResponse());
+
+        return $response;
+    }
+
+    private function attempt(string $url, Closure $send): Response
+    {
+        try {
+            return $send();
+        } catch (ConnectionException $e) {
+            throw AuthenticationFailed::connection($url, $e->getMessage());
+        }
+    }
+
+    private function assertLoggedIn(Response $response, string $loginUrl): void
+    {
+        $this->rejectFailures($response, $loginUrl);
+
+        if ($response->redirect()) {
+            $location = (string) UriResolver::resolve(Utils::uriFor($loginUrl), Utils::uriFor($response->header('Location')));
+
+            if ($response->header('Location') !== '' && $this->samePath($location, $loginUrl)) {
+                throw AuthenticationFailed::credentials($loginUrl, null);
             }
+
+            return;
         }
 
-        // Check if we got a session cookie
-        return $this->hasSessionCookie();
-    }
-
-    /**
-     * Authenticate using a bearer token
-     */
-    public function authenticateWithBearerToken(string $token, string $type = 'Bearer'): void
-    {
-        $this->bearerToken = $token;
-        $this->headers['Authorization'] = "{$type} {$token}";
-    }
-
-    /**
-     * Authenticate using JWT (JSON Web Token)
-     */
-    public function authenticateWithJWT(string $token): void
-    {
-        $this->authenticateWithBearerToken($token, 'JWT');
-    }
-
-    /**
-     * Authenticate using API Key
-     */
-    public function authenticateWithApiKey(string $apiKey, string $headerName = 'X-API-Key'): void
-    {
-        $this->headers[$headerName] = $apiKey;
-    }
-
-    /**
-     * Authenticate using OAuth2
-     */
-    public function authenticateWithOAuth2(string $accessToken): void
-    {
-        $this->bearerToken = $accessToken;
-        $this->headers['Authorization'] = "Bearer {$accessToken}";
-    }
-
-    /**
-     * Authenticate using custom headers
-     */
-    public function authenticateWithCustomHeaders(array $headers): void
-    {
-        foreach ($headers as $header => $value) {
-            $this->headers[$header] = $value;
-        }
-    }
-
-    /**
-     * Authenticate using an existing session cookie
-     */
-    public function authenticateWithSessionCookie(string $cookieName, string $cookieValue): void
-    {
-        $this->sessionCookie = "{$cookieName}={$cookieValue}";
-        $this->cookies[$cookieName] = $cookieValue;
-    }
-
-    /**
-     * Authenticate using Laravel Sanctum
-     */
-    public function authenticateWithSanctum(string $apiUrl, string $email, string $password): ?string
-    {
-        // First get CSRF token
-        $csrfUrl = rtrim($apiUrl, '/').'/sanctum/csrf-cookie';
-
-        $csrfResponse = $this->request()->withHeaders([
-            'Accept' => 'application/json',
-            'X-Requested-With' => 'XMLHttpRequest',
-        ])->get($csrfUrl);
-
-        $this->extractCookiesFromResponse($csrfResponse);
-
-        // Get XSRF token from cookies
-        $xsrfToken = $this->cookies['XSRF-TOKEN'] ?? null;
-
-        if (! $xsrfToken) {
-            throw new Exception('Failed to get CSRF token from Sanctum');
+        if ($response->successful() && $this->hasSessionCookie($loginUrl)) {
+            return;
         }
 
-        // Now authenticate
-        $loginData = [
-            'email' => $email,
-            'password' => $password,
-        ];
+        throw AuthenticationFailed::noSession($loginUrl, $response->status());
+    }
 
-        $cookieHeader = $this->getCookieString();
+    private function acceptTokenOrSession(Response $response, string $loginUrl): void
+    {
+        $this->rejectFailures($response, $loginUrl);
 
-        $loginUrl = rtrim($apiUrl, '/').'/login';
+        $json = $response->json();
+        $token = is_array($json) ? ($json['token'] ?? $json['access_token'] ?? ($json['data']['token'] ?? null)) : null;
 
-        $loginResponse = $this->request()->withHeaders([
-            'Accept' => 'application/json',
-            'X-Requested-With' => 'XMLHttpRequest',
-            'X-XSRF-TOKEN' => urldecode($xsrfToken),
-            'Cookie' => $cookieHeader,
-        ])->post($loginUrl, $loginData);
+        if (is_string($token) && $token !== '') {
+            $this->withBearer($token);
 
-        if ($loginResponse->failed()) {
-            throw new Exception('Failed to authenticate with Sanctum');
+            return;
         }
 
-        $this->extractCookiesFromResponse($loginResponse);
+        if (($response->successful() || $response->redirect()) && $this->hasSessionCookie($loginUrl)) {
+            return;
+        }
 
-        // For API token based Sanctum
-        $responseData = $loginResponse->json();
-        if (isset($responseData['token'])) {
-            $this->bearerToken = $responseData['token'];
+        throw AuthenticationFailed::noSession($loginUrl, $response->status());
+    }
 
-            return $responseData['token'];
+    private function rejectFailures(Response $response, string $loginUrl): void
+    {
+        match ($response->status()) {
+            419 => throw AuthenticationFailed::csrf($loginUrl),
+            422 => throw AuthenticationFailed::validation($loginUrl, $this->firstError($response)),
+            401, 403 => throw AuthenticationFailed::credentials($loginUrl, $response->status()),
+            default => null,
+        };
+    }
+
+    private function firstError(Response $response): ?string
+    {
+        $errors = $response->json('errors');
+
+        if (is_array($errors)) {
+            $first = reset($errors);
+
+            return is_array($first) ? (string) reset($first) : (is_string($first) ? $first : null);
+        }
+
+        $message = $response->json('message');
+
+        return is_string($message) ? $message : null;
+    }
+
+    /** The `_token` of a Laravel form, or the csrf-token meta tag. */
+    private function csrfField(string $html): ?string
+    {
+        foreach (['/<input\b[^>]*\bname=["\']_token["\'][^>]*>/i', '/<meta\b[^>]*\bname=["\']csrf-token["\'][^>]*>/i'] as $tag) {
+            if (preg_match($tag, $html, $m) === 1 && preg_match('/\b(?:value|content)=["\']([^"\']*)["\']/i', $m[0], $value) === 1) {
+                return html_entity_decode($value[1], ENT_QUOTES);
+            }
         }
 
         return null;
     }
 
     /**
-     * Fetch a URL with authentication
+     * @param  array<string, string>  $headers
+     * @return array<string, string> $headers plus X-XSRF-TOKEN when the jar holds an XSRF-TOKEN cookie for $url
      */
-    public function fetchAuthenticatedUrl(string $url, bool $verifySsl = true): string
+    private function csrfHeaders(string $url, array $headers): array
     {
-        $request = $this->request()->withHeaders($this->headers);
+        $xsrf = $this->cookieValue($url, 'XSRF-TOKEN');
 
-        if (! $verifySsl) {
-            $request = $request->withoutVerifying();
-        }
-
-        if ($this->hasCookies()) {
-            $request = $request->withHeaders([
-                'Cookie' => $this->getCookieString(),
-            ]);
-        }
-
-        $response = $request->get($url);
-
-        if ($response->failed()) {
-            throw new Exception("Failed to fetch authenticated URL: {$url}");
-        }
-
-        return $response->body();
+        return $xsrf === null ? $headers : $headers + ['X-XSRF-TOKEN' => urldecode($xsrf)];
     }
 
-    /**
-     * Extract cookies from HTTP response
-     */
-    protected function extractCookiesFromResponse(Response $response): void
+    private function cookieValue(string $url, string $name): ?string
     {
-        // header() joins multiple Set-Cookie values with commas; the PSR-7
-        // response keeps them as separate header lines.
-        $setCookieHeaders = $response->toPsrResponse()->getHeader('Set-Cookie');
+        $host = (string) parse_url($url, PHP_URL_HOST);
 
-        foreach ($setCookieHeaders as $cookieString) {
-            if (empty($cookieString)) {
-                continue;
-            }
-
-            $parts = explode(';', $cookieString);
-            $cookie = trim($parts[0]);
-
-            if (strpos($cookie, '=') !== false) {
-                [$name, $value] = explode('=', $cookie, 2);
-                $name = trim($name);
-                $value = trim($value);
-                $this->cookies[$name] = $value;
-
-                // Check for Laravel session cookie
-                if (stripos($name, 'laravel_session') !== false || $name === 'PHPSESSID') {
-                    $this->sessionCookie = $cookie;
-                }
+        foreach ($this->jar as $cookie) {
+            if ($cookie->getName() === $name && $cookie->matchesDomain($host)) {
+                return $cookie->getValue();
             }
         }
+
+        return null;
     }
 
-    /**
-     * Check if we have a session cookie
-     */
-    protected function hasSessionCookie(): bool
+    private function samePath(string $a, string $b): bool
     {
-        return $this->sessionCookie !== null ||
-               isset($this->cookies['laravel_session']) ||
-               isset($this->cookies['PHPSESSID']);
-    }
+        $path = fn (string $url): string => rtrim((string) parse_url($url, PHP_URL_PATH), '/');
 
-    /**
-     * Check if we have any cookies
-     */
-    protected function hasCookies(): bool
-    {
-        return ! empty($this->cookies);
-    }
-
-    /**
-     * Get cookie string for headers
-     */
-    protected function getCookieString(): string
-    {
-        $cookieParts = [];
-        foreach ($this->cookies as $name => $value) {
-            $cookieParts[] = "{$name}={$value}";
-        }
-
-        return implode('; ', $cookieParts);
-    }
-
-    /**
-     * Clear all authentication
-     */
-    public function clearAuthentication(): void
-    {
-        $this->cookies = [];
-        $this->bearerToken = null;
-        $this->headers = [];
-        $this->sessionCookie = null;
+        return parse_url($a, PHP_URL_HOST) === parse_url($b, PHP_URL_HOST) && $path($a) === $path($b);
     }
 }

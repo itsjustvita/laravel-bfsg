@@ -39,12 +39,6 @@ class BfsgCheckCommand extends Command
 
     protected AuthenticatedHttpClient $httpClient;
 
-    public function __construct()
-    {
-        parent::__construct();
-        $this->httpClient = new AuthenticatedHttpClient;
-    }
-
     public function handle()
     {
         $url = $this->argument('url') ?? config('app.url');
@@ -53,7 +47,7 @@ class BfsgCheckCommand extends Command
         $this->newLine();
 
         try {
-            $this->httpClient->setVerifySsl($this->verifySsl());
+            $this->httpClient = (new AuthenticatedHttpClient)->withVerifySsl($this->verifySsl());
 
             // Handle authentication if needed
             if ($this->usesAuthentication()) {
@@ -155,50 +149,35 @@ class BfsgCheckCommand extends Command
     {
         $origin = $this->originOf($url);
 
-        // JWT authentication
         if ($jwt = $this->option('jwt')) {
-            $this->info('🔐 Authenticating with JWT token...');
-            $this->httpClient->authenticateWithJWT($jwt);
-            $this->info('✅ JWT authentication configured');
+            $this->httpClient->withJwt($jwt);
 
             return;
         }
 
-        // Bearer token authentication
         if ($bearer = $this->option('bearer')) {
-            $this->info('🔐 Authenticating with bearer token...');
-            $this->httpClient->authenticateWithBearerToken($bearer);
-            $this->info('✅ Bearer token authentication configured');
+            $this->httpClient->withBearer($bearer);
 
             return;
         }
 
-        // API Key authentication
         if ($apiKey = $this->option('api-key')) {
-            $this->info('🔐 Authenticating with API key...');
-            $headerName = $this->option('api-key-header') ?? 'X-API-Key';
-            $this->httpClient->authenticateWithApiKey($apiKey, $headerName);
-            $this->info('✅ API key authentication configured');
+            $this->httpClient->withApiKey($apiKey, $this->option('api-key-header') ?? 'X-API-Key');
 
             return;
         }
 
-        // Session cookie authentication
         if ($session = $this->option('session')) {
-            $this->info('🔐 Authenticating with session cookie...');
-
             if (strpos($session, '=') === false) {
                 throw new Exception('Session format must be: name=value');
             }
 
             [$name, $value] = explode('=', $session, 2);
-            $this->httpClient->authenticateWithSessionCookie($name, $value);
-            $this->info('✅ Session cookie authentication configured');
+            $this->httpClient->withSessionCookie($name, $value, $url);
 
             return;
         }
 
-        // Credentials authentication
         if ($this->option('auth')) {
             $email = $this->option('email') ?? $this->ask('Email');
             $password = $this->option('password') ?? $this->secret('Password');
@@ -207,50 +186,17 @@ class BfsgCheckCommand extends Command
                 throw new Exception('Email and password are required for authentication');
             }
 
-            $this->info('🔐 Authenticating with credentials...');
+            $fieldNames = array_filter(['username' => $this->option('username-field'), 'password' => $this->option('password-field')]);
 
             if ($this->option('sanctum')) {
-                // Sanctum authentication
-                $token = $this->httpClient->authenticateWithSanctum($origin, $email, $password);
-                if ($token) {
-                    $this->info('✅ Sanctum API token obtained');
-                } else {
-                    $this->info('✅ Sanctum session authentication successful');
-                }
+                $this->httpClient->loginWithSanctum($origin, $email, $password, fieldNames: $fieldNames);
+            } elseif ($this->option('json-auth')) {
+                $this->httpClient->loginWithJson($this->resolveLoginUrl($origin), $email, $password, fieldNames: $fieldNames);
             } else {
-                // Regular form authentication with custom field support
-                $loginUrl = $this->resolveLoginUrl($origin);
-
-                $customFields = [];
-                if ($this->option('username-field')) {
-                    $customFields['email_field'] = $this->option('username-field');
-                }
-                if ($this->option('password-field')) {
-                    $customFields['password_field'] = $this->option('password-field');
-                }
-                if ($this->option('json-auth')) {
-                    $customFields['json_auth'] = true;
-                }
-
-                $additionalFields = [];
-                if ($guard = $this->option('guard')) {
-                    $additionalFields['guard'] = $guard;
-                }
-
-                $success = $this->httpClient->authenticateWithCredentials(
-                    $loginUrl,
-                    $email,
-                    $password,
-                    $additionalFields,
-                    $customFields
-                );
-
-                if (! $success && ! $this->option('json-auth')) {
-                    throw new Exception('Authentication failed - no session cookie received');
-                }
-
-                $this->info('✅ Authentication successful');
+                $this->httpClient->loginWithForm($this->resolveLoginUrl($origin), $email, $password, fieldNames: $fieldNames);
             }
+
+            $this->info('✅ Authentication successful');
         }
     }
 
@@ -258,7 +204,13 @@ class BfsgCheckCommand extends Command
     {
         // Use authenticated client if we have authentication
         if ($this->usesAuthentication()) {
-            return $this->httpClient->fetchAuthenticatedUrl($url, $this->verifySsl());
+            $response = $this->httpClient->get($url);
+
+            if ($response->failed()) {
+                throw new Exception("Failed to fetch URL: {$url}. HTTP status: {$response->status()}");
+            }
+
+            return $response->body();
         }
 
         // Check if this is a Herd domain and handle accordingly

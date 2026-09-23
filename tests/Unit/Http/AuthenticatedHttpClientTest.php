@@ -2,527 +2,277 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Http;
 
-use Exception;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
+use ItsJustVita\LaravelBfsg\Http\AuthenticationFailed;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class AuthenticatedHttpClientTest extends TestCase
 {
-    protected AuthenticatedHttpClient $client;
+    private const LOGIN_PAGE = '<html><head><meta name="csrf-token" content="meta-token"></head><body><form method="POST" action="/login">'
+        .'<input type="hidden" name="_token" value="form-token"><input name="email"><input name="password" type="password"></form></body></html>';
 
-    protected function setUp(): void
+    private function client(): AuthenticatedHttpClient
     {
-        parent::setUp();
-        $this->client = new AuthenticatedHttpClient;
+        return new AuthenticatedHttpClient;
     }
 
-    // ─── Form-based credential auth ─────────────────────────────────────
-
-    public function test_form_based_credential_auth_with_session_cookie(): void
+    /** A Laravel-like login page: GET sets XSRF-TOKEN + session, POST answers with $post. */
+    private function fakeLogin(\Closure|array $post, string $url = 'https://app.example.com/login'): void
     {
-        Http::fake([
-            'https://example.com/login' => Http::response('OK', 200, [
-                'Set-Cookie' => 'laravel_session=abc123; Path=/; HttpOnly',
-            ]),
-        ]);
-
-        $result = $this->client->authenticateWithCredentials(
-            'https://example.com/login',
-            'user@example.com',
-            'password123'
-        );
-
-        $this->assertTrue($result);
-
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://example.com/login'
-                && $request->method() === 'POST'
-                && $request->hasHeader('Content-Type', 'application/x-www-form-urlencoded')
-                && str_contains($request->body(), 'email=user%40example.com')
-                && str_contains($request->body(), 'password=password123');
-        });
-    }
-
-    public function test_extracts_every_cookie_from_multiple_set_cookie_headers(): void
-    {
-        // Laravel sends XSRF-TOKEN and the session cookie as two Set-Cookie headers.
-        Http::fake([
-            'https://example.com/login' => Http::response('OK', 200, [
-                'Set-Cookie' => [
-                    'XSRF-TOKEN=xsrf-value; Path=/; SameSite=Lax',
-                    'laravel_session=session-value; Path=/; HttpOnly; SameSite=Lax',
-                ],
-            ]),
-            'https://example.com/dashboard' => Http::response('dashboard', 200),
-        ]);
-
-        $result = $this->client->authenticateWithCredentials('https://example.com/login', 'user@example.com', 'secret');
-
-        $this->assertTrue($result, 'Session cookie from the second Set-Cookie header must be recognised');
-
-        $this->client->fetchAuthenticatedUrl('https://example.com/dashboard');
-
-        Http::assertSent(function ($request) {
-            if ($request->url() !== 'https://example.com/dashboard') {
-                return false;
+        Http::fake(function (Request $request) use ($post, $url) {
+            if ($request->url() === $url && $request->method() === 'GET') {
+                return Http::response(self::LOGIN_PAGE, 200, ['Set-Cookie' => ['XSRF-TOKEN=xsrf%3Dvalue; Path=/', 'app_session=guest; Path=/; HttpOnly']]);
             }
 
-            $cookie = $request->header('Cookie')[0] ?? '';
-
-            return str_contains($cookie, 'XSRF-TOKEN=xsrf-value')
-                && str_contains($cookie, 'laravel_session=session-value');
-        });
-    }
-
-    public function test_ssl_verification_setting_applies_to_every_request(): void
-    {
-        $verify = [];
-
-        Http::fake(function ($request, $options) use (&$verify) {
-            $verify[$request->url()] = $options['verify'] ?? true;
-
-            return Http::response('OK', 200, [
-                'Set-Cookie' => ['XSRF-TOKEN=x; Path=/', 'laravel_session=s; Path=/'],
-            ]);
-        });
-
-        $this->client->setVerifySsl(false);
-
-        $this->client->authenticateWithCredentials('https://self-signed.test/login', 'user@example.com', 'secret');
-        $this->client->authenticateWithSanctum('https://self-signed.test', 'user@example.com', 'secret');
-        $this->client->fetchAuthenticatedUrl('https://self-signed.test/dashboard');
-
-        $this->assertFalse($verify['https://self-signed.test/login']);
-        $this->assertFalse($verify['https://self-signed.test/sanctum/csrf-cookie']);
-        $this->assertFalse($verify['https://self-signed.test/dashboard']);
-    }
-
-    // ─── JSON credential auth ───────────────────────────────────────────
-
-    public function test_json_credential_auth_with_token_response(): void
-    {
-        Http::fake([
-            'https://api.example.com/login' => Http::response([
-                'token' => 'jwt-token-abc123',
-            ], 200),
-        ]);
-
-        $result = $this->client->authenticateWithCredentials(
-            'https://api.example.com/login',
-            'user@example.com',
-            'secret',
-            [],
-            ['json_auth' => true]
-        );
-
-        $this->assertTrue($result);
-
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://api.example.com/login'
-                && $request->method() === 'POST'
-                && $request->hasHeader('Accept', 'application/json')
-                && $request->hasHeader('X-Requested-With', 'XMLHttpRequest');
-        });
-
-        // Verify the token is used for subsequent requests
-        Http::fake([
-            'https://api.example.com/data' => Http::response('protected data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/data');
-        $this->assertEquals('protected data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://api.example.com/data'
-                && $request->hasHeader('Authorization', 'Bearer jwt-token-abc123');
-        });
-    }
-
-    // ─── OAuth token in response ────────────────────────────────────────
-
-    public function test_json_credential_auth_with_access_token_response(): void
-    {
-        Http::fake([
-            'https://api.example.com/oauth/login' => Http::response([
-                'access_token' => 'oauth-access-token-xyz',
-                'token_type' => 'Bearer',
-            ], 200),
-        ]);
-
-        $result = $this->client->authenticateWithCredentials(
-            'https://api.example.com/oauth/login',
-            'user@example.com',
-            'secret',
-            [],
-            ['json_auth' => true]
-        );
-
-        $this->assertTrue($result);
-
-        // Verify OAuth token is used in subsequent requests
-        Http::fake([
-            'https://api.example.com/resource' => Http::response('resource data', 200),
-        ]);
-
-        $this->client->fetchAuthenticatedUrl('https://api.example.com/resource');
-
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://api.example.com/resource'
-                && $request->hasHeader('Authorization', 'Bearer oauth-access-token-xyz');
-        });
-    }
-
-    // ─── Custom field names ─────────────────────────────────────────────
-
-    public function test_credential_auth_with_custom_field_names(): void
-    {
-        Http::fake([
-            'https://example.com/auth' => Http::response([
-                'token' => 'custom-token',
-            ], 200),
-        ]);
-
-        $result = $this->client->authenticateWithCredentials(
-            'https://example.com/auth',
-            'admin@example.com',
-            'admin-pass',
-            ['remember' => true],
-            [
-                'email_field' => 'username',
-                'password_field' => 'pass',
-                'json_auth' => true,
-            ]
-        );
-
-        $this->assertTrue($result);
-
-        Http::assertSent(function ($request) {
-            $body = json_decode($request->body(), true);
-
-            return $request->url() === 'https://example.com/auth'
-                && isset($body['username'])
-                && $body['username'] === 'admin@example.com'
-                && isset($body['pass'])
-                && $body['pass'] === 'admin-pass'
-                && isset($body['remember'])
-                && $body['remember'] === true;
-        });
-    }
-
-    // ─── Bearer token auth ──────────────────────────────────────────────
-
-    public function test_bearer_token_auth(): void
-    {
-        $this->client->authenticateWithBearerToken('my-bearer-token');
-
-        Http::fake([
-            'https://api.example.com/protected' => Http::response('bearer data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/protected');
-
-        $this->assertEquals('bearer data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('Authorization', 'Bearer my-bearer-token');
-        });
-    }
-
-    // ─── JWT auth ───────────────────────────────────────────────────────
-
-    public function test_jwt_auth(): void
-    {
-        $this->client->authenticateWithJWT('my-jwt-token');
-
-        Http::fake([
-            'https://api.example.com/jwt-resource' => Http::response('jwt data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/jwt-resource');
-
-        $this->assertEquals('jwt data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('Authorization', 'JWT my-jwt-token');
-        });
-    }
-
-    // ─── API key auth ───────────────────────────────────────────────────
-
-    public function test_api_key_auth_with_default_header(): void
-    {
-        $this->client->authenticateWithApiKey('my-api-key-123');
-
-        Http::fake([
-            'https://api.example.com/data' => Http::response('api key data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/data');
-
-        $this->assertEquals('api key data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('X-API-Key', 'my-api-key-123');
-        });
-    }
-
-    public function test_api_key_auth_with_custom_header(): void
-    {
-        $this->client->authenticateWithApiKey('key-456', 'X-Custom-Auth');
-
-        Http::fake([
-            'https://api.example.com/data' => Http::response('custom api data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/data');
-
-        $this->assertEquals('custom api data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('X-Custom-Auth', 'key-456');
-        });
-    }
-
-    // ─── Session cookie auth ────────────────────────────────────────────
-
-    public function test_session_cookie_auth(): void
-    {
-        $this->client->authenticateWithSessionCookie('laravel_session', 'session-value-abc');
-
-        Http::fake([
-            'https://example.com/dashboard' => Http::response('dashboard content', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://example.com/dashboard');
-
-        $this->assertEquals('dashboard content', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('Cookie')
-                && str_contains($request->header('Cookie')[0], 'laravel_session=session-value-abc');
-        });
-    }
-
-    // ─── OAuth2 auth ────────────────────────────────────────────────────
-
-    public function test_oauth2_auth(): void
-    {
-        $this->client->authenticateWithOAuth2('oauth2-access-token');
-
-        Http::fake([
-            'https://api.example.com/oauth-resource' => Http::response('oauth2 data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/oauth-resource');
-
-        $this->assertEquals('oauth2 data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('Authorization', 'Bearer oauth2-access-token');
-        });
-    }
-
-    // ─── Custom headers auth ────────────────────────────────────────────
-
-    public function test_custom_headers_auth(): void
-    {
-        $this->client->authenticateWithCustomHeaders([
-            'X-Custom-Token' => 'custom-value',
-            'X-Tenant-Id' => 'tenant-123',
-        ]);
-
-        Http::fake([
-            'https://api.example.com/custom' => Http::response('custom header data', 200),
-        ]);
-
-        $content = $this->client->fetchAuthenticatedUrl('https://api.example.com/custom');
-
-        $this->assertEquals('custom header data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('X-Custom-Token', 'custom-value')
-                && $request->hasHeader('X-Tenant-Id', 'tenant-123');
-        });
-    }
-
-    // ─── Sanctum auth ───────────────────────────────────────────────────
-
-    public function test_sanctum_auth_with_token_response(): void
-    {
-        Http::fake([
-            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, [
-                'Set-Cookie' => 'XSRF-TOKEN=csrf-token-value; Path=/',
-            ]),
-            'https://app.example.com/login' => Http::response([
-                'token' => 'sanctum-api-token',
-            ], 200, [
-                'Set-Cookie' => 'laravel_session=sanctum-session; Path=/; HttpOnly',
-            ]),
-        ]);
-
-        $token = $this->client->authenticateWithSanctum(
-            'https://app.example.com',
-            'user@example.com',
-            'password'
-        );
-
-        $this->assertEquals('sanctum-api-token', $token);
-
-        // Verify CSRF cookie request
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://app.example.com/sanctum/csrf-cookie'
-                && $request->method() === 'GET';
-        });
-
-        // Verify login request includes XSRF token and cookies
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://app.example.com/login'
-                && $request->method() === 'POST'
-                && $request->hasHeader('X-XSRF-TOKEN', 'csrf-token-value')
-                && $request->hasHeader('X-Requested-With', 'XMLHttpRequest');
-        });
-    }
-
-    public function test_sanctum_login_sends_csrf_and_session_cookies(): void
-    {
-        Http::fake([
-            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, [
-                'Set-Cookie' => [
-                    'XSRF-TOKEN=csrf-token-value; Path=/; SameSite=Lax',
-                    'laravel_session=pre-login-session; Path=/; HttpOnly',
-                ],
-            ]),
-            'https://app.example.com/login' => Http::response(['message' => 'ok'], 200),
-        ]);
-
-        $this->client->authenticateWithSanctum('https://app.example.com', 'user@example.com', 'password');
-
-        Http::assertSent(function ($request) {
-            if ($request->url() !== 'https://app.example.com/login') {
-                return false;
+            if ($request->url() === $url && $request->method() === 'POST') {
+                return is_array($post) ? Http::response(...$post) : $post($request);
             }
 
-            $cookie = $request->header('Cookie')[0] ?? '';
-
-            return $request->hasHeader('X-XSRF-TOKEN', 'csrf-token-value')
-                && str_contains($cookie, 'XSRF-TOKEN=csrf-token-value')
-                && str_contains($cookie, 'laravel_session=pre-login-session');
+            return Http::response('<html><body>Dashboard</body></html>', 200);
         });
     }
 
-    public function test_sanctum_auth_without_token_response(): void
+    private function failure(\Closure $attempt): AuthenticationFailed
     {
-        Http::fake([
-            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, [
-                'Set-Cookie' => 'XSRF-TOKEN=csrf-token; Path=/',
-            ]),
-            'https://app.example.com/login' => Http::response([
-                'message' => 'Authenticated',
-            ], 200, [
-                'Set-Cookie' => 'laravel_session=session-val; Path=/; HttpOnly',
-            ]),
-        ]);
+        try {
+            $attempt();
+        } catch (AuthenticationFailed $e) {
+            return $e;
+        }
 
-        $token = $this->client->authenticateWithSanctum(
-            'https://app.example.com',
-            'user@example.com',
-            'password'
-        );
-
-        $this->assertNull($token);
+        $this->fail('AuthenticationFailed was not thrown');
     }
 
-    public function test_sanctum_auth_throws_when_csrf_cookie_missing(): void
+    public function test_form_login_sends_the_csrf_token_and_the_cookies_of_the_login_page(): void
     {
-        Http::fake([
-            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204),
-        ]);
+        $this->fakeLogin(['', 302, ['Location' => 'https://app.example.com/dashboard', 'Set-Cookie' => 'app_session=authenticated; Path=/; HttpOnly']]);
 
-        $this->expectException(Exception::class);
-        $this->expectExceptionMessage('Failed to get CSRF token from Sanctum');
+        $client = $this->client();
+        $client->loginWithForm('https://app.example.com/login', 'user@example.com', 'secret', ['remember' => '1']);
+        $client->get('https://app.example.com/dashboard');
 
-        $this->client->authenticateWithSanctum(
-            'https://app.example.com',
-            'user@example.com',
-            'password'
-        );
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST'
+            && $request['_token'] === 'form-token'
+            && $request['email'] === 'user@example.com'
+            && $request['password'] === 'secret'
+            && $request['remember'] === '1'
+            && $request->hasHeader('X-XSRF-TOKEN', 'xsrf=value')
+            && str_contains($request->header('Cookie')[0] ?? '', 'app_session=guest'));
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://app.example.com/dashboard'
+            && str_contains($request->header('Cookie')[0] ?? '', 'app_session=authenticated')
+            && str_contains($request->header('Cookie')[0] ?? '', 'XSRF-TOKEN=xsrf%3Dvalue'));
     }
 
-    // ─── fetchAuthenticatedUrl ──────────────────────────────────────────
-
-    public function test_fetch_authenticated_url_throws_on_failure(): void
+    public function test_form_login_uses_custom_field_names(): void
     {
-        Http::fake([
-            'https://example.com/missing' => Http::response('Not Found', 404),
-        ]);
+        $this->fakeLogin(['', 302, ['Location' => '/home']]);
 
-        $this->expectException(Exception::class);
-        $this->expectExceptionMessage('Failed to fetch authenticated URL: https://example.com/missing');
+        $this->client()->loginWithForm('https://app.example.com/login', 'jane', 'pw', [], ['username' => 'username', 'password' => 'pass']);
 
-        $this->client->fetchAuthenticatedUrl('https://example.com/missing');
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request['username'] === 'jane' && $request['pass'] === 'pw' && ! isset($request['email']));
     }
 
-    public function test_fetch_authenticated_url_with_ssl_verification_disabled(): void
+    public function test_form_login_with_a_2xx_answer_needs_a_session_cookie(): void
     {
-        $this->client->authenticateWithBearerToken('my-token');
+        $this->fakeLogin(['<html>ok</html>', 200]);
 
-        Http::fake([
-            'https://self-signed.example.com/data' => Http::response('insecure data', 200),
-        ]);
+        $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p'); // app_session from the login page
+        $this->assertSame('no_session', $this->failure(fn () => $this->client()->loginWithForm('https://other.example.com/login', 'u', 'p'))->reason);
+    }
 
-        $content = $this->client->fetchAuthenticatedUrl('https://self-signed.example.com/data', false);
-
-        $this->assertEquals('insecure data', $content);
-
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://self-signed.example.com/data'
-                && $request->hasHeader('Authorization', 'Bearer my-token');
+    public function test_form_login_failures_name_their_cause(): void
+    {
+        $post = [];
+        $this->fakeLogin(function () use (&$post) {
+            return Http::response(...$post);
         });
+
+        $cases = [
+            'csrf' => ['', 419],
+            'validation' => [['message' => 'The given data was invalid.', 'errors' => ['email' => ['These credentials do not match our records.']]], 422],
+            'credentials' => ['', 401],
+        ];
+
+        foreach ($cases as $reason => $response) {
+            $post = $response;
+            $failure = $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p'));
+
+            $this->assertSame($reason, $failure->reason, $reason);
+            $this->assertStringContainsString('https://app.example.com/login', $failure->getMessage());
+        }
+
+        $this->assertStringContainsString('These credentials do not match our records.', $this->failure(function () use (&$post) {
+            $post = [['errors' => ['email' => ['These credentials do not match our records.']]], 422];
+            $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p');
+        })->getMessage());
     }
 
-    // ─── clearAuthentication ────────────────────────────────────────────
-
-    public function test_clear_authentication(): void
+    public function test_a_redirect_back_to_the_login_page_means_invalid_credentials(): void
     {
-        // Set up various auth
-        $this->client->authenticateWithBearerToken('token');
-        $this->client->authenticateWithSessionCookie('session', 'value');
-        $this->client->authenticateWithApiKey('key');
+        $this->fakeLogin(['', 302, ['Location' => '/login']]);
 
-        // Clear it all
-        $this->client->clearAuthentication();
+        $failure = $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'wrong'));
 
-        // Verify headers are clean - fetch should have no auth headers
-        Http::fake([
-            'https://example.com/public' => Http::response('public data', 200),
-        ]);
+        $this->assertSame('credentials', $failure->reason);
+        $this->assertNull($failure->status);
+    }
 
-        $content = $this->client->fetchAuthenticatedUrl('https://example.com/public');
-        $this->assertEquals('public data', $content);
+    public function test_an_unreachable_or_missing_login_page_fails_early(): void
+    {
+        Http::fake(fn (Request $request) => $request->url() === 'https://nowhere.invalid/login'
+            ? throw new ConnectionException('cURL error 6: Could not resolve host')
+            : Http::response('Not Found', 404));
 
-        Http::assertSent(function ($request) {
-            return $request->url() === 'https://example.com/public'
-                && ! $request->hasHeader('Authorization')
-                && ! $request->hasHeader('X-API-Key')
-                && ! $request->hasHeader('Cookie');
+        $this->assertSame('login_page', $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p'))->reason);
+        $failure = $this->failure(fn () => $this->client()->loginWithForm('https://nowhere.invalid/login', 'u', 'p'));
+        $this->assertSame('connection', $failure->reason);
+        $this->assertStringContainsString('Could not resolve host', $failure->getMessage());
+    }
+
+    public function test_json_login_turns_a_token_into_a_bearer_header(): void
+    {
+        $payloads = ['a' => ['token' => 't-a'], 'b' => ['access_token' => 't-b', 'token_type' => 'Bearer'], 'c' => ['data' => ['token' => 't-c']]];
+
+        Http::fake(function (Request $request) use ($payloads) {
+            preg_match('~https://api\.example\.com/(\w)/login~', $request->url(), $m);
+
+            return $m === [] ? Http::response('{}', 200) : Http::response($payloads[$m[1]], 200);
         });
+
+        foreach (array_keys($payloads) as $api) {
+            $client = $this->client();
+            $client->loginWithJson("https://api.example.com/$api/login", 'user@example.com', 'secret', ['device' => 'ci']);
+            $client->get("https://api.example.com/$api/data");
+
+            Http::assertSent(fn (Request $request) => $request->url() === "https://api.example.com/$api/data" && $request->hasHeader('Authorization', "Bearer t-$api"));
+        }
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://api.example.com/a/login'
+            && $request->isJson() && $request['email'] === 'user@example.com' && $request['device'] === 'ci'
+            && $request->hasHeader('Accept', 'application/json'));
     }
 
-    // ─── Form auth without session cookie ───────────────────────────────
+    public function test_json_login_without_token_or_session_fails(): void
+    {
+        Http::fake(['*' => Http::response(['ok' => true], 200)]);
 
-    public function test_form_credential_auth_returns_false_without_session_cookie(): void
+        $this->assertSame('no_session', $this->failure(fn () => $this->client()->loginWithJson('https://api.example.com/login', 'u', 'p'))->reason);
+    }
+
+    public function test_sanctum_login_uses_the_csrf_cookie_origin_and_referer(): void
     {
         Http::fake([
-            'https://example.com/login' => Http::response('OK', 200),
+            'https://spa.example.com/sanctum/csrf-cookie' => Http::response('', 204, ['Set-Cookie' => ['XSRF-TOKEN=abc%3D; Path=/', 'spa_session=guest; Path=/']]),
+            'https://spa.example.com/auth/login' => Http::response('', 204, ['Set-Cookie' => 'spa_session=user; Path=/']),
+            '*' => Http::response('<html></html>', 200),
         ]);
 
-        $result = $this->client->authenticateWithCredentials(
-            'https://example.com/login',
-            'user@example.com',
-            'password'
-        );
+        $client = $this->client();
+        $client->loginWithSanctum('https://spa.example.com/', 'user@example.com', 'secret', '/auth/login');
+        $client->get('https://spa.example.com/dashboard');
 
-        $this->assertFalse($result);
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://spa.example.com/auth/login'
+            && $request->hasHeader('X-XSRF-TOKEN', 'abc=')
+            && $request->hasHeader('Origin', 'https://spa.example.com')
+            && $request->hasHeader('Referer', 'https://spa.example.com/')
+            && str_contains($request->header('Cookie')[0] ?? '', 'spa_session=guest'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://spa.example.com/dashboard' && str_contains($request->header('Cookie')[0] ?? '', 'spa_session=user'));
+    }
+
+    public function test_sanctum_login_without_xsrf_cookie_is_a_csrf_failure(): void
+    {
+        Http::fake(['*' => Http::response('', 204)]);
+
+        $this->assertSame('csrf', $this->failure(fn () => $this->client()->loginWithSanctum('https://spa.example.com', 'u', 'p'))->reason);
+    }
+
+    public function test_every_set_cookie_header_is_stored_and_sent_back(): void
+    {
+        Http::fake([
+            'https://example.com/start' => Http::response('', 200, ['Set-Cookie' => ['a=1; Path=/', 'b=2; Path=/', 'laravel_session=s; Path=/; HttpOnly']]),
+            '*' => Http::response('', 200),
+        ]);
+
+        $client = $this->client();
+        $client->get('https://example.com/start');
+        $client->get('https://example.com/next');
+        $client->get('https://elsewhere.example.org/');
+
+        $this->assertTrue($client->hasSessionCookie('https://example.com/'));
+        $this->assertFalse($client->hasSessionCookie('https://elsewhere.example.org/'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/next' && ($request->header('Cookie')[0] ?? '') === 'a=1; b=2; laravel_session=s');
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://elsewhere.example.org/' && ! $request->hasHeader('Cookie'));
+    }
+
+    public function test_the_app_session_cookie_name_counts_for_the_same_app(): void
+    {
+        config()->set('app.url', 'https://shop.example.com');
+        config()->set('session.cookie', 'shopcookie');
+        Http::fake(['*' => Http::response('', 200, ['Set-Cookie' => 'shopcookie=x; Path=/'])]);
+
+        $client = $this->client();
+        $client->get('https://shop.example.com/');
+
+        $this->assertTrue($client->hasSessionCookie('https://shop.example.com/cart'));
+    }
+
+    public function test_token_header_and_session_cookie_helpers(): void
+    {
+        Http::fake(['*' => Http::response('', 200)]);
+
+        $client = $this->client()
+            ->withJwt('jwt-1')
+            ->withApiKey('key-2', 'X-Custom-Key')
+            ->withHeaders(['X-Tenant' => 'acme'])
+            ->withSessionCookie('laravel_session', 'from-browser', 'https://app.example.com/dashboard');
+        $client->get('https://app.example.com/dashboard');
+
+        Http::assertSent(fn (Request $request) => $request->hasHeader('Authorization', 'Bearer jwt-1')
+            && $request->hasHeader('X-Custom-Key', 'key-2')
+            && $request->hasHeader('X-Tenant', 'acme')
+            && ($request->header('Cookie')[0] ?? '') === 'laravel_session=from-browser');
+        $this->assertSame('Bearer b', $this->client()->withBearer('b')->headers()['Authorization']);
+    }
+
+    public function test_request_factory_applies_timeout_tls_user_agent_and_no_redirects(): void
+    {
+        config()->set('bfsg.fetch.timeout', 12);
+        config()->set('bfsg.fetch.verify_ssl', false);
+        config()->set('bfsg.fetch.user_agent', 'bfsg-test/1.0');
+        $options = [];
+
+        Http::fake(function (Request $request, array $requestOptions) use (&$options) {
+            $options = $requestOptions;
+
+            return Http::response('', 302, ['Location' => '/elsewhere']);
+        });
+
+        $response = $this->client()->get('https://self-signed.test/');
+
+        $this->assertSame(302, $response->status(), 'redirects are not followed');
+        $this->assertFalse($options['verify']);
+        $this->assertSame(12, $options['timeout']);
+        $this->assertFalse($options['allow_redirects']);
+        Http::assertSent(fn (Request $request) => $request->hasHeader('User-Agent', 'bfsg-test/1.0'));
+        $this->assertTrue((new AuthenticatedHttpClient(verifySsl: true))->verifiesSsl());
+        $this->assertFalse((new AuthenticatedHttpClient)->withVerifySsl(false)->verifiesSsl());
+    }
+
+    public function test_credentials_are_read_from_the_environment(): void
+    {
+        putenv('BFSG_AUTH_EMAIL=ci@example.com');
+        putenv('BFSG_AUTH_PASSWORD=from-env');
+        putenv('BFSG_AUTH_TOKEN');
+
+        try {
+            $this->assertSame(['email' => 'ci@example.com', 'password' => 'from-env', 'token' => null], AuthenticatedHttpClient::credentialsFromEnv());
+        } finally {
+            putenv('BFSG_AUTH_EMAIL');
+            putenv('BFSG_AUTH_PASSWORD');
+        }
     }
 }

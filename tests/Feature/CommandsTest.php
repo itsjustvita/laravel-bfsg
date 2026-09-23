@@ -148,7 +148,7 @@ class CommandsTest extends TestCase
             '--jwt' => 'jwt-token-123',
         ])->assertSuccessful();
 
-        Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'JWT jwt-token-123'));
+        Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer jwt-token-123'));
     }
 
     public function test_bfsg_check_with_api_key_auth_without_auth_flag()

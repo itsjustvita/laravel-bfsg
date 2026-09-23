@@ -63,6 +63,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Fetching pages (bfsg:check, MCP): timeout in seconds, TLS verification, user agent
+    |--------------------------------------------------------------------------
+    */
+    'fetch' => [
+        'timeout' => env('BFSG_FETCH_TIMEOUT', 30),
+        'verify_ssl' => env('BFSG_VERIFY_SSL', true),
+        'user_agent' => 'laravel-bfsg/3.0 (+https://github.com/itsjustvita/laravel-bfsg)',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Reporting / persistence
     |--------------------------------------------------------------------------
     */
