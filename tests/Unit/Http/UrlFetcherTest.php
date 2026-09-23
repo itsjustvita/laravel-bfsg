@@ -131,7 +131,6 @@ class UrlFetcherTest extends TestCase
         $this->assertTrue($guest->redirected);
         $this->assertSame('http://localhost/login', $guest->finalUrl);
 
-        $this->app['auth']->forgetGuards();
         $member = $this->fetcher()->fetch('/account', new FetchOptions(actingAs: new GenericUser(['id' => 42])));
         $this->assertFalse($member->landedOnLogin);
         $this->assertStringContainsString('<body>42</body>', $member->html);
@@ -248,5 +247,36 @@ class UrlFetcherTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/landing'
             && $request->hasHeader('Authorization', 'Bearer TOPSECRET') && $request->hasHeader('X-API-Key', 'K')
             && $request->hasHeader('X-Tenant', 'acme') && ($request->header('Cookie')[0] ?? '') === 'laravel_session=sess');
+    }
+
+    public function test_in_process_fetches_do_not_leak_auth_session_or_request_state(): void
+    {
+        config()->set('app.key', 'base64:'.base64_encode(str_repeat('k', 32)));
+        config()->set('auth.guards.other', ['driver' => 'session', 'provider' => 'users']);
+        $this->app['router']->middleware('web')->group(function ($router) {
+            $router->get('/who', fn () => response('<html><body>'.(auth()->check() ? 'IN:'.auth()->id() : 'GUEST').'</body></html>'));
+            $router->get('/put', function () {
+                session()->put('secret', 'S1');
+                session()->flash('status', 'flashed');
+
+                return response('<html><body>put</body></html>');
+            });
+            $router->get('/read', fn () => response('<html><body>'.e(json_encode([session('secret'), session('status')])).'</body></html>'));
+        });
+        $request = app('request');
+        $defaultGuard = $this->app['auth']->getDefaultDriver();
+
+        $this->assertStringContainsString('IN:42', $this->fetcher()->fetch('/who', new FetchOptions(actingAs: new GenericUser(['id' => 42]), guard: 'other'))->html);
+        $this->assertStringContainsString('GUEST', $this->fetcher()->fetch('/who')->html, 'a later fetch without actingAs is a guest');
+        $this->assertFalse(auth()->check(), 'the calling process is not logged in');
+        $this->assertSame($defaultGuard, $this->app['auth']->getDefaultDriver(), 'the default guard is restored');
+
+        $this->fetcher()->fetch('/put');
+        $this->assertStringContainsString('[null,null]', $this->fetcher()->fetch('/read')->html, 'session data does not carry over');
+        $this->assertNull(session('secret'));
+
+        $this->assertSame($request, app('request'), 'the current request is restored');
+        $this->assertSame($request, \Illuminate\Support\Facades\Request::getFacadeRoot());
+        $this->assertSame('http://localhost/x', url('/x'));
     }
 }

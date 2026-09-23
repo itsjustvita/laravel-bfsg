@@ -6,6 +6,7 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Http\Kernel;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Facade;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -14,6 +15,11 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * Requests pages of the running application through its HTTP kernel instead of a web server: no `php -S`,
  * no TLS, no network. The request carries the SKIP_ATTRIBUTE so the package's own middleware ignores it, and
  * the kernel is not terminated (terminable middleware does not run for a check).
+ *
+ * Every fetch is isolated: resolved guards are forgotten and the session store is replaced before and after it,
+ * and the previous request instance and default guard are restored afterwards, so no user, session data or
+ * request leaks from one fetch into the next or into the calling process (long-lived MCP server, multi-page runs).
+ * A user logged in on the calling process's guards is forgotten too; the guards resolve it again from their session.
  */
 class InProcessFetcher
 {
@@ -35,23 +41,49 @@ class InProcessFetcher
         ]);
         $request->attributes->set(self::SKIP_ATTRIBUTE, true);
 
-        if ($user !== null) {
-            $auth = $this->app->make('auth');
-            $auth->guard($guard)->setUser($user);
+        $auth = $this->app->make('auth');
+        $previousRequest = $this->app->bound('request') ? $this->app->make('request') : null;
+        $previousGuard = $auth->getDefaultDriver();
+        $this->reset();
 
-            if ($guard !== null) {
-                $auth->shouldUse($guard);
+        try {
+            if ($user !== null) {
+                $auth->guard($guard)->setUser($user);
+
+                if ($guard !== null) {
+                    $auth->shouldUse($guard);
+                }
+            }
+
+            $response = $this->app->make(Kernel::class)->handle($request);
+
+            return [
+                'status' => $response->getStatusCode(),
+                'location' => $response->headers->get('Location'),
+                'contentType' => (string) $response->headers->get('Content-Type', ''),
+                'body' => $this->body($response),
+            ];
+        } finally {
+            $this->reset();
+            $auth->shouldUse($previousGuard);
+
+            if ($previousRequest !== null) {
+                $this->app->instance('request', $previousRequest);
+                Facade::clearResolvedInstance('request');
             }
         }
+    }
 
-        $response = $this->app->make(Kernel::class)->handle($request);
+    /** Forget resolved guards (and their users) and start from a fresh session store. */
+    private function reset(): void
+    {
+        $this->app->make('auth')->forgetGuards();
 
-        return [
-            'status' => $response->getStatusCode(),
-            'location' => $response->headers->get('Location'),
-            'contentType' => (string) $response->headers->get('Content-Type', ''),
-            'body' => $this->body($response),
-        ];
+        if ($this->app->bound('session')) {
+            $this->app->make('session')->forgetDrivers();
+            $this->app->forgetInstance('session.store');
+            Facade::clearResolvedInstance('session');
+        }
     }
 
     /** Contents of a file below public_path() for a URL path, or null (never outside the public directory). */
