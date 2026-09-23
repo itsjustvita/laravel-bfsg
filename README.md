@@ -130,21 +130,18 @@ php artisan bfsg:check https://example.com --format=pdf
 php artisan bfsg:check https://example.com --save
 ```
 
-#### `bfsg:analyze` - Quick Analysis + SPA Support
-For quick checks and Single Page Applications (React, Vue, Inertia):
+#### SPA Support: `bfsg:check --browser`
+For Single Page Applications (React, Vue, Inertia), render the page with Playwright first (`bfsg:analyze` was removed in v3):
 
 ```bash
-# Quick server-side analysis
-php artisan bfsg:analyze https://example.com
-
 # Analyze SPAs with real browser rendering (Playwright)
-php artisan bfsg:analyze https://example.com --browser
+php artisan bfsg:check https://example.com --browser
 
 # Browser with visible window (debugging)
-php artisan bfsg:analyze https://example.com --browser --headless=false
+php artisan bfsg:check https://example.com --browser --headless=false
 
 # Adjust timeout for slow-loading SPAs
-php artisan bfsg:analyze https://example.com --browser --timeout=60000
+php artisan bfsg:check https://example.com --browser --timeout=60000
 ```
 
 #### `bfsg:history` - Report History
@@ -466,7 +463,7 @@ For React, Vue, Inertia.js, and other SPAs, use browser rendering:
 
 ```bash
 # Analyze with Playwright browser engine
-php artisan bfsg:analyze https://spa-app.com --browser
+php artisan bfsg:check https://spa-app.com --browser
 
 # See full documentation
 ```

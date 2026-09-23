@@ -39,16 +39,16 @@ npx playwright install
 
 ```bash
 # SPA mit Browser-Rendering analysieren
-php artisan bfsg:analyze https://example.com --browser
+php artisan bfsg:check https://example.com --browser
 
 # Mit sichtbarem Browser (zum Debugging)
-php artisan bfsg:analyze https://example.com --browser --headless=false
+php artisan bfsg:check https://example.com --browser --headless=false
 
 # Timeout anpassen (Standard: 30s)
-php artisan bfsg:analyze https://example.com --browser --timeout=60000
+php artisan bfsg:check https://example.com --browser --timeout=60000
 
 # Anderen Browser verwenden
-php artisan bfsg:analyze https://example.com --browser --browser-type=firefox
+php artisan bfsg:check https://example.com --browser --engine=firefox
 ```
 
 ### Programmatisch
@@ -108,7 +108,7 @@ $analyzer = new BrowserAnalyzer([
 ]);
 
 // Oder via Command
-php artisan bfsg:analyze URL --browser --headless=false
+php artisan bfsg:check URL --browser --headless=false
 ```
 
 ## 📝 Anwendungsfälle
@@ -117,35 +117,30 @@ php artisan bfsg:analyze URL --browser --headless=false
 
 ```bash
 # Normale React App
-php artisan bfsg:analyze https://react-app.test --browser
+php artisan bfsg:check https://react-app.test --browser
 
-# Mit Authentifizierung
-php artisan bfsg:analyze https://react-app.test/dashboard \
-    --browser \
-    --auth \
-    --email=user@test.com \
-    --password=secret
+# Authentifizierung: --browser teilt keinen Login (--auth, --as usw. werden mit Exit-Code 2 abgelehnt)
 ```
 
 ### 2. Inertia.js Apps
 
 ```bash
 # Inertia rendert serverseitig UND clientseitig
-php artisan bfsg:analyze https://inertia-app.test/users --browser
+php artisan bfsg:check https://inertia-app.test/users --browser
 ```
 
 ### 3. Livewire Apps
 
 ```bash
 # Livewire ist meistens server-rendered, aber mit --browser siehst du den finalen State
-php artisan bfsg:analyze https://livewire-app.test --browser
+php artisan bfsg:check https://livewire-app.test --browser
 ```
 
 ### 4. Lazy-Loaded Content
 
 ```bash
 # Warte länger für lazy-loaded Images/Content
-php artisan bfsg:analyze https://app.test/gallery --browser --timeout=60000
+php artisan bfsg:check https://app.test/gallery --browser --timeout=60000
 ```
 
 ## 🐛 Troubleshooting
@@ -168,7 +163,7 @@ npx playwright install --force
 
 ```bash
 # Timeout erhöhen
-php artisan bfsg:analyze URL --browser --timeout=60000
+php artisan bfsg:check URL --browser --timeout=60000
 ```
 
 ### Port already in use
@@ -207,7 +202,7 @@ pkill -f playwright
     npx playwright install chromium
 
 - name: Run BFSG Browser Tests
-  run: php artisan bfsg:analyze ${{ secrets.APP_URL }} --browser
+  run: php artisan bfsg:check ${{ secrets.APP_URL }} --browser
 ```
 
 ### GitLab CI
@@ -218,7 +213,7 @@ test:
     - npm install playwright
     - npx playwright install chromium
   script:
-    - php artisan bfsg:analyze https://staging.example.com --browser
+    - php artisan bfsg:check https://staging.example.com --browser
 ```
 
 ## 📊 Vergleich
@@ -226,7 +221,7 @@ test:
 ### Ohne Browser (Server-Side)
 
 ```bash
-php artisan bfsg:analyze https://react-app.test
+php artisan bfsg:check https://react-app.test
 # Sieht nur: <div id="root"></div>
 # ❌ Findet keine React-Component Issues
 ```
@@ -234,7 +229,7 @@ php artisan bfsg:analyze https://react-app.test
 ### Mit Browser
 
 ```bash
-php artisan bfsg:analyze https://react-app.test --browser
+php artisan bfsg:check https://react-app.test --browser
 # Sieht: Vollständig gerendertes React HTML
 # ✅ Findet alle Accessibility Issues
 ```
