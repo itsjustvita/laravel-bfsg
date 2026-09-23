@@ -344,7 +344,7 @@ return [
     'focus' => [
         'outline_removed_inline' => [
             'message' => 'Focus outline removed via inline style on <:tag>',
-            'suggestion' => 'Do not set outline:none inline; provide a visible focus style (outline or box-shadow) instead',
+            'suggestion' => 'Do not set outline: none inline; provide a visible focus style (outline or box-shadow) instead',
         ],
         'outline_removed_global' => [
             'message' => 'Global focus outline reset (":selector") without a replacement indicator',

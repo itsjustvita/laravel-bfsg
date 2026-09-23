@@ -21,6 +21,13 @@ class AccessibleNameTest extends TestCase
         $this->assertSame('fallback', $this->nameOf('<input data-t aria-labelledby="missing" aria-label="fallback">'));
     }
 
+    public function test_unrendered_content_is_skipped_unless_reached_through_aria_labelledby(): void
+    {
+        $this->assertSame('', $this->nameOf('<button data-t><span hidden>X</span></button>'));
+        $this->assertSame('Save', $this->nameOf('<button data-t>Save<span style="display: none">draft</span><span style="visibility:hidden">!</span></button>'));
+        $this->assertSame('Main menu', $this->nameOf('<button data-t aria-labelledby="l"></button><span id="l" hidden>Main <span hidden>menu</span></span>'), 'aria-labelledby includes hidden text');
+    }
+
     public function test_aria_label_then_title(): void
     {
         $this->assertSame('Suche', $this->nameOf('<input data-t aria-label=" Suche ">'));

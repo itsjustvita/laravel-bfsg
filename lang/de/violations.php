@@ -344,7 +344,7 @@ return [
     'focus' => [
         'outline_removed_inline' => [
             'message' => 'Fokusrahmen per Inline-Style an <:tag> entfernt',
-            'suggestion' => 'outline:none nicht inline setzen; stattdessen einen sichtbaren Fokusstil (outline oder box-shadow) vorsehen',
+            'suggestion' => 'outline: none nicht inline setzen; stattdessen einen sichtbaren Fokusstil (outline oder box-shadow) vorsehen',
         ],
         'outline_removed_global' => [
             'message' => 'Globales Zurücksetzen des Fokusrahmens („:selector“) ohne Ersatzindikator',

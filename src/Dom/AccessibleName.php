@@ -139,8 +139,8 @@ final class AccessibleName
 
     /**
      * Text of a subtree as assistive technology would read it: text nodes, alt of images,
-     * svg titles, aria-label of descendants; aria-hidden subtrees are skipped unless the
-     * subtree was reached through aria-labelledby.
+     * svg titles, aria-label of descendants; aria-hidden and unrendered subtrees (hidden attribute,
+     * inline display:none / visibility:hidden) are skipped unless the subtree was reached through aria-labelledby.
      */
     private static function content(DOMNode $node, bool $includeHidden, ?DOMElement $skip = null): string
     {
@@ -157,7 +157,7 @@ final class AccessibleName
                 continue;
             }
 
-            if (! $includeHidden && Element::enumAttr($child, 'aria-hidden') === 'true') {
+            if (! $includeHidden && (Element::enumAttr($child, 'aria-hidden') === 'true' || Element::isNotRendered($child))) {
                 continue;
             }
 

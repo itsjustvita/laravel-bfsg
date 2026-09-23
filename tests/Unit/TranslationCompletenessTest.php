@@ -81,6 +81,21 @@ class TranslationCompletenessTest extends TestCase
         }
     }
 
+    /** CSS snippets in texts are written with a space ("outline: none") so they are not read as placeholders. */
+    public function test_css_declarations_are_not_read_as_placeholders(): void
+    {
+        foreach (self::LOCALES as $locale) {
+            foreach ($this->lang($locale, 'violations') as $analyzer => $checks) {
+                foreach ($checks as $key => $texts) {
+                    foreach (['message', 'suggestion'] as $part) {
+                        $css = array_intersect($this->placeholders($texts[$part] ?? ''), ['none', 'hidden', 'block', 'solid', 'auto', 'transparent', 'inherit']);
+                        $this->assertSame([], array_values($css), "[$locale] $analyzer.$key.$part contains a CSS value that reads as a placeholder");
+                    }
+                }
+            }
+        }
+    }
+
     public function test_no_unused_translation_keys(): void
     {
         $reported = $this->reportedKeys();
