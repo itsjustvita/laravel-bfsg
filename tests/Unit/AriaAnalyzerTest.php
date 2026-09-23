@@ -96,6 +96,15 @@ class AriaAnalyzerTest extends AnalyzerTestCase
         $this->assertViolationCount($violations, 'aria.redundant_role', 3);
     }
 
+    public function test_list_roles_are_kept_for_the_voiceover_list_style_workaround(): void
+    {
+        $violations = $this->analyze('<html><body><ul role="list" class="list-none"><li role="listitem">a</li></ul>'
+            .'<ol role="list"><li>b</li></ol><menu role="list"><li role="listitem">c</li></menu><nav role="navigation">n</nav></body></html>');
+
+        $this->assertHasViolation($violations, 'aria.redundant_role', element: 'nav');
+        $this->assertViolationCount($violations, 'aria.redundant_role', 1);
+    }
+
     public function test_dangling_idrefs_one_finding_per_element(): void
     {
         $html = '<div aria-labelledby="missing">a</div>'

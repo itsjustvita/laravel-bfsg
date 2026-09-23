@@ -24,6 +24,12 @@ class AriaAnalyzer extends BaseAnalyzer
 
     private const NATIVE_STATE_INPUTS = ['checkbox', 'radio', 'range'];
 
+    /**
+     * Explicit roles that repeat the implicit one on purpose: Safari/VoiceOver drops list semantics from
+     * lists styled with list-style: none, so role=list / role=listitem are the recommended workaround.
+     */
+    private const INTENTIONAL_ROLES = ['ul' => 'list', 'ol' => 'list', 'menu' => 'list', 'li' => 'listitem'];
+
     protected string $key = 'aria';
 
     protected string $description = 'ARIA roles, states and references';
@@ -85,7 +91,7 @@ class AriaAnalyzer extends BaseAnalyzer
             }
         }
 
-        if ($role === Roles::implicit($element)) {
+        if ($role === Roles::implicit($element) && (self::INTENTIONAL_ROLES[Element::tag($element)] ?? null) !== $role) {
             $this->report('redundant_role', Severity::Notice, '4.1.2', $element, ['role' => $role, 'tag' => Element::tag($element)], autoFixable: true);
         }
     }
