@@ -4,14 +4,13 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 
 use Exception;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
+use ItsJustVita\LaravelBfsg\Http\FetchOptions;
+use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
-use Symfony\Component\Process\PhpExecutableFinder;
-use Symfony\Component\Process\Process;
 
 class BfsgCheckCommand extends Command
 {
@@ -41,7 +40,7 @@ class BfsgCheckCommand extends Command
 
     public function handle()
     {
-        $url = $this->argument('url') ?? config('app.url');
+        $url = $this->argument('url') ?? '/';
 
         $this->info("🔍 Checking accessibility for: {$url}");
         $this->newLine();
@@ -51,14 +50,18 @@ class BfsgCheckCommand extends Command
 
             // Handle authentication if needed
             if ($this->usesAuthentication()) {
-                $this->handleAuthentication($url);
+                $this->handleAuthentication(app(UrlFetcher::class)->absolute($url));
             }
 
-            // Fetch HTML content
-            $html = $this->fetchHtml($url);
+            // Fetch the page (in-process for URLs of this application) and analyze it as a full document
+            $page = app(UrlFetcher::class)->fetch($url, new FetchOptions(client: $this->httpClient, loginUrl: $this->option('login-url')));
 
-            // Analyze
-            $result = Bfsg::analyze($html, ['url' => $url]);
+            if ($page->landedOnLogin) {
+                throw new Exception("{$url} redirected to the login page {$page->finalUrl}; authenticate first.");
+            }
+
+            $url = $page->finalUrl;
+            $result = Bfsg::analyze($page->html, ['url' => $url, 'fragment' => false]);
             $violations = $result->toArray()['violations'];
 
             // Handle output based on format
@@ -200,42 +203,6 @@ class BfsgCheckCommand extends Command
         }
     }
 
-    protected function fetchHtml(string $url): string
-    {
-        // Use authenticated client if we have authentication
-        if ($this->usesAuthentication()) {
-            $response = $this->httpClient->get($url);
-
-            if ($response->failed()) {
-                throw new Exception("Failed to fetch URL: {$url}. HTTP status: {$response->status()}");
-            }
-
-            return $response->body();
-        }
-
-        // Check if this is a Herd domain and handle accordingly
-        $parsedUrl = parse_url($url);
-        $host = $parsedUrl['host'] ?? '';
-
-        // If it's a .test domain (Herd domain), start a temporary PHP server
-        if (str_ends_with($host, '.test')) {
-            return $this->fetchHtmlFromHerdDomain($url);
-        }
-
-        // Otherwise use Http facade with SSL handling
-        $response = Http::withOptions(['verify' => $this->verifySsl()])
-            ->timeout(30)
-            ->withUserAgent('BFSG-Checker/2.0')
-            ->get($url);
-
-        if ($response->failed()) {
-            $status = $response->status();
-            throw new Exception("Failed to fetch URL: {$url}. HTTP status: {$status}");
-        }
-
-        return $response->body();
-    }
-
     protected function outputCli(array $violations): void
     {
         if (empty($violations)) {
@@ -315,78 +282,5 @@ class BfsgCheckCommand extends Command
         $dbReport = app(ReportRepository::class)->store($result);
 
         $this->info("Results saved to database (Report #{$dbReport->id})");
-    }
-
-    protected function fetchHtmlFromHerdDomain(string $url): string
-    {
-        // Find an available port
-        $port = $this->findAvailablePort();
-
-        // Get the PHP executable
-        $phpFinder = new PhpExecutableFinder;
-        $phpBinary = $phpFinder->find();
-
-        if (! $phpBinary) {
-            throw new Exception('Could not find PHP binary');
-        }
-
-        // Get the project public directory
-        $publicPath = base_path('public');
-
-        // Start the PHP server in background
-        $serverCommand = [
-            $phpBinary,
-            '-S',
-            "127.0.0.1:{$port}",
-            '-t',
-            $publicPath,
-            base_path('server.php'),
-        ];
-
-        $serverProcess = new Process($serverCommand);
-        $serverProcess->setTimeout(null);
-        $serverProcess->start();
-
-        // Wait a moment for the server to start
-        usleep(500000); // 500ms
-
-        try {
-            // Parse the original URL to get the path
-            $parsedUrl = parse_url($url);
-            $path = $parsedUrl['path'] ?? '/';
-            $query = isset($parsedUrl['query']) ? '?'.$parsedUrl['query'] : '';
-            $fragment = isset($parsedUrl['fragment']) ? '#'.$parsedUrl['fragment'] : '';
-
-            // Build the local server URL
-            $localUrl = "http://127.0.0.1:{$port}{$path}{$query}{$fragment}";
-
-            // Fetch the HTML from the local server
-            $response = Http::timeout(30)->withUserAgent('BFSG-Checker/2.0')->get($localUrl);
-
-            if ($response->failed()) {
-                throw new Exception("Failed to fetch from temporary server: HTTP {$response->status()}");
-            }
-
-            return $response->body();
-
-        } finally {
-            // Always stop the server - use signal 9 for immediate termination
-            $serverProcess->stop(0, 9);
-        }
-    }
-
-    protected function findAvailablePort(): int
-    {
-        // Try to find an available port between 8100-8199
-        for ($port = 8100; $port <= 8199; $port++) {
-            $socket = @fsockopen('127.0.0.1', $port, $errno, $errstr, 0.1);
-            if ($socket === false) {
-                // Port is available
-                return $port;
-            }
-            fclose($socket);
-        }
-
-        throw new Exception('Could not find an available port for temporary server');
     }
 }

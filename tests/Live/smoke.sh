@@ -88,6 +88,22 @@ if grep -q '^error ' "$WORK/accessible.keys"; then
 fi
 pass "bfsg:check accessible page: no errors ($(wc -l <"$WORK/accessible.keys" | tr -d ' ') findings)"
 
+# 6b. A path of this application is fetched in-process through the HTTP kernel (no web server, no .test hack)
+php artisan bfsg:check /live/broken --format=json >"$WORK/inprocess.out" 2>"$WORK/inprocess.err"
+php "$LIVE_DIR/violation-keys.php" <"$WORK/inprocess.out" >"$WORK/inprocess.keys" || fail "bfsg:check --format=json on the path /live/broken"
+for key in images.missing_alt language.missing_lang page_title.missing_title; do
+    grep -q " $key\$" "$WORK/inprocess.keys" || { cat "$WORK/inprocess.keys" "$WORK/inprocess.err"; fail "in-process bfsg:check /live/broken did not report $key"; }
+done
+pass "bfsg:check /live/broken in-process: $(wc -l <"$WORK/inprocess.keys" | tr -d ' ') findings"
+
+# 6c. Non-HTML answers are an error, never a pass
+if php artisan bfsg:check "$BASE/live/json" >"$WORK/json-check.out" 2>&1; then
+    cat "$WORK/json-check.out"
+    fail "bfsg:check exited 0 on a JSON response"
+fi
+grep -q 'not an HTML page' "$WORK/json-check.out" || { cat "$WORK/json-check.out"; fail "bfsg:check did not explain why the JSON response was rejected"; }
+pass "bfsg:check rejects a JSON response"
+
 # 7. Middleware: header on the HTML page, everything else untouched
 header() { # url header-name -> value (empty when absent)
     curl -s -D - -o /dev/null "$1" | tr -d '\r' | awk -v h="$(echo "$2" | tr 'A-Z' 'a-z')" -F': ' 'tolower($1)==h {print $2}'

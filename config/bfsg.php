@@ -63,13 +63,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Fetching pages (bfsg:check, MCP): timeout in seconds, TLS verification, user agent
+    | Fetching pages (bfsg:check, MCP): timeout in seconds, TLS verification, user agent, and inlining of
+    | same-origin <link rel="stylesheet"> files so the contrast analyzer sees them
     |--------------------------------------------------------------------------
     */
     'fetch' => [
         'timeout' => env('BFSG_FETCH_TIMEOUT', 30),
         'verify_ssl' => env('BFSG_VERIFY_SSL', true),
         'user_agent' => 'laravel-bfsg/3.0 (+https://github.com/itsjustvita/laravel-bfsg)',
+        'inline_stylesheets' => env('BFSG_INLINE_CSS', true),
+        'max_stylesheets' => 5,
+        'max_stylesheet_bytes' => 524288,
     ],
 
     /*

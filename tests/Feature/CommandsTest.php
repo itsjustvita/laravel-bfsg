@@ -294,4 +294,24 @@ class CommandsTest extends TestCase
             return $request->hasHeader('Authorization', 'Bearer test-token-123');
         });
     }
+
+    public function test_paths_of_this_application_are_checked_in_process(): void
+    {
+        $this->app['router']->get('/bfsg-inprocess', fn () => response('<!DOCTYPE html><html><body><img src="x.jpg"></body></html>'));
+
+        $this->artisan('bfsg:check', ['url' => '/bfsg-inprocess'])
+            ->expectsOutputToContain('images')
+            ->assertFailed();
+
+        Http::assertNothingSent();
+    }
+
+    public function test_non_html_responses_are_rejected(): void
+    {
+        Http::fake(['http://example.com/*' => Http::response(['ok' => true], 200, ['Content-Type' => 'application/json'])]);
+
+        $this->artisan('bfsg:check', ['url' => 'http://example.com/api'])
+            ->expectsOutputToContain('not an HTML page')
+            ->assertFailed();
+    }
 }
