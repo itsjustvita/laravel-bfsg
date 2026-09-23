@@ -117,7 +117,7 @@ class AriaAnalyzer extends BaseAnalyzer
                 continue;
             }
 
-            $parser ??= ($this->cssParser ?? new CssParser)->parse($this->document);
+            $parser ??= $this->cssParser?->parse($this->document) ?? $this->document->cssParser();
 
             if ($parser->hidesElement($container)) {
                 continue;

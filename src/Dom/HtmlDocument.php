@@ -6,6 +6,7 @@ use DOMDocument;
 use DOMElement;
 use DOMNode;
 use DOMXPath;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 use Symfony\Component\CssSelector\CssSelectorConverter;
 use Throwable;
 
@@ -17,6 +18,8 @@ final class HtmlDocument
     private const UNKNOWN_VOID_ELEMENTS = '~<(track|source|wbr|embed|keygen)\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\1\s*>)~i';
 
     private ?DOMXPath $xpath = null;
+
+    private ?CssParser $cssParser = null;
 
     /** @var array<string, DOMElement>|null */
     private ?array $byId = null;
@@ -84,6 +87,12 @@ final class HtmlDocument
     public function xpath(): DOMXPath
     {
         return $this->xpath ??= new DOMXPath($this->dom);
+    }
+
+    /** The document's stylesheets, parsed once and shared by every analyzer; the element index is built lazily. */
+    public function cssParser(): CssParser
+    {
+        return $this->cssParser ??= (new CssParser)->parse($this);
     }
 
     /** @return list<DOMElement> */
@@ -263,6 +272,7 @@ final class HtmlDocument
 
         $this->byId = null;
         $this->duplicateIds = [];
+        $this->cssParser = null;
 
         return count($victims);
     }

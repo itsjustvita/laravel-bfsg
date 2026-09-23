@@ -28,7 +28,7 @@ class FocusAnalyzer extends BaseAnalyzer
 
     protected function inspect(): void
     {
-        $parser = ($this->cssParser ?? new CssParser)->parse($this->document);
+        $parser = $this->cssParser?->parse($this->document) ?? $this->document->cssParser();
 
         $this->checkInlineStyles($parser);
         $this->checkStylesheets($parser);

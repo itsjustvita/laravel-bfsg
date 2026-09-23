@@ -45,6 +45,9 @@ class CssParser
 
     protected bool $truncated = false;
 
+    /** Number of times the element index was built (test probe; stays 1 per parse). */
+    protected int $indexBuilds = 0;
+
     protected ?HtmlDocument $document = null;
 
     /** @var array<string, array{0: Color, 1: bool}> */
@@ -62,12 +65,17 @@ class CssParser
     /** @var array<string, array<string, list<int>>> node path => property => cascade weight of the winner */
     private array $weightCache = [];
 
-    /** Parse every screen stylesheet of the document and build the rule index. */
+    /**
+     * Parse every screen stylesheet of the document. Only tokenizes and collects rules: the element index
+     * is built lazily by the first call that needs it (declarationsFor, colour/font resolution, hidesElement).
+     */
     public function parse(HtmlDocument $document): static
     {
         $this->document = $document;
         $this->rules = [];
         $this->index = [];
+        $this->indexed = false;
+        $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
 
@@ -78,9 +86,61 @@ class CssParser
             }
         }
 
-        $this->buildIndex();
+        $indexable = array_filter($this->rules, fn (array $rule) => $this->isIndexable($rule));
+        $this->truncated = count($indexable) > self::MAX_INDEXED_RULES;
 
         return $this;
+    }
+
+    /**
+     * Build the element index unless it exists. Stops when the optional deadline (microtime(true) value)
+     * passes or MAX_INDEXED_RULES is reached; either marks the results truncated (approximate).
+     */
+    public function buildIndex(?float $deadline = null): static
+    {
+        if ($this->indexed) {
+            return $this;
+        }
+
+        $this->indexBuilds++;
+        $indexedRules = 0;
+        $byClass = null;
+
+        foreach ($this->rules as $position => $rule) {
+            if (! $this->isIndexable($rule)) {
+                continue;
+            }
+
+            if (++$indexedRules > self::MAX_INDEXED_RULES || ($deadline !== null && microtime(true) > $deadline)) {
+                $this->truncated = true;
+
+                break;
+            }
+
+            $expression = $this->document === null ? null : $this->simpleSelectorToXpath($rule['selector']);
+
+            if ($expression === null) {
+                continue;
+            }
+
+            // Fast path for a lone class selector (the bulk of utility CSS): one class map instead of one XPath per rule.
+            $elements = preg_match('/^\.((?:[\w-]|\\\\.)+)$/', $rule['selector'], $m) === 1
+                ? ($byClass ??= $this->elementsByClass())[$this->unescape($m[1])] ?? []
+                : $this->document->query($expression);
+
+            foreach ($elements as $element) {
+                $this->index[$this->nodeKey($element)][] = $position;
+            }
+        }
+
+        $this->indexed = true;
+
+        return $this;
+    }
+
+    public function indexBuilds(): int
+    {
+        return $this->indexBuilds;
     }
 
     /** @return list<string> */
@@ -415,44 +475,32 @@ class CssParser
         }
     }
 
-    private function buildIndex(): void
+    /** @return array<string, list<DOMElement>> class name => elements carrying it, in document order */
+    private function elementsByClass(): array
     {
-        $indexedRules = 0;
-        $xpath = $this->document?->xpath();
+        $map = [];
 
-        foreach ($this->rules as $position => $rule) {
-            if (array_intersect(array_keys($rule['properties']), self::INDEXED_PROPERTIES) === []) {
-                continue;
-            }
-
-            if (++$indexedRules > self::MAX_INDEXED_RULES) {
-                $this->truncated = true;
-
-                break;
-            }
-
-            $expression = $this->simpleSelectorToXpath($rule['selector']);
-
-            if ($expression === null || $xpath === null) {
-                continue;
-            }
-
-            foreach ($this->document->query($expression) as $element) {
-                $this->index[$this->nodeKey($element)][] = $position;
+        foreach ($this->document?->query('//*[@class]') ?? [] as $element) {
+            foreach (array_unique(preg_split('/[ \t\n\r]+/', $element->getAttribute('class'), -1, PREG_SPLIT_NO_EMPTY) ?: []) as $class) {
+                $map[$class][] = $element;
             }
         }
 
-        $this->indexed = true;
+        return $map;
+    }
+
+    /** @param  array{properties: array<string, array{value: string, important: bool}>}  $rule */
+    private function isIndexable(array $rule): bool
+    {
+        return array_intersect(array_keys($rule['properties']), self::INDEXED_PROPERTIES) !== [];
     }
 
     /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
     private function matchingRules(DOMElement $element): array
     {
-        if ($this->indexed) {
-            return array_map(fn (int $position) => $this->rules[$position], $this->index[$this->nodeKey($element)] ?? []);
-        }
+        $this->buildIndex();
 
-        return [];
+        return array_map(fn (int $position) => $this->rules[$position], $this->index[$this->nodeKey($element)] ?? []);
     }
 
     /**

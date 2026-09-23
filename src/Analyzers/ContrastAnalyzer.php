@@ -30,9 +30,9 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     protected function inspect(): void
     {
-        $parser = ($this->cssParser ?? new CssParser)->parse($this->document);
-        $level = $this->level();
         $deadline = microtime(true) + self::TIME_BUDGET_SECONDS;
+        $parser = ($this->cssParser?->parse($this->document) ?? $this->document->cssParser())->buildIndex($deadline);
+        $level = $this->level();
         $measured = 0;
 
         foreach ($this->query('//*[text()[normalize-space()]]') as $element) {

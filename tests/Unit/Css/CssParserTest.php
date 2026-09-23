@@ -199,13 +199,54 @@ class CssParserTest extends TestCase
     {
         [$parser, $document] = $this->parsed('', '<p id="t">x</p>');
 
-        $this->assertTrue($parser->isIndexed());
         $this->assertFalse($parser->isTruncated());
         $this->assertSame(['#000000', '#ffffff', false], [
             $parser->resolveColors($this->target($document))['foreground']->toHex(),
             $parser->resolveColors($this->target($document))['background']->toHex(),
             $parser->resolveColors($this->target($document))['approximate'],
         ]);
+        $this->assertTrue($parser->isIndexed());
+    }
+
+    public function test_parse_collects_rules_and_the_index_is_built_lazily_once(): void
+    {
+        [$parser, $document] = $this->parsed('.a { color: #123456 }', '<p id="t" class="a">x</p>');
+
+        $this->assertCount(1, $parser->rules());
+        $this->assertFalse($parser->isIndexed(), 'parse() only tokenizes');
+        $this->assertSame(0, $parser->indexBuilds());
+
+        $this->assertSame('#123456', $parser->declarationsFor($this->target($document))['color']['value']);
+        $parser->resolveColors($this->target($document));
+        $parser->hidesElement($this->target($document));
+
+        $this->assertTrue($parser->isIndexed());
+        $this->assertSame(1, $parser->indexBuilds());
+    }
+
+    public function test_lone_class_rules_match_escaped_and_repeated_class_tokens(): void
+    {
+        [$parser, $document] = $this->parsed('.md\\:muted { color: #123456 } .x { background-color: #fefefe }', "<p id=\"t\" class=\"x\tmd:muted md:muted\">x</p><p class=\"xx\" id=\"u\">y</p>");
+
+        $this->assertSame(['#123456', '#fefefe', false], $this->colors('.md\\:muted { color: #123456 } .x { background-color: #fefefe }', "<p id=\"t\" class=\"x\tmd:muted md:muted\">x</p>"));
+        $this->assertCount(2, $parser->declarationsFor($this->target($document)));
+        $this->assertSame([], $parser->declarationsFor($document->elementsById()['u']));
+    }
+
+    public function test_index_build_stops_at_the_deadline_and_marks_results_approximate(): void
+    {
+        [$parser, $document] = $this->parsed('.a { color: #123456 }', '<p id="t" class="a">x</p>');
+
+        $parser->buildIndex(microtime(true) - 1.0);
+
+        $this->assertTrue($parser->isIndexed());
+        $this->assertTrue($parser->isTruncated());
+        $colors = $parser->resolveColors($this->target($document));
+        $this->assertTrue($colors['approximate']);
+        $this->assertSame('#000000', $colors['foreground']->toHex(), 'rules after the deadline are not applied');
+
+        $parser->buildIndex();
+        $this->assertSame(1, $parser->indexBuilds(), 'an existing index is not rebuilt');
     }
 
     public function test_overflowing_the_rule_index_marks_results_approximate(): void

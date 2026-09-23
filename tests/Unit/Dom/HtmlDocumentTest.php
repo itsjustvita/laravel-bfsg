@@ -184,4 +184,14 @@ class HtmlDocumentTest extends TestCase
         $this->assertSame('Loremipsum', $byId['p']->textContent);
         $this->assertCount(1, $doc->query('//track[@id="t1"]'));
     }
+
+    public function test_css_parser_is_parsed_once_and_memoised_per_document(): void
+    {
+        $document = HtmlDocument::fromHtml('<html><head><style>p { color: red }</style></head><body><p>x</p></body></html>');
+        $other = HtmlDocument::fromHtml('<html><head><style>p { color: red }</style></head><body><p>x</p></body></html>');
+
+        $this->assertSame($document->cssParser(), $document->cssParser());
+        $this->assertNotSame($document->cssParser(), $other->cssParser());
+        $this->assertSame(['p'], array_column($document->cssParser()->rules(), 'selector'));
+    }
 }
