@@ -56,3 +56,21 @@ jobs:
           extensions: dom, curl, libxml, mbstring, zip
       - run: composer install --prefer-dist --no-interaction
       - run: vendor/bin/pint --test
+
+  live:
+    runs-on: ubuntu-latest
+    name: Live smoke test (fresh Laravel app, PHP 8.4)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite
+          coverage: none
+      - name: Create a fresh Laravel app
+        run: composer create-project laravel/laravel "$RUNNER_TEMP/live-app" --prefer-dist --no-interaction
+      - name: Install the package and the live fixtures
+        run: tests/Live/setup.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/live-app"
+      - name: Run the live smoke test
+        run: tests/Live/smoke.sh "$RUNNER_TEMP/live-app"

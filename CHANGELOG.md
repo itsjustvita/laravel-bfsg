@@ -40,6 +40,7 @@ Phases 1 (foundation) and 2 (analyzer round) of v3. See UPGRADE.md (written in P
 - `Bfsg::register()/forget()/only()/except()`, middleware alias `bfsg`, container binding `Bfsg::class`.
 - `Dom\HtmlDocument`, `Dom\Element`, `Dom\AccessibleName`, `Dom\Roles`, `Dom\Text`, `Css\Color`, `Reports\ScoreCalculator`, `Persistence\ReportRepository`.
 - CI matrix for Laravel 12 and 13 on PHP 8.2–8.4.
+- CI live smoke test (`tests/Live/`): installs the checkout into a fresh `laravel/laravel` app (PHP 8.4, with dompdf and laravel/mcp), publishes all tags, migrates, serves fixture pages and checks `bfsg:check`, the middleware and the MCP server end to end.
 - New checks: `images.area_missing_alt`, `images.svg_missing_name`, `images.suspicious_alt`, `forms.button_missing_name`, `forms.radio_group_missing_legend`, `forms.required_not_indicated`, `contrast.analysis_truncated`, `aria.abstract_role`, `aria.duplicate_id`, `links.non_descriptive_in_context`, `links.pseudo_link`, `keyboard.skip_link_target_missing`, `keyboard.role_without_tabindex`, `language.empty_lang`, `language.unknown_lang`, `media.autoplay_without_pause`, `page_title.multiple_titles`, `input_purpose.autocomplete_off_on_personal_field`, `status_messages.empty_aria_live`, `status_messages.alert_without_live_region`.
 - `bfsg.compliance_level=AAA` now drives the contrast thresholds (7:1 / 4.5:1).
 - Fixture corpus (`tests/Fixtures`) with expected keys for Bootstrap, Tailwind v4, TYPO3, a Laravel form, an ARIA data grid and a card pattern.
