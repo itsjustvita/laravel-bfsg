@@ -411,4 +411,25 @@ class AuthenticatedHttpClientTest extends TestCase
 
         $this->assertSame(11, strlen($this->client()->get('https://example.com/big', [], 11)->body()));
     }
+
+    public function test_origins_accept_a_bare_host_as_https_and_reject_garbage(): void
+    {
+        $this->assertSame('https://example.com:443', AuthenticatedHttpClient::origin('example.com'));
+        $this->assertSame('https://example.com:8443', AuthenticatedHttpClient::origin('Example.COM:8443'));
+        $this->assertSame('http://x.test:80', AuthenticatedHttpClient::origin('http://x.test/path?q=1'));
+        $this->assertSame('https://[::1]:443', AuthenticatedHttpClient::origin('https://[::1]/'));
+
+        foreach (['', '   ', 'not a url', '://', 'https://', 'http:///path', 'ftp://example.com/'] as $invalid) {
+            try {
+                AuthenticatedHttpClient::origin($invalid);
+                $this->fail("origin('$invalid') did not throw");
+            } catch (\InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+
+        Http::fake(['*' => Http::response('', 200)]);
+        $this->client()->withBearer('t', 'api.example.com')->get('https://api.example.com/x');
+        Http::assertSent(fn (Request $request) => $request->hasHeader('Authorization', 'Bearer t'));
+    }
 }

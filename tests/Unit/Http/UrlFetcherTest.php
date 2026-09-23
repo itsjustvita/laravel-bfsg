@@ -288,6 +288,7 @@ class UrlFetcherTest extends TestCase
         $this->assertTrue($this->fetcher()->isSameApp('http://LOCALHOST:80/x'));
         $this->assertFalse($this->fetcher()->isSameApp('http://localhost:5173/'));
         $this->assertFalse($this->fetcher()->isSameApp('https://localhost/'));
+        $this->assertFalse($this->fetcher()->isSameApp('ftp://localhost/'));
 
         $vite = $this->fetcher()->fetch('http://localhost:5173/');
         $this->assertFalse($vite->inProcess);

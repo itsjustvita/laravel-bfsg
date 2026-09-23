@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Http;
 use Closure;
 use GuzzleHttp\Cookie\CookieJar;
 use GuzzleHttp\Psr7\Request as PsrRequest;
+use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Http\Client\ConnectionException;
@@ -12,6 +13,7 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Http;
+use InvalidArgumentException;
 use Psr\Http\Message\ResponseInterface;
 use Throwable;
 
@@ -203,7 +205,10 @@ class AuthenticatedHttpClient
         $this->acceptTokenOrSession($response, $loginUrl, $before);
     }
 
-    /** @param  string|null  $origin  the only origin the token is sent to; null = the origin of the next request */
+    /**
+     * @param  string|null  $origin  the only origin (URL or bare host = https) the token is sent to; null = the origin of the
+     *                               next request, or of the requested URL when UrlFetcher::fetch() uses this client
+     */
     public function withBearer(string $token, ?string $origin = null): static
     {
         return $this->withHeaders(['Authorization' => 'Bearer '.$token], $origin);
@@ -222,7 +227,8 @@ class AuthenticatedHttpClient
 
     /**
      * @param  array<string, string>  $headers
-     * @param  string|null  $origin  the only origin (any URL of it) the headers are sent to; null = the origin of the next request
+     * @param  string|null  $origin  the only origin (any URL of it, or a bare host = https) the headers are sent to; null = the
+     *                               origin of the next request, or of the requested URL when UrlFetcher::fetch() uses this client
      */
     public function withHeaders(array $headers, ?string $origin = null): static
     {
@@ -291,13 +297,34 @@ class AuthenticatedHttpClient
         return $found;
     }
 
-    /** scheme://host:port with the default port made explicit, lowercased */
+    /**
+     * scheme://host:port of an http(s) URL, lowercased, with the default port made explicit. A bare host
+     * (`example.com`, `example.com:8443`) means https.
+     *
+     * @throws InvalidArgumentException for anything that is not an http(s) URL or host
+     */
     public static function origin(string $url): string
     {
-        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
-        $port = parse_url($url, PHP_URL_PORT) ?? ($scheme === 'https' ? 443 : 80);
+        $url = trim($url);
 
-        return $scheme.'://'.strtolower(rtrim((string) parse_url($url, PHP_URL_HOST), '.')).':'.$port;
+        if ($url !== '' && ! str_contains($url, '://')) {
+            $url = 'https://'.$url;
+        }
+
+        try {
+            $uri = new Uri($url);
+        } catch (Throwable) {
+            throw new InvalidArgumentException("Not an http(s) URL or host: '{$url}'.");
+        }
+
+        $scheme = strtolower($uri->getScheme());
+        $host = rtrim(strtolower($uri->getHost()), '.');
+
+        if (! in_array($scheme, ['http', 'https'], true) || $host === '') {
+            throw new InvalidArgumentException("Not an http(s) URL or host: '{$url}'.");
+        }
+
+        return $scheme.'://'.$host.':'.($uri->getPort() ?? ($scheme === 'https' ? 443 : 80));
     }
 
     /** @return array{email: ?string, password: ?string, token: ?string} BFSG_AUTH_EMAIL, BFSG_AUTH_PASSWORD, BFSG_AUTH_TOKEN */

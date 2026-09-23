@@ -107,8 +107,15 @@ class UrlFetcher
     {
         $appUrl = (string) config('app.url');
 
-        return (string) parse_url($appUrl, PHP_URL_HOST) !== '' && (string) parse_url($url, PHP_URL_HOST) !== ''
-            && AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($appUrl);
+        if ((string) parse_url($appUrl, PHP_URL_HOST) === '' || (string) parse_url($url, PHP_URL_HOST) === '') {
+            return false;
+        }
+
+        try {
+            return AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($appUrl);
+        } catch (\InvalidArgumentException) {
+            return false;
+        }
     }
 
     /** $url if it is a well-formed http(s) URL with a host, else FetchFailed::invalidUrl. */
