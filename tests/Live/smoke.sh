@@ -61,6 +61,13 @@ php artisan migrate --force >"$WORK/migrate.txt" 2>&1 || { cat "$WORK/migrate.tx
 php artisan migrate --force >"$WORK/migrate.txt" 2>&1 || { cat "$WORK/migrate.txt"; fail "second migrate"; }
 pass "migrate --force"
 
+php artisan db:table bfsg_violations --json >"$WORK/violations-table.json" 2>&1 || { cat "$WORK/violations-table.json"; fail "db:table bfsg_violations"; }
+for column in key fingerprint context; do
+    grep -q "\"$column\"" "$WORK/violations-table.json" || { cat "$WORK/violations-table.json"; fail "bfsg_violations has no $column column"; }
+done
+[ "$(php artisan migrate:status | grep -c 'add_context_and_fingerprint_to_bfsg_violations')" = "1" ] || fail "the upgrade migration is listed more than once (published copy shadows the package copy?)"
+pass "bfsg_violations has key, fingerprint and context"
+
 # 4. Web server
 php artisan serve --port="$PORT" >"$WORK/serve.log" 2>&1 &
 SERVER_PID=$!

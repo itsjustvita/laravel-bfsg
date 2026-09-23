@@ -6,6 +6,11 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    public function getConnection(): ?string
+    {
+        return config('bfsg.reporting.database.connection') ?: null;
+    }
+
     public function up(): void
     {
         Schema::create('bfsg_reports', function (Blueprint $table) {
@@ -24,11 +29,14 @@ return new class extends Migration
             $table->id();
             $table->foreignId('report_id')->constrained('bfsg_reports')->cascadeOnDelete();
             $table->string('analyzer');
+            $table->string('key')->nullable()->index();
             $table->string('severity');
             $table->text('message');
             $table->text('element')->nullable();
             $table->string('wcag_rule')->nullable();
             $table->text('suggestion')->nullable();
+            $table->string('fingerprint', 40)->nullable()->index();
+            $table->json('context')->nullable();
             $table->timestamp('created_at')->useCurrent();
             $table->index('analyzer');
             $table->index('severity');

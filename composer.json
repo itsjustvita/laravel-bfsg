@@ -46,7 +46,8 @@
   },
   "autoload": {
     "psr-4": {
-      "ItsJustVita\\LaravelBfsg\\": "src/"
+      "ItsJustVita\\LaravelBfsg\\": "src/",
+      "ItsJustVita\\LaravelBfsg\\Database\\Factories\\": "database/factories/"
     }
   },
   "autoload-dev": {
