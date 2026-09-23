@@ -78,4 +78,21 @@ class ViolationTest extends TestCase
         $this->assertFalse($array['auto_fixable']);
         $this->assertSame($array, json_decode(json_encode($this->violation(['related' => ['4.1.2'], 'tags' => ['best-practice'], 'meta' => ['approximate' => true]])), true));
     }
+
+    public function test_json_encodes_empty_params_and_meta_as_objects(): void
+    {
+        $json = (string) json_encode(new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1'));
+
+        $this->assertStringContainsString('"params":{}', $json);
+        $this->assertStringContainsString('"meta":{}', $json);
+        $this->assertStringContainsString('"related":[]', $json, 'lists stay lists');
+        $this->assertSame([], (new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1'))->toArray()['params']);
+    }
+
+    public function test_non_scalar_params_of_custom_analyzers_are_rendered_as_json(): void
+    {
+        $violation = new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1', ['src' => ['a.jpg', 'b.jpg']]);
+
+        $this->assertSame('Image without text alternative (["a.jpg","b.jpg"])', $violation->message('en'));
+    }
 }

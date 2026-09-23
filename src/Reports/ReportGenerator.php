@@ -3,245 +3,180 @@
 namespace ItsJustVita\LaravelBfsg\Reports;
 
 use Barryvdh\DomPDF\Facade\Pdf;
+use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\View;
+use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
+use ItsJustVita\LaravelBfsg\Support\PackageVersion;
+use ItsJustVita\LaravelBfsg\Violation;
+use RuntimeException;
 
+/**
+ * Turns an AnalysisResult into a report: the JSON contract (spec §12), Markdown, HTML or PDF. Score and grade
+ * come from ScoreCalculator; texts are rendered in the report locale.
+ */
 class ReportGenerator
 {
-    protected array $violations = [];
+    public const FORMATS = ['json', 'markdown', 'html', 'pdf'];
 
-    protected ?AnalysisResult $result = null;
+    private const EXTENSIONS = ['json' => 'json', 'markdown' => 'md', 'html' => 'html', 'pdf' => 'pdf'];
 
-    protected string $url = '';
+    private string $format = 'html';
 
-    protected string $format = 'html';
+    private string $locale;
 
-    protected array $stats = [];
+    private ScoreCalculator $scores;
 
-    /**
-     * Create a new report generator
-     *
-     * @param  AnalysisResult|array<string, list<array>>  $violations
-     */
-    public function __construct(string $url, AnalysisResult|array $violations)
+    private CarbonImmutable $analyzedAt;
+
+    public function __construct(private AnalysisResult $result, ?string $locale = null, ?ScoreCalculator $scores = null)
     {
-        $this->url = $url;
-
-        if ($violations instanceof AnalysisResult) {
-            $this->result = $violations;
-            $this->violations = $violations->toArray()['violations'];
-        } else {
-            $this->violations = $violations;
-        }
-
-        $this->calculateStats();
+        $this->locale = $locale ?? $result->locale() ?? (config('bfsg.locale') ?: app()->getLocale());
+        $this->scores = $scores ?? ScoreCalculator::fromConfig();
+        $this->analyzedAt = CarbonImmutable::now();
     }
 
-    /**
-     * Set report format
-     */
-    public function setFormat(string $format): self
+    /** @throws InvalidArgumentException for a format outside FORMATS */
+    public function format(string $format): static
     {
+        if (! in_array($format, self::FORMATS, true)) {
+            throw new InvalidArgumentException("Unknown report format [{$format}]. Use one of: ".implode(', ', self::FORMATS).'.');
+        }
+
         $this->format = $format;
 
         return $this;
     }
 
-    /**
-     * Generate the report
-     */
-    public function generate(): string
+    public function extension(): string
     {
-        return match ($this->format) {
-            'json' => $this->generateJson(),
-            'html' => $this->generateHtml(),
-            'pdf' => $this->generatePdf(),
-            'markdown' => $this->generateMarkdown(),
-            default => $this->generateHtml(),
-        };
+        return self::EXTENSIONS[$this->format];
     }
 
-    /**
-     * Save report to file
-     */
-    public function saveToFile(?string $path = null): string
+    public function locale(): string
     {
-        if ($path === null) {
-            $timestamp = now()->format('Y-m-d_His');
-            $extension = match ($this->format) {
-                'json' => 'json',
-                'markdown' => 'md',
-                'pdf' => 'pdf',
-                default => 'html',
-            };
-            $path = storage_path("app/bfsg-reports/report_{$timestamp}.{$extension}");
-        }
-
-        $directory = dirname($path);
-        if (! is_dir($directory)) {
-            mkdir($directory, 0755, true);
-        }
-
-        file_put_contents($path, $this->generate());
-
-        return $path;
+        return $this->locale;
     }
 
-    /**
-     * Generate JSON report
-     */
-    protected function generateJson(): string
+    public function result(): AnalysisResult
     {
-        return json_encode([
-            'meta' => [
-                'url' => $this->url,
-                'timestamp' => now()->toIso8601String(),
-                'generator' => 'Laravel BFSG v1.5.0',
-            ],
-            'stats' => $this->stats,
-            'violations' => $this->violations,
-            'summary' => [
-                'total_issues' => $this->stats['total_issues'],
-                'compliance_score' => $this->stats['compliance_score'],
-                'passed' => $this->stats['total_issues'] === 0,
-            ],
-        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        return $this->result;
     }
 
-    /**
-     * Generate HTML report
-     */
-    protected function generateHtml(): string
+    public function score(): int
     {
-        return View::make('bfsg::reports.html', [
-            'url' => $this->url,
-            'violations' => $this->violations,
-            'stats' => $this->stats,
-            'timestamp' => now(),
-        ])->render();
+        return $this->scores->score($this->result);
     }
 
-    /**
-     * Generate Markdown report
-     */
-    protected function generateMarkdown(): string
+    public function grade(): string
     {
-        $md = "# BFSG Accessibility Report\n\n";
-        $md .= "**URL:** {$this->url}\n";
-        $md .= '**Date:** '.now()->format('Y-m-d H:i:s')."\n";
-        $md .= "**Compliance Score:** {$this->stats['compliance_score']}%\n\n";
-
-        $md .= "## Summary\n\n";
-        $md .= "- **Total Issues:** {$this->stats['total_issues']}\n";
-        $md .= "- **Errors:** {$this->stats['errors']}\n";
-        $md .= "- **Warnings:** {$this->stats['warnings']}\n";
-        $md .= "- **Notices:** {$this->stats['notices']}\n\n";
-
-        if ($this->stats['total_issues'] === 0) {
-            $md .= "✅ **No accessibility issues found!**\n\n";
-
-            return $md;
-        }
-
-        $md .= "## Issues by Category\n\n";
-
-        foreach ($this->violations as $category => $issues) {
-            $md .= '### '.ucfirst($category)." ({$this->stats['by_category'][$category]} issues)\n\n";
-
-            foreach ($issues as $idx => $issue) {
-                $severity = $issue['type'] ?? $issue['severity'] ?? 'notice';
-                $icon = $this->getSeverityIcon($severity);
-
-                $md .= "{$icon} **[{$issue['rule']}]** {$issue['message']}\n";
-                if (isset($issue['suggestion'])) {
-                    $md .= "   💡 *{$issue['suggestion']}*\n";
-                }
-                $md .= "\n";
-            }
-        }
-
-        return $md;
+        return $this->scores->grade($this->score(), $this->result->countBySeverity()['error']);
     }
 
-    /**
-     * Generate PDF report
-     */
-    protected function generatePdf(): string
+    /** @return array{total: int, errors: int, warnings: int, notices: int, score: int, grade: string, accessible: bool} */
+    public function summary(): array
     {
-        if (! class_exists(Pdf::class)) {
-            throw new \RuntimeException(
-                'PDF generation requires barryvdh/laravel-dompdf. Install it with: composer require barryvdh/laravel-dompdf'
-            );
-        }
+        $counts = $this->result->countBySeverity();
 
-        $html = $this->generateHtml();
-        $pdf = Pdf::loadHTML($html);
-
-        return $pdf->output();
-    }
-
-    /**
-     * Calculate statistics
-     */
-    protected function calculateStats(): void
-    {
-        $calculator = ScoreCalculator::fromConfig();
-
-        if ($this->result !== null) {
-            $this->stats = $calculator->stats($this->result);
-
-            return;
-        }
-
-        // Legacy array input: the retired `critical` bucket is counted as an error.
-        $counts = ['error' => 0, 'warning' => 0, 'notice' => 0];
-        $byCategory = [];
-
-        foreach ($this->violations as $category => $issues) {
-            $byCategory[$category] = count($issues);
-
-            foreach ($issues as $issue) {
-                $bucket = match ($issue['type'] ?? $issue['severity'] ?? 'notice') {
-                    'critical', 'error' => 'error',
-                    'warning' => 'warning',
-                    default => 'notice',
-                };
-
-                $counts[$bucket]++;
-            }
-        }
-
-        $score = $calculator->score($counts);
-
-        $this->stats = [
-            'total_issues' => array_sum($byCategory),
+        return [
+            'total' => $this->result->count(),
             'errors' => $counts['error'],
             'warnings' => $counts['warning'],
             'notices' => $counts['notice'],
-            'by_category' => $byCategory,
-            'compliance_score' => $score,
-            'grade' => $calculator->grade($score, $counts['error']),
+            'score' => $this->score(),
+            'grade' => $this->grade(),
+            'accessible' => $this->result->isAccessible(),
         ];
     }
 
     /**
-     * Get severity icon
+     * The JSON contract as PHP arrays (spec §12). Use toJson() for the wire format: it keeps empty maps as objects.
+     *
+     * @return array{url: ?string, package_version: string, locale: string, analyzed_at: string, analyzers: list<string>, summary: array<string, int|string|bool>, violations: array<string, list<array<string, mixed>>>}
      */
-    protected function getSeverityIcon(string $severity): string
+    public function toArray(): array
     {
-        return match ($severity) {
-            'critical' => '🔴',
-            'error' => '❌',
-            'warning' => '⚠️',
-            default => 'ℹ️',
+        return [
+            'url' => $this->result->url(),
+            'package_version' => PackageVersion::get(),
+            'locale' => $this->locale,
+            'analyzed_at' => $this->analyzedAt->toIso8601String(),
+            'analyzers' => $this->result->analyzersRun(),
+            'summary' => $this->summary(),
+            'violations' => array_map(
+                fn (array $violations) => array_map(fn (Violation $violation) => $violation->toArray($this->locale), $violations),
+                $this->result->byAnalyzer(),
+            ),
+        ];
+    }
+
+    public function toJson(): string
+    {
+        $report = $this->toArray();
+        $report['violations'] = $report['violations'] === [] ? new \stdClass : array_map(
+            fn (array $violations) => array_map(fn (array $violation) => Violation::objectifyMaps($violation), $violations),
+            $report['violations'],
+        );
+
+        return json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR)."\n";
+    }
+
+    public function render(): string
+    {
+        return match ($this->format) {
+            'json' => $this->toJson(),
+            'markdown' => View::make('bfsg::reports.markdown', $this->viewData())->render(),
+            'html' => $this->html(),
+            'pdf' => $this->pdf(),
         };
     }
 
-    /**
-     * Get statistics
-     */
-    public function getStats(): array
+    /** Write the rendered report to $path (directories are created) and return the path. */
+    public function saveTo(string $path): string
     {
-        return $this->stats;
+        $directory = dirname($path);
+
+        if (! is_dir($directory) && ! mkdir($directory, 0755, true) && ! is_dir($directory)) {
+            throw new RuntimeException("Could not create the report directory {$directory}.");
+        }
+
+        if (file_put_contents($path, $this->render()) === false) {
+            throw new RuntimeException("Could not write the report to {$path}.");
+        }
+
+        return $path;
+    }
+
+    /** `bfsg.reporting.output_path`/report_{Y-m-d_His}.{extension} */
+    public function defaultPath(): string
+    {
+        $directory = rtrim((string) (config('bfsg.reporting.output_path') ?: storage_path('app/bfsg-reports')), '/');
+
+        return $directory.'/report_'.$this->analyzedAt->format('Y-m-d_His').'.'.$this->extension();
+    }
+
+    private function html(): string
+    {
+        return View::make('bfsg::reports.html', $this->viewData())->render();
+    }
+
+    private function pdf(): string
+    {
+        if (! class_exists(Pdf::class)) {
+            throw new RuntimeException('PDF reports require barryvdh/laravel-dompdf: composer require barryvdh/laravel-dompdf');
+        }
+
+        return Pdf::loadHTML($this->html())->output();
+    }
+
+    /** @return array<string, mixed> */
+    private function viewData(): array
+    {
+        return [
+            'report' => $this->toArray(),
+            'locale' => $this->locale,
+            'analyzedAt' => $this->analyzedAt,
+            'version' => PackageVersion::get(),
+        ];
     }
 }

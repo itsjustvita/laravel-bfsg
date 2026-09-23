@@ -96,4 +96,12 @@ class LanguageAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<!DOCTYPE html><html lang="de"><body><p>Willkommen auf unserer Seite.</p><p lang="en-GB">Welcome</p></body></html>'));
     }
+
+    public function test_urls_and_email_addresses_are_not_prose(): void
+    {
+        $html = '<html lang="de"><body><p>https://example.com/a/very/long/path/that/keeps/going/and/going/until/the/end</p>'
+            .'<p>Kontakt: this.is.the.address.of.the.team.and.the.help.desk@example.com</p></body></html>';
+
+        $this->assertNoViolation($this->analyze($html), 'language.possible_language_change');
+    }
 }

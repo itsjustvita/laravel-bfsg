@@ -86,6 +86,7 @@ return [
         'database' => [
             'connection' => env('BFSG_DB_CONNECTION'),
         ],
+        'output_path' => storage_path('app/bfsg-reports'), // html/pdf reports without --output
     ],
 
     /*

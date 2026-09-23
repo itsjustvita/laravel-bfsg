@@ -82,4 +82,23 @@ class AnalysisResultTest extends TestCase
         $this->assertSame('error', $array['violations']['images'][0]['severity']);
         $this->assertSame($array, json_decode(json_encode($this->sampleResult()), true));
     }
+
+    public function test_analyzers_that_ran_without_findings_are_listed_but_have_no_group(): void
+    {
+        $result = $this->sampleResult();
+
+        $this->assertSame(['images', 'forms', 'headings'], $result->analyzersRun());
+        $this->assertArrayNotHasKey('forms', $result->byAnalyzer());
+        $this->assertArrayNotHasKey('forms', $result->toArray()['violations']);
+        $this->assertSame([], $result->forAnalyzer('forms'));
+        $this->assertSame(['images', 'forms', 'headings'], $result->toArray()['analyzers']);
+    }
+
+    public function test_json_keeps_violations_an_object_also_when_empty(): void
+    {
+        $this->assertSame('{}', json_encode((new AnalysisResult([], ['images']))->jsonSerialize()['violations']));
+        $this->assertStringContainsString('"violations":{}', (string) json_encode(new AnalysisResult([], ['images'])));
+        $this->assertSame([], (new AnalysisResult([], ['images']))->toArray()['violations'], 'toArray() stays a PHP array');
+        $this->assertStringContainsString('"violations":{"images":[{', (string) json_encode($this->sampleResult()));
+    }
 }

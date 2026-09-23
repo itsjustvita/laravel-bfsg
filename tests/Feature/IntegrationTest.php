@@ -8,6 +8,7 @@ use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Middleware\CheckAccessibility;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Models\BfsgViolation;
+use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
@@ -166,93 +167,50 @@ HTML;
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Bad heading</h3></body></html>';
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html)->toArray()['violations'];
+        $result = (new Bfsg)->analyze($html, ['url' => 'https://example.com']);
+        $data = json_decode((new ReportGenerator($result))->format('json')->render(), true);
 
-        $report = new ReportGenerator('https://example.com', $violations);
-        $json = $report->setFormat('json')->generate();
-
-        $data = json_decode($json, true);
         $this->assertNotNull($data, 'JSON report should be valid JSON');
-
-        // Verify structure
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('stats', $data);
-        $this->assertArrayHasKey('violations', $data);
-        $this->assertArrayHasKey('summary', $data);
-
-        // Verify meta fields
-        $this->assertEquals('https://example.com', $data['meta']['url']);
-        $this->assertArrayHasKey('timestamp', $data['meta']);
-        $this->assertArrayHasKey('generator', $data['meta']);
-
-        // Verify stats fields
-        $this->assertArrayHasKey('total_issues', $data['stats']);
-        $this->assertArrayHasKey('compliance_score', $data['stats']);
-        $this->assertArrayHasKey('grade', $data['stats']);
-        $this->assertGreaterThan(0, $data['stats']['total_issues']);
-
-        // Verify summary
-        $this->assertArrayHasKey('total_issues', $data['summary']);
-        $this->assertArrayHasKey('compliance_score', $data['summary']);
-        $this->assertArrayHasKey('passed', $data['summary']);
-        $this->assertFalse($data['summary']['passed']);
-
-        // Verify score matches between stats and summary
-        $this->assertEquals($data['stats']['compliance_score'], $data['summary']['compliance_score']);
+        $this->assertSame(['url', 'package_version', 'locale', 'analyzed_at', 'analyzers', 'summary', 'violations'], array_keys($data));
+        $this->assertSame('https://example.com', $data['url']);
+        $this->assertSame(['total', 'errors', 'warnings', 'notices', 'score', 'grade', 'accessible'], array_keys($data['summary']));
+        $this->assertSame($result->count(), $data['summary']['total']);
+        $this->assertGreaterThan(0, $data['summary']['total']);
+        $this->assertFalse($data['summary']['accessible']);
+        $this->assertArrayHasKey('images', $data['violations']);
     }
 
     public function test_report_pipeline_all_formats_consistent_score(): void
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html)->toArray()['violations'];
+        $result = (new Bfsg)->analyze($html, ['url' => 'https://example.com']);
+        $jsonScore = json_decode((new ReportGenerator($result))->format('json')->render(), true)['summary']['score'];
+        $markdown = (new ReportGenerator($result, 'en'))->format('markdown')->render();
+        $html = (new ReportGenerator($result, 'en'))->format('html')->render();
 
-        // Generate JSON report
-        $jsonReport = new ReportGenerator('https://example.com', $violations);
-        $jsonOutput = $jsonReport->setFormat('json')->generate();
-        $jsonData = json_decode($jsonOutput, true);
-        $jsonScore = $jsonData['stats']['compliance_score'];
-
-        // Generate Markdown report
-        $mdReport = new ReportGenerator('https://example.com', $violations);
-        $mdOutput = $mdReport->setFormat('markdown')->generate();
-
-        // Extract score from markdown
-        preg_match('/Compliance Score:\*\*\s*(\d+)%/', $mdOutput, $matches);
-        $this->assertNotEmpty($matches, 'Markdown report should contain compliance score');
-        $mdScore = (int) $matches[1];
-
-        // Scores should match
-        $this->assertEquals($jsonScore, $mdScore, 'JSON and Markdown reports should have the same compliance score');
+        $this->assertStringContainsString('| Compliance score | '.$jsonScore.' of 100 |', $markdown);
+        $this->assertStringContainsString('<dd>'.$jsonScore.' of 100</dd>', $html);
     }
 
     public function test_report_save_to_file_creates_file(): void
     {
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html)->toArray()['violations'];
-
-        $report = new ReportGenerator('https://example.com', $violations);
-        $report->setFormat('json');
-
+        $report = (new ReportGenerator((new Bfsg)->analyze($html, ['url' => 'https://example.com'])))->format('json');
         $tempPath = sys_get_temp_dir().'/bfsg-test-report-'.uniqid().'.json';
 
         try {
-            $savedPath = $report->saveToFile($tempPath);
+            $savedPath = $report->saveTo($tempPath);
 
             $this->assertFileExists($savedPath);
             $this->assertEquals($tempPath, $savedPath);
 
-            $content = file_get_contents($savedPath);
-            $data = json_decode($content, true);
+            $data = json_decode((string) file_get_contents($savedPath), true);
             $this->assertNotNull($data, 'Saved file should contain valid JSON');
-            $this->assertArrayHasKey('meta', $data);
+            $this->assertArrayHasKey('summary', $data);
             $this->assertArrayHasKey('violations', $data);
         } finally {
-            // Cleanup
             if (file_exists($tempPath)) {
                 unlink($tempPath);
             }
@@ -433,47 +391,23 @@ HTML;
         $html = '<!DOCTYPE html><html><body><img src="test.jpg"><h3>Bad</h3></body></html>';
         $url = 'https://example.com/test';
 
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html)->toArray()['violations'];
+        $result = (new Bfsg)->analyze($html, ['url' => $url]);
+        $dbReport = app(ReportRepository::class)->store($result);
+        $summary = (new ReportGenerator($result))->summary();
 
-        // Simulate what the command's saveResults method does
-        $reportGenerator = new ReportGenerator($url, $violations);
-        $stats = $reportGenerator->getStats();
-
-        $dbReport = BfsgReport::create([
-            'url' => $url,
-            'total_violations' => $stats['total_issues'],
-            'score' => $stats['compliance_score'],
-            'grade' => $stats['grade'],
-        ]);
-
-        foreach ($violations as $analyzer => $issues) {
-            foreach ($issues as $issue) {
-                $dbReport->violations()->create([
-                    'analyzer' => $analyzer,
-                    'severity' => $issue['severity'] ?? 'notice',
-                    'message' => $issue['message'],
-                    'element' => $issue['element'] ?? null,
-                    'wcag_rule' => $issue['rule'] ?? null,
-                    'suggestion' => $issue['suggestion'] ?? null,
-                ]);
-            }
-        }
-
-        // Verify report was saved correctly
         $this->assertDatabaseHas('bfsg_reports', [
             'url' => $url,
-            'total_violations' => $stats['total_issues'],
-            'grade' => $stats['grade'],
+            'total_violations' => $summary['total'],
+            'grade' => $summary['grade'],
         ]);
+        $this->assertSame($summary['score'], (int) $dbReport->fresh()->score);
 
-        // Verify violations were saved
-        $savedViolations = $dbReport->violations()->count();
-        $this->assertEquals($stats['total_issues'], $savedViolations);
-
-        // Verify the relationship works end-to-end
         $freshReport = BfsgReport::with('violations')->find($dbReport->id);
-        $this->assertCount($stats['total_issues'], $freshReport->violations);
+        $this->assertCount($summary['total'], $freshReport->violations);
+        $this->assertEqualsCanonicalizing(
+            array_map(fn ($violation) => $violation->fingerprint(), $result->all()),
+            $freshReport->violations->pluck('fingerprint')->all(),
+        );
     }
 
     // =========================================================================
@@ -491,30 +425,8 @@ HTML;
         $this->artisan('bfsg:check', [
             'url' => 'http://example.com/page',
             '--format' => 'json',
-        ])->assertFailed();
-
-        // Run again and capture output
-        $result = $this->artisan('bfsg:check', [
-            'url' => 'http://example.com/page',
-            '--format' => 'json',
-        ]);
-
-        // The command outputs JSON to the console, capture via expectsOutput
-        // Since we can't easily capture raw output in Orchestra Testbench,
-        // verify by running the pipeline directly
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html)->toArray()['violations'];
-
-        $report = new ReportGenerator('http://example.com/page', $violations);
-        $jsonOutput = $report->setFormat('json')->generate();
-        $data = json_decode($jsonOutput, true);
-
-        $this->assertNotNull($data);
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('stats', $data);
-        $this->assertArrayHasKey('violations', $data);
-        $this->assertArrayHasKey('summary', $data);
-        $this->assertFalse($data['summary']['passed']);
+        ])->expectsOutputToContain('"key": "images.missing_alt"')
+            ->assertFailed();
     }
 
     public function test_check_command_returns_failure_on_violations(): void
@@ -589,56 +501,24 @@ HTML;
 </html>
 HTML;
 
-        // Step 1: Analyze
-        $bfsg = new Bfsg;
-        $violations = $bfsg->analyze($html)->toArray()['violations'];
-        $this->assertNotEmpty($violations);
-
-        // Step 2: Generate report
         $url = 'https://example.com/e2e-test';
-        $report = new ReportGenerator($url, $violations);
-        $stats = $report->getStats();
-        $this->assertGreaterThan(0, $stats['total_issues']);
-        $this->assertLessThanOrEqual(100, $stats['compliance_score']);
-        $this->assertGreaterThanOrEqual(0, $stats['compliance_score']);
+        $result = (new Bfsg)->analyze($html, ['url' => $url]);
+        $this->assertGreaterThan(0, $result->count());
 
-        // Step 3: Persist to database
-        $dbReport = BfsgReport::create([
-            'url' => $url,
-            'total_violations' => $stats['total_issues'],
-            'score' => $stats['compliance_score'],
-            'grade' => $stats['grade'],
-            'metadata' => [
-                'compliance_level' => config('bfsg.compliance_level'),
-            ],
-        ]);
+        $report = new ReportGenerator($result);
+        $summary = $report->summary();
+        $this->assertGreaterThan(0, $summary['total']);
+        $this->assertLessThanOrEqual(100, $summary['score']);
 
-        foreach ($violations as $analyzer => $issues) {
-            foreach ($issues as $issue) {
-                $dbReport->violations()->create([
-                    'analyzer' => $analyzer,
-                    'severity' => $issue['severity'] ?? 'notice',
-                    'message' => $issue['message'],
-                    'element' => $issue['element'] ?? null,
-                    'wcag_rule' => $issue['rule'] ?? null,
-                    'suggestion' => $issue['suggestion'] ?? null,
-                ]);
-            }
-        }
+        $dbReport = app(ReportRepository::class)->store($result);
 
-        // Step 4: Verify everything is consistent
         $freshReport = BfsgReport::with('violations')->find($dbReport->id);
-        $this->assertEquals($stats['total_issues'], $freshReport->total_violations);
-        $this->assertEquals($stats['total_issues'], $freshReport->violations->count());
-        $this->assertEquals($stats['grade'], $freshReport->grade);
+        $this->assertEquals($summary['total'], $freshReport->total_violations);
+        $this->assertEquals($summary['total'], $freshReport->violations->count());
+        $this->assertEquals($summary['grade'], $freshReport->grade);
+        $this->assertCount(1, BfsgReport::forUrl($url)->get());
 
-        // Verify we can retrieve by URL scope
-        $reportsForUrl = BfsgReport::forUrl($url)->get();
-        $this->assertCount(1, $reportsForUrl);
-
-        // Verify JSON report has same data
-        $jsonOutput = $report->setFormat('json')->generate();
-        $jsonData = json_decode($jsonOutput, true);
-        $this->assertEquals($stats['total_issues'], $jsonData['summary']['total_issues']);
+        $json = json_decode($report->format('json')->render(), true);
+        $this->assertEquals($summary['total'], $json['summary']['total']);
     }
 }

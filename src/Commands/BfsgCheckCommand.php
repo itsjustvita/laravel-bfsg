@@ -11,6 +11,7 @@ use ItsJustVita\LaravelBfsg\Http\FetchOptions;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
+use Symfony\Component\Console\Output\OutputInterface;
 
 class BfsgCheckCommand extends Command
 {
@@ -66,19 +67,10 @@ class BfsgCheckCommand extends Command
 
             // Handle output based on format
             $format = $this->option('format');
-            switch ($format) {
-                case 'json':
-                    $this->outputJson($violations, $url);
-                    break;
-                case 'html':
-                    $this->outputHtml($violations, $url);
-                    break;
-                case 'pdf':
-                    $this->outputPdf($violations, $url);
-                    break;
-                default:
-                    $this->outputCli($violations);
-                    break;
+            if (in_array($format, ['json', 'markdown', 'html', 'pdf'], true)) {
+                $this->outputReport(new ReportGenerator($result), $format);
+            } else {
+                $this->outputCli($violations);
             }
 
             // Save to database if requested
@@ -244,37 +236,21 @@ class BfsgCheckCommand extends Command
         $this->warn("Total issues found: {$totalIssues}");
     }
 
-    protected function outputJson(array $violations, string $url): void
+    protected function outputReport(ReportGenerator $report, string $format): void
     {
-        $report = new ReportGenerator($url, $violations);
-        $this->line($report->setFormat('json')->generate());
-    }
+        $report->format($format);
 
-    protected function outputHtml(array $violations, string $url): void
-    {
-        $report = new ReportGenerator($url, $violations);
-        $filename = $report->setFormat('html')->saveToFile();
+        if (in_array($format, ['json', 'markdown'], true)) {
+            $this->output->write($report->render(), false, OutputInterface::OUTPUT_RAW);
 
-        $this->info("📄 HTML report saved to: {$filename}");
+            return;
+        }
 
-        // Show quick stats
-        $stats = $report->getStats();
-        $this->newLine();
-        $this->info("Compliance Score: {$stats['compliance_score']}% (Grade: {$stats['grade']})");
-        $this->info("Total Issues: {$stats['total_issues']} (Errors: {$stats['errors']}, Warnings: {$stats['warnings']}, Notices: {$stats['notices']})");
-    }
+        $path = $report->saveTo($report->defaultPath());
+        $summary = $report->summary();
 
-    protected function outputPdf(array $violations, string $url): void
-    {
-        $report = new ReportGenerator($url, $violations);
-        $filename = $report->setFormat('pdf')->saveToFile();
-
-        $this->info("PDF report saved to: {$filename}");
-
-        $stats = $report->getStats();
-        $this->newLine();
-        $this->info("Compliance Score: {$stats['compliance_score']}% (Grade: {$stats['grade']})");
-        $this->info("Total Issues: {$stats['total_issues']}");
+        $this->info("Report saved to: {$path}");
+        $this->info("Compliance Score: {$summary['score']}% (Grade: {$summary['grade']})");
     }
 
     protected function saveResults(AnalysisResult $result): void

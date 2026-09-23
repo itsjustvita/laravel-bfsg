@@ -63,9 +63,25 @@ final readonly class Violation implements JsonSerializable
         ];
     }
 
+    /** JSON shape: like toArray(), with empty `params` and `meta` encoded as objects (spec §12). */
     public function jsonSerialize(): array
     {
-        return $this->toArray();
+        return self::objectifyMaps($this->toArray());
+    }
+
+    /**
+     * @param  array<string, mixed>  $violation  a toArray() result
+     * @return array<string, mixed> the same with empty `params` / `meta` as stdClass, so json_encode writes {}
+     */
+    public static function objectifyMaps(array $violation): array
+    {
+        foreach (['params', 'meta'] as $map) {
+            if (($violation[$map] ?? null) === []) {
+                $violation[$map] = new \stdClass;
+            }
+        }
+
+        return $violation;
     }
 
     private function translate(string $part, ?string $locale): string
@@ -83,11 +99,15 @@ final readonly class Violation implements JsonSerializable
         return is_string($text) ? $text : $id;
     }
 
-    /** @return array<string, string> */
+    /** @return array<string, string> placeholders as strings; non-scalar values (custom analyzers) as JSON */
     private function stringParams(): array
     {
         return array_map(
-            fn ($value) => is_bool($value) ? ($value ? 'true' : 'false') : (string) $value,
+            fn ($value) => match (true) {
+                is_bool($value) => $value ? 'true' : 'false',
+                is_scalar($value) || $value === null => (string) $value,
+                default => (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+            },
             $this->params,
         );
     }

@@ -29,6 +29,15 @@ class ScoreCalculatorTest extends TestCase
         $this->assertSame(90, (new ScoreCalculator(['error' => 10, 'warning' => 1, 'notice' => 0]))->score($this->sampleResult(1, 0, 5)));
     }
 
+    public function test_score_rounds_half_up_and_below_half_down(): void
+    {
+        $weights = ['error' => 1.4, 'warning' => 2, 'notice' => 0.2];
+
+        $this->assertSame(99, (new ScoreCalculator($weights))->score($this->sampleResult(0, 0, 3)), '99.4 rounds down (ceil would give 100)');
+        $this->assertSame(99, (new ScoreCalculator($weights))->score($this->sampleResult(1, 0, 0)), '98.6 rounds up (truncation would give 98)');
+        $this->assertSame(93, (new ScoreCalculator)->score($this->sampleResult(1, 1, 1)), '92.5 rounds half up');
+    }
+
     public function test_grade_thresholds_and_error_caps(): void
     {
         $calc = new ScoreCalculator;

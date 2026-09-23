@@ -111,8 +111,15 @@ final class AnalysisResult implements Countable, JsonSerializable
         ];
     }
 
+    /** JSON shape: `violations` is an object keyed by analyzer (also when empty), each violation as Violation::jsonSerialize(). */
     public function jsonSerialize(): array
     {
-        return $this->toArray();
+        $array = $this->toArray();
+        $array['violations'] = $array['violations'] === [] ? new \stdClass : array_map(
+            fn (array $violations) => array_map(fn (array $violation) => Violation::objectifyMaps($violation), $violations),
+            $array['violations'],
+        );
+
+        return $array;
     }
 }

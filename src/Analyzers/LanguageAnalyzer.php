@@ -137,7 +137,8 @@ class LanguageAnalyzer extends BaseAnalyzer
     /** 'en', 'de' or null: at least MIN_WORDS words, MIN_HITS function words, and twice as many hits as the other language. */
     protected function detectLanguage(string $text): ?string
     {
-        $lower = Text::lower($text);
+        // URLs and e-mail addresses are identifiers, not prose in any language.
+        $lower = Text::lower(preg_replace('~\b(?:https?://|www\.)\S+|\S+@\S+\.\S+~iu', ' ', $text) ?? $text);
 
         if (preg_match_all('/[\pL]+/u', $lower) < self::MIN_WORDS) {
             return null;

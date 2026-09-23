@@ -63,24 +63,23 @@ class GenerateReport extends Tool
 
         $analysis = app(Bfsg::class)->analyze($response->body(), ['url' => $url]);
 
-        $reportGenerator = new ReportGenerator($url, $analysis);
-        $stats = $reportGenerator->getStats();
-        $reportContent = $reportGenerator->setFormat($format)->generate();
+        $reportGenerator = (new ReportGenerator($analysis))->format($format);
+        $summary = $reportGenerator->summary();
 
         $result = [
             'stats' => [
-                'total_issues' => $stats['total_issues'],
-                'score' => $stats['compliance_score'],
-                'grade' => $stats['grade'],
+                'total_issues' => $summary['total'],
+                'score' => $summary['score'],
+                'grade' => $summary['grade'],
             ],
             'format' => $format,
         ];
 
         if ($format === 'pdf') {
-            $path = $reportGenerator->saveToFile();
+            $path = $reportGenerator->saveTo($reportGenerator->defaultPath());
             $result['report'] = "PDF saved to: {$path}";
         } else {
-            $result['report'] = $reportContent;
+            $result['report'] = $reportGenerator->render();
         }
 
         if ($save) {

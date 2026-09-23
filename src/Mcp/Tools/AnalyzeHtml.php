@@ -30,16 +30,14 @@ class AnalyzeHtml extends Tool
             return Response::error('The html parameter is required.');
         }
 
-        $violations = app(Bfsg::class)->analyze($html)->toArray()['violations'];
-
-        $report = new ReportGenerator('inline-html', $violations);
-        $stats = $report->getStats();
+        $result = app(Bfsg::class)->analyze($html);
+        $summary = (new ReportGenerator($result))->summary();
 
         return Response::json([
-            'violations' => $violations,
-            'total_issues' => $stats['total_issues'],
-            'score' => $stats['compliance_score'],
-            'grade' => $stats['grade'],
+            'violations' => $result->toArray()['violations'],
+            'total_issues' => $summary['total'],
+            'score' => $summary['score'],
+            'grade' => $summary['grade'],
         ]);
     }
 }

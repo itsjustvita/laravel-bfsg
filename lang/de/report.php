@@ -17,4 +17,10 @@ return [
     'generated_by' => 'Erstellt mit laravel-bfsg :version am :date',
     'url' => 'URL',
     'issues_found' => ':count Befunde gefunden',
+    'date' => 'Datum',
+    'findings' => 'Befunde',
+    'score_value' => ':score von 100',
+    'snippet' => 'Code',
+    'no_rule' => 'Kein WCAG-Kriterium',
+    'source' => 'laravel-bfsg auf GitHub',
 ];

@@ -2,50 +2,41 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
+use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
+use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Violation;
 
 class PdfReportTest extends TestCase
 {
-    protected function sampleViolations(): array
+    private function sampleResult(): AnalysisResult
     {
-        return [
-            'images' => [
-                [
-                    'type' => 'error',
-                    'severity' => 'error',
-                    'rule' => 'WCAG 1.1.1',
-                    'message' => 'Image missing alt attribute',
-                    'element' => 'img',
-                    'suggestion' => 'Add an alt attribute',
-                ],
-            ],
-        ];
+        return new AnalysisResult([
+            'images' => [new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1', ['src' => 'a.jpg'], 'img', '/html[1]/body[1]/img[1]', '<img src="a.jpg">')],
+        ], ['images'], 'https://example.com');
     }
 
     public function test_generates_pdf_when_dompdf_available(): void
     {
-        $report = new ReportGenerator('https://example.com', $this->sampleViolations());
-        $pdf = $report->setFormat('pdf')->generate();
-        $this->assertStringStartsWith('%PDF', $pdf);
+        $this->assertStringStartsWith('%PDF', (new ReportGenerator($this->sampleResult()))->format('pdf')->render());
     }
 
     public function test_pdf_save_to_file(): void
     {
-        $report = new ReportGenerator('https://example.com', $this->sampleViolations());
-        $report->setFormat('pdf');
         $path = storage_path('app/bfsg-reports/test-report.pdf');
-        $savedPath = $report->saveToFile($path);
-        $this->assertFileExists($savedPath);
-        $content = file_get_contents($savedPath);
-        $this->assertStringStartsWith('%PDF', $content);
-        unlink($savedPath);
+        $savedPath = (new ReportGenerator($this->sampleResult()))->format('pdf')->saveTo($path);
+
+        try {
+            $this->assertSame($path, $savedPath);
+            $this->assertStringStartsWith('%PDF', (string) file_get_contents($savedPath));
+        } finally {
+            unlink($savedPath);
+        }
     }
 
-    public function test_empty_violations_pdf(): void
+    public function test_empty_result_pdf(): void
     {
-        $report = new ReportGenerator('https://example.com', []);
-        $pdf = $report->setFormat('pdf')->generate();
-        $this->assertStringStartsWith('%PDF', $pdf);
+        $this->assertStringStartsWith('%PDF', (new ReportGenerator(new AnalysisResult([], [], 'https://example.com')))->format('pdf')->render());
     }
 }

@@ -2,241 +2,163 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
+use InvalidArgumentException;
+use ItsJustVita\LaravelBfsg\AnalysisResult;
+use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Support\PackageVersion;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Violation;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class ReportGeneratorTest extends TestCase
 {
-    protected function sampleViolations(): array
+    private function sampleResult(?string $locale = null): AnalysisResult
     {
-        return [
-            'images' => [
-                [
-                    'type' => 'error',
-                    'severity' => 'error',
-                    'rule' => 'WCAG 1.1.1',
-                    'message' => 'Image missing alt attribute',
-                    'element' => 'img',
-                    'suggestion' => 'Add an alt attribute',
-                ],
-            ],
-            'headings' => [
-                [
-                    'type' => 'warning',
-                    'severity' => 'warning',
-                    'rule' => 'WCAG 1.3.1',
-                    'message' => 'Heading hierarchy skipped',
-                    'element' => 'h3',
-                    'suggestion' => 'Use proper heading levels',
-                ],
-            ],
-        ];
+        return new AnalysisResult([
+            'images' => [new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1', ['src' => 'hero.jpg'], 'img.hero', '/html[1]/body[1]/main[1]/img[1]', '<img src="hero.jpg" class="hero">')],
+            'headings' => [new Violation('headings', 'headings.skipped_level', Severity::Warning, '1.3.1', ['from' => 1, 'to' => 3], 'h3', '/html[1]/body[1]/main[1]/h3[1]', '<h3>Deep | `tick`</h3>')],
+            'links' => [new Violation('links', 'links.missing_noopener', Severity::Notice, null, ['href' => 'https://x.test'], 'a', '/html[1]/body[1]/a[1]', '<a href="https://x.test" target="_blank">x</a>', [], [], ['security'], true)],
+        ], ['images', 'forms', 'headings', 'links'], 'https://example.com/', $locale);
     }
 
-    protected function mixedSeverityViolations(): array
+    public function test_json_follows_the_contract(): void
     {
-        return [
-            'images' => [
-                [
-                    'type' => 'critical',
-                    'severity' => 'critical',
-                    'rule' => 'WCAG 1.1.1',
-                    'message' => 'Critical image issue',
-                    'element' => 'img',
-                    'suggestion' => 'Fix critical issue',
-                ],
-                [
-                    'type' => 'error',
-                    'severity' => 'error',
-                    'rule' => 'WCAG 1.1.2',
-                    'message' => 'Error image issue',
-                    'element' => 'img',
-                    'suggestion' => 'Fix error issue',
-                ],
-            ],
-            'headings' => [
-                [
-                    'type' => 'warning',
-                    'severity' => 'warning',
-                    'rule' => 'WCAG 1.3.1',
-                    'message' => 'Warning heading issue',
-                    'element' => 'h3',
-                    'suggestion' => 'Fix warning issue',
-                ],
-                [
-                    'type' => 'notice',
-                    'severity' => 'notice',
-                    'rule' => 'WCAG 2.4.6',
-                    'message' => 'Notice heading issue',
-                    'element' => 'h4',
-                    'suggestion' => 'Fix notice issue',
-                ],
-            ],
-        ];
+        $json = json_decode((new ReportGenerator($this->sampleResult(), 'de'))->format('json')->render(), true, flags: JSON_THROW_ON_ERROR);
+
+        $this->assertSame(['url', 'package_version', 'locale', 'analyzed_at', 'analyzers', 'summary', 'violations'], array_keys($json));
+        $this->assertSame('https://example.com/', $json['url']);
+        $this->assertSame(PackageVersion::get(), $json['package_version']);
+        $this->assertSame('de', $json['locale']);
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/', $json['analyzed_at']);
+        $this->assertSame(['images', 'forms', 'headings', 'links'], $json['analyzers']);
+        $this->assertSame(['total' => 3, 'errors' => 1, 'warnings' => 1, 'notices' => 1, 'score' => 93, 'grade' => 'B', 'accessible' => false], $json['summary']);
+        $this->assertSame(['images', 'headings', 'links'], array_keys($json['violations']));
+
+        $image = $json['violations']['images'][0];
+        $this->assertSame(['id', 'analyzer', 'key', 'severity', 'rule', 'related', 'tags', 'message', 'suggestion', 'element', 'selector', 'snippet', 'params', 'meta', 'auto_fixable'], array_keys($image));
+        $this->assertSame('images.missing_alt', $image['key']);
+        $this->assertSame('Bild ohne Textalternative (hero.jpg)', $image['message']);
+        $this->assertSame(['src' => 'hero.jpg'], $image['params']);
     }
 
-    public function test_generates_json_report(): void
+    public function test_empty_maps_are_json_objects(): void
     {
-        $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
-        $output = $generator->setFormat('json')->generate();
+        $clean = (new ReportGenerator(new AnalysisResult([], ['images'], 'https://example.com/')))->format('json')->render();
+        $this->assertStringContainsString('"violations": {}', $clean);
 
-        $data = json_decode($output, true);
-        $this->assertNotNull($data, 'Output should be valid JSON');
-
-        $this->assertArrayHasKey('meta', $data);
-        $this->assertArrayHasKey('stats', $data);
-        $this->assertArrayHasKey('violations', $data);
-        $this->assertArrayHasKey('summary', $data);
-
-        $this->assertEquals('https://example.com', $data['meta']['url']);
-        $this->assertEquals(2, $data['stats']['total_issues']);
-
-        // 1 error + 1 warning => 100 - 5 - 2 = 93; the error caps the grade at B.
-        $this->assertEquals(93, $data['stats']['compliance_score']);
-        $this->assertEquals('B', $data['stats']['grade']);
+        $json = (new ReportGenerator($this->sampleResult()))->toJson();
+        $this->assertStringContainsString('"meta": {}', $json);
+        $this->assertStringNotContainsString('"meta": []', $json);
+        $this->assertStringNotContainsString('"params": []', $json);
     }
 
-    public function test_generates_html_report(): void
+    public function test_score_grade_and_summary(): void
     {
-        $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
-        $output = $generator->setFormat('html')->generate();
+        $report = new ReportGenerator($this->sampleResult());
 
-        $this->assertStringContainsString('https://example.com', $output);
-        $this->assertStringContainsString('WCAG 1.1.1', $output);
-        $this->assertStringContainsString('Image missing alt attribute', $output);
+        $this->assertSame(93, $report->score(), '100 - 5 - 2 - 0.5 = 92.5, rounded');
+        $this->assertSame('B', $report->grade(), 'an error caps the grade at B');
+        $this->assertFalse($report->summary()['accessible']);
+        $this->assertSame('A+', (new ReportGenerator(new AnalysisResult([], [])))->grade());
     }
 
-    public function test_html_report_renders_severity_badge_from_type_key(): void
+    public function test_locale_resolution(): void
     {
-        // Since v2.2.0 analyzers emit `type`, not `severity`. The badge must follow `type`.
-        $violations = [
-            'images' => [
-                [
-                    'type' => 'error',
-                    'rule' => 'WCAG 1.1.1',
-                    'message' => 'Image missing alt attribute',
-                    'element' => 'img',
-                    'suggestion' => 'Add an alt attribute',
-                ],
-            ],
-            'headings' => [
-                [
-                    'type' => 'warning',
-                    'rule' => 'WCAG 1.3.1',
-                    'message' => 'Heading hierarchy skipped',
-                    'element' => 'h3',
-                    'suggestion' => 'Use proper heading levels',
-                ],
-            ],
-        ];
-
-        $output = (new ReportGenerator('https://example.com', $violations))
-            ->setFormat('html')
-            ->generate();
-
-        $this->assertMatchesRegularExpression('/severity-badge error">\s*error/', $output);
-        $this->assertMatchesRegularExpression('/severity-badge warning">\s*warning/', $output);
-        $this->assertDoesNotMatchRegularExpression('/severity-badge notice">\s*notice/', $output);
+        $this->assertSame('fr', (new ReportGenerator($this->sampleResult('de'), 'fr'))->locale(), 'explicit locale wins');
+        $this->assertSame('de', (new ReportGenerator($this->sampleResult('de')))->locale(), 'then the result locale');
+        config()->set('bfsg.locale', 'de');
+        $this->assertSame('de', (new ReportGenerator($this->sampleResult()))->locale(), 'then bfsg.locale');
+        config()->set('bfsg.locale', null);
+        $this->assertSame('en', (new ReportGenerator($this->sampleResult()))->locale(), 'then app.locale');
     }
 
-    public function test_generates_markdown_report(): void
+    public function test_html_report_uses_the_locale_labels_and_version(): void
     {
-        $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
-        $output = $generator->setFormat('markdown')->generate();
+        $html = (new ReportGenerator($this->sampleResult(), 'de'))->format('html')->render();
 
-        $this->assertStringContainsString('# BFSG Accessibility Report', $output);
-        $this->assertStringContainsString('https://example.com', $output);
-        $this->assertStringContainsString('Total Issues', $output);
-        $this->assertStringContainsString('WCAG 1.1.1', $output);
+        $this->assertStringContainsString('<html lang="de">', $html);
+        $this->assertStringContainsString('<h1>Barrierefreiheitsbericht</h1>', $html);
+        $this->assertStringContainsString('Bild ohne Textalternative (hero.jpg)', $html);
+        $this->assertStringContainsString('>Fehler</span>', $html);
+        $this->assertStringContainsString('WCAG 1.1.1', $html);
+        $this->assertStringContainsString('Kein WCAG-Kriterium', $html);
+        $this->assertStringContainsString('&lt;img src=&quot;hero.jpg&quot; class=&quot;hero&quot;&gt;', $html);
+        $this->assertStringContainsString('Erstellt mit laravel-bfsg '.PackageVersion::get(), $html);
+        $this->assertStringContainsString('#b45309', $html, 'warning colour with 4.5:1 on white');
+        $this->assertStringNotContainsString('1.5.0', $html);
+        $this->assertStringContainsString('<html lang="en">', (new ReportGenerator($this->sampleResult(), 'en'))->format('html')->render());
     }
 
-    public function test_pdf_generates_valid_pdf(): void
+    /** @return array<string, array{0: string, 1: bool}> */
+    public static function ownAnalyzerCases(): array
     {
-        $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
-
-        $pdfOutput = $generator->setFormat('pdf')->generate();
-
-        $this->assertStringStartsWith('%PDF', $pdfOutput);
+        return ['en with findings' => ['en', true], 'de with findings' => ['de', true], 'en clean' => ['en', false], 'de clean' => ['de', false]];
     }
 
-    public function test_calculates_stats_correctly(): void
+    #[DataProvider('ownAnalyzerCases')]
+    public function test_the_html_report_passes_the_packages_own_analyzers(string $locale, bool $findings): void
     {
-        $generator = new ReportGenerator('https://example.com', $this->mixedSeverityViolations());
-        $stats = $generator->getStats();
+        $result = $findings ? $this->sampleResult() : new AnalysisResult([], ['images'], 'https://example.com/a/very/long/path/that/keeps/going/and/going/until/the/title/would/be/too/long');
+        $html = (new ReportGenerator($result, $locale))->format('html')->render();
 
-        $this->assertEquals(4, $stats['total_issues']);
-        $this->assertArrayNotHasKey('critical', $stats);
-        // The retired `critical` severity is counted as an error.
-        $this->assertEquals(2, $stats['errors']);
-        $this->assertEquals(1, $stats['warnings']);
-        $this->assertEquals(1, $stats['notices']);
+        $own = (new Bfsg)->analyze($html, ['url' => 'report.html']);
 
-        // Score = round(100 - (2 * 5 + 2 + 0.5)) = round(87.5) = 88
-        $this->assertEquals(88, $stats['compliance_score']);
-        // 88 is a B+, but the two errors cap the grade at B.
-        $this->assertEquals('B', $stats['grade']);
+        $this->assertSame([], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element.' '.$violation->snippet, $own->all()));
     }
 
-    public function test_empty_violations_gives_perfect_score(): void
+    public function test_markdown_report(): void
     {
-        $generator = new ReportGenerator('https://example.com', []);
-        $stats = $generator->getStats();
+        $markdown = (new ReportGenerator($this->sampleResult(), 'en'))->format('markdown')->render();
 
-        $this->assertEquals(0, $stats['total_issues']);
-        $this->assertEquals(100, $stats['compliance_score']);
-        $this->assertEquals('A+', $stats['grade']);
+        $this->assertStringStartsWith("# Accessibility Report\n", $markdown);
+        $this->assertStringContainsString('| URL | https://example.com/ |', $markdown);
+        $this->assertStringContainsString('| Compliance score | 93 of 100 |', $markdown);
+        $this->assertStringContainsString('### images (1)', $markdown);
+        $this->assertStringContainsString('- **Error** · WCAG 1.1.1 · `img.hero`', $markdown);
+        $this->assertStringContainsString('Image without text alternative (hero.jpg)', $markdown);
+        $this->assertStringContainsString('`<img src="hero.jpg" class="hero">`', $markdown);
+        $this->assertStringContainsString('`` <h3>Deep | `tick`</h3> ``', $markdown);
+        $this->assertStringContainsString('No WCAG criterion', $markdown);
+        $this->assertStringNotContainsString("\n\n\n", $markdown);
+
+        $clean = (new ReportGenerator(new AnalysisResult([], [], 'https://example.com/'), 'de'))->format('markdown')->render();
+        $this->assertStringContainsString('Keine Barrierefreiheitsprobleme gefunden.', $clean);
     }
 
-    public function test_grade_assignment_f(): void
+    public function test_pdf_report(): void
     {
-        $criticalViolations = [
-            'images' => array_fill(0, 15, [
-                'type' => 'critical',
-                'severity' => 'critical',
-                'rule' => 'WCAG 1.1.1',
-                'message' => 'Critical issue',
-                'element' => 'img',
-                'suggestion' => 'Fix it',
-            ]),
-        ];
-
-        $generator = new ReportGenerator('https://example.com', $criticalViolations);
-        $stats = $generator->getStats();
-
-        // 15 criticals count as errors: score = 100 - (15 * 5) = 25
-        $this->assertEquals(25, $stats['compliance_score']);
-        $this->assertEquals('F', $stats['grade']);
+        $this->assertStringStartsWith('%PDF', (new ReportGenerator($this->sampleResult()))->format('pdf')->render());
+        $this->assertStringStartsWith('%PDF', (new ReportGenerator(new AnalysisResult([], [])))->format('pdf')->render());
     }
 
-    public function test_save_to_file(): void
+    public function test_save_to_writes_the_rendered_report_and_default_paths_use_the_config(): void
     {
-        $generator = new ReportGenerator('https://example.com', $this->sampleViolations());
-        $generator->setFormat('json');
+        $directory = sys_get_temp_dir().'/bfsg-reports-'.uniqid();
+        config()->set('bfsg.reporting.output_path', $directory);
+        $report = (new ReportGenerator($this->sampleResult()))->format('markdown');
 
-        $tempPath = sys_get_temp_dir().'/bfsg_test_report_'.uniqid().'.json';
+        $this->assertMatchesRegularExpression('#^'.preg_quote($directory, '#').'/report_\d{4}-\d{2}-\d{2}_\d{6}\.md$#', $report->defaultPath());
+        $this->assertSame('pdf', (clone $report)->format('pdf')->extension());
+
+        $path = $report->saveTo($directory.'/nested/r.md');
 
         try {
-            $savedPath = $generator->saveToFile($tempPath);
-
-            $this->assertEquals($tempPath, $savedPath);
-            $this->assertFileExists($tempPath);
-
-            $content = file_get_contents($tempPath);
-            $data = json_decode($content, true);
-            $this->assertNotNull($data, 'Saved file should contain valid JSON');
-            $this->assertArrayHasKey('meta', $data);
+            $this->assertSame($directory.'/nested/r.md', $path);
+            $this->assertSame($report->render(), file_get_contents($path));
         } finally {
-            if (file_exists($tempPath)) {
-                unlink($tempPath);
-            }
+            unlink($path);
+            rmdir($directory.'/nested');
+            rmdir($directory);
         }
     }
 
-    public function test_markdown_with_no_violations_shows_success(): void
+    public function test_unknown_formats_are_rejected(): void
     {
-        $generator = new ReportGenerator('https://example.com', []);
-        $output = $generator->setFormat('markdown')->generate();
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown report format [xml]');
 
-        $this->assertStringContainsString('No accessibility issues found', $output);
+        (new ReportGenerator($this->sampleResult()))->format('xml');
     }
 }

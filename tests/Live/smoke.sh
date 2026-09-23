@@ -111,6 +111,19 @@ fi
 grep -q 'not an HTML page' "$WORK/json-check.out" || { cat "$WORK/json-check.out"; fail "bfsg:check did not explain why the JSON response was rejected"; }
 pass "bfsg:check rejects a JSON response"
 
+# 6d. HTML report: written to a file, localized, current version, and it passes the package's own analyzers
+php artisan bfsg:check /live/broken --format=html >"$WORK/html-report.out" 2>&1
+REPORT="$(grep -o '/[^ ]*report_[0-9_-]*\.html' "$WORK/html-report.out" | head -1)"
+{ [ -n "$REPORT" ] && [ -f "$REPORT" ]; } || { cat "$WORK/html-report.out"; fail "bfsg:check --format=html did not write a report file"; }
+grep -q '<html lang="en">' "$REPORT" || fail "the HTML report does not declare lang=\"en\""
+if grep -q 'v1\.5\.0\|2\.1\.0' "$REPORT"; then fail "the HTML report shows a stale package version"; fi
+cp "$REPORT" public/bfsg-live-report.html
+php artisan bfsg:check "$BASE/bfsg-live-report.html" --format=json >"$WORK/report-check.out" 2>"$WORK/report-check.err"
+php "$LIVE_DIR/violation-keys.php" <"$WORK/report-check.out" >"$WORK/report-check.keys" || fail "bfsg:check on the HTML report"
+[ ! -s "$WORK/report-check.keys" ] || { cat "$WORK/report-check.keys"; fail "the HTML report fails the package's own analyzers"; }
+rm -f public/bfsg-live-report.html
+pass "HTML report: lang, version, passes its own analyzers"
+
 # 7. Middleware: header on the HTML page, everything else untouched
 header() { # url header-name -> value (empty when absent)
     curl -s -D - -o /dev/null "$1" | tr -d '\r' | awk -v h="$(echo "$2" | tr 'A-Z' 'a-z')" -F': ' 'tolower($1)==h {print $2}'
