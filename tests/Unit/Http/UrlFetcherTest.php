@@ -279,4 +279,73 @@ class UrlFetcherTest extends TestCase
         $this->assertSame($request, \Illuminate\Support\Facades\Request::getFacadeRoot());
         $this->assertSame('http://localhost/x', url('/x'));
     }
+
+    public function test_same_app_detection_compares_scheme_host_and_port(): void
+    {
+        Http::fake(['*' => Http::response(self::PAGE, 200)]);
+        $this->app['router']->get('/', fn () => response('<html><body>kernel</body></html>'));
+
+        $this->assertTrue($this->fetcher()->isSameApp('http://LOCALHOST:80/x'));
+        $this->assertFalse($this->fetcher()->isSameApp('http://localhost:5173/'));
+        $this->assertFalse($this->fetcher()->isSameApp('https://localhost/'));
+
+        $vite = $this->fetcher()->fetch('http://localhost:5173/');
+        $this->assertFalse($vite->inProcess);
+        $this->assertSame(self::PAGE, $vite->html);
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://localhost:5173/');
+    }
+
+    public function test_a_redirect_from_a_remote_page_into_this_application_is_not_fetched_in_process(): void
+    {
+        $this->app['router']->get('/admin-secret', fn () => response('<html><body>ADMIN '.auth()->id().'</body></html>'));
+        Http::fake([
+            'https://attacker.example/x' => Http::response('', 302, ['Location' => 'http://localhost/admin-secret']),
+            'http://localhost/*' => Http::response('<html><body>remote copy</body></html>', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://attacker.example/x', new FetchOptions(actingAs: new GenericUser(['id' => 1])));
+
+        $this->assertFalse($page->inProcess);
+        $this->assertStringNotContainsString('ADMIN', $page->html);
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://localhost/admin-secret');
+    }
+
+    public function test_every_redirect_hop_must_be_an_http_url(): void
+    {
+        Http::fake([
+            'https://example.com/file' => Http::response('', 302, ['Location' => 'file:///etc/passwd']),
+            'https://example.com/js' => Http::response('', 302, ['Location' => 'javascript:alert(1)']),
+            '*' => Http::response(self::PAGE, 200),
+        ]);
+        $this->app['router']->get('/to-file', fn () => redirect()->away('file:///etc/passwd'));
+
+        foreach (['https://example.com/file', 'https://example.com/js', '/to-file'] as $url) {
+            $this->assertStringContainsString('Invalid URL', $this->failure($url)->getMessage(), $url);
+        }
+
+        Http::assertNotSent(fn (Request $request) => ! str_starts_with($request->url(), 'https://example.com/'));
+    }
+
+    public function test_malformed_urls_and_in_process_errors_are_fetch_failed(): void
+    {
+        $this->app['router']->get('/stream-boom', fn () => new StreamedResponse(function () {
+            throw new \RuntimeException('stream exploded');
+        }, 200, ['Content-Type' => 'text/html']));
+        Http::fake(['https://example.com/bad' => Http::response('', 302, ['Location' => 'http://exa mple.com/'])]);
+
+        $this->assertStringContainsString('Invalid URL', $this->failure('http://exa mple.com/')->getMessage());
+        $this->assertStringContainsString('Invalid URL', $this->failure('https://example.com/bad')->getMessage());
+        $this->assertStringContainsString('stream exploded', $this->failure('/stream-boom')->getMessage());
+    }
+
+    public function test_allowed_hosts_accept_ipv6_brackets_and_trailing_dots(): void
+    {
+        Http::fake(['*' => Http::response(self::PAGE, 200)]);
+
+        $this->assertSame(self::PAGE, $this->fetcher()->fetch('http://[::1]:8080/', new FetchOptions(allowedHosts: ['::1']))->html);
+        $this->assertSame(self::PAGE, $this->fetcher()->fetch('http://[::1]/', new FetchOptions(allowedHosts: ['[::1]']))->html);
+        $this->assertSame(self::PAGE, $this->fetcher()->fetch('https://example.com./', new FetchOptions(allowedHosts: ['example.com']))->html);
+        $this->assertSame(self::PAGE, $this->fetcher()->fetch('https://example.com/', new FetchOptions(allowedHosts: ['Example.COM.']))->html);
+        $this->assertStringContainsString('not in the list of allowed hosts', $this->failure('https://example.com.evil.net/', new FetchOptions(allowedHosts: ['example.com']))->getMessage());
+    }
 }

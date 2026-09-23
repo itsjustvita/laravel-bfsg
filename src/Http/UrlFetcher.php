@@ -2,15 +2,19 @@
 
 namespace ItsJustVita\LaravelBfsg\Http;
 
+use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Http\Client\ConnectionException;
+use Throwable;
 
 /**
- * Fetches an HTML page for analysis. URLs of this application (a path, or the host of `app.url`) go through the
- * HTTP kernel in-process; everything else through AuthenticatedHttpClient. Redirects are followed (at most
- * MAX_REDIRECTS, each hop checked against the allowed hosts), non-2xx and non-HTML answers are FetchFailed,
- * and same-origin stylesheets are inlined so the contrast analyzer sees them.
+ * Fetches an HTML page for analysis. URLs of this application (a path, or the origin of `app.url`: scheme, host
+ * and port) go through the HTTP kernel in-process; everything else through AuthenticatedHttpClient. Redirects are
+ * followed (at most MAX_REDIRECTS, every hop validated as an http(s) URL and checked against the allowed hosts);
+ * once a hop has gone over HTTP, later hops into this application go over HTTP too, without `actingAs`. Non-2xx
+ * and non-HTML answers and every other error are FetchFailed, and same-origin stylesheets are inlined so the
+ * contrast analyzer sees them.
  */
 class UrlFetcher
 {
@@ -26,10 +30,13 @@ class UrlFetcher
         $requested = $this->absolute($url);
         $current = $requested;
         $redirects = 0;
+        $viaKernel = $options->inProcess;
 
         while (true) {
             $this->assertAllowed($current, $options->allowedHosts);
-            $response = $this->request($current, $client, $options);
+            // In-process only while every hop so far was in-process: a remote page must not redirect into the kernel
+            $viaKernel = $viaKernel && $this->isSameApp($current);
+            $response = $this->request($current, $client, $options, $viaKernel);
 
             if ($response['status'] < 300 || $response['status'] >= 400 || $response['location'] === null) {
                 break;
@@ -39,7 +46,7 @@ class UrlFetcher
                 throw FetchFailed::tooManyRedirects($requested);
             }
 
-            $current = $this->resolve($current, $response['location']);
+            $current = $this->validated($this->resolve($current, $response['location']));
         }
 
         if ($response['status'] < 200 || $response['status'] >= 300) {
@@ -54,7 +61,7 @@ class UrlFetcher
         $warnings = [];
 
         if ($options->inlineStylesheets ?? filter_var(config('bfsg.fetch.inline_stylesheets', true), FILTER_VALIDATE_BOOL)) {
-            [$html, $warnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options));
+            [$html, $warnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options, $viaKernel));
         }
 
         return new FetchedPage(
@@ -66,7 +73,7 @@ class UrlFetcher
             landedOnLogin: $redirects > 0 && $this->isLoginPage($current, $options),
             contentType: $response['contentType'] === '' ? 'text/html' : $response['contentType'],
             warnings: $warnings,
-            inProcess: $options->inProcess && $this->isSameApp($current),
+            inProcess: $viaKernel,
         );
     }
 
@@ -79,34 +86,49 @@ class UrlFetcher
             $url = rtrim((string) config('app.url'), '/').'/'.ltrim($url, '/');
         }
 
-        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        return $this->validated($url);
+    }
 
-        if (! in_array($scheme, ['http', 'https'], true) || (string) parse_url($url, PHP_URL_HOST) === '') {
+    /** Same application: scheme, host and (effective) port equal those of `app.url`. */
+    public function isSameApp(string $url): bool
+    {
+        $appUrl = (string) config('app.url');
+
+        return (string) parse_url($appUrl, PHP_URL_HOST) !== '' && (string) parse_url($url, PHP_URL_HOST) !== ''
+            && AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($appUrl);
+    }
+
+    /** $url if it is a well-formed http(s) URL with a host, else FetchFailed::invalidUrl. */
+    private function validated(string $url): string
+    {
+        try {
+            $uri = new Uri($url);
+        } catch (Throwable) {
+            throw FetchFailed::invalidUrl($url);
+        }
+
+        if (! in_array(strtolower($uri->getScheme()), ['http', 'https'], true) || $uri->getHost() === '') {
             throw FetchFailed::invalidUrl($url);
         }
 
         return $url;
     }
 
-    /** Same application: the host equals the host of `app.url`. */
-    public function isSameApp(string $url): bool
-    {
-        $appHost = strtolower((string) parse_url((string) config('app.url'), PHP_URL_HOST));
-
-        return $appHost !== '' && strtolower((string) parse_url($url, PHP_URL_HOST)) === $appHost;
-    }
-
     /** @return array{status: int, location: ?string, contentType: string, body: string} */
-    private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options): array
+    private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel): array
     {
-        if ($options->inProcess && $this->isSameApp($url)) {
-            return $this->inProcess->get($url, $options->actingAs, $options->guard);
-        }
-
         try {
+            if ($viaKernel) {
+                return $this->inProcess->get($url, $options->actingAs, $options->guard);
+            }
+
             $response = $client->get($url, ['Accept' => 'text/html,application/xhtml+xml']);
+        } catch (FetchFailed $e) {
+            throw $e;
         } catch (ConnectionException $e) {
             throw FetchFailed::connection($url, $e->getMessage());
+        } catch (Throwable $e) {
+            throw FetchFailed::error($url, $e->getMessage());
         }
 
         return [
@@ -117,9 +139,11 @@ class UrlFetcher
         ];
     }
 
-    private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options): ?string
+    private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel): ?string
     {
-        if ($options->inProcess && $this->isSameApp($url)) {
+        $viaKernel = $viaKernel && $this->isSameApp($url);
+
+        if ($viaKernel) {
             $file = $this->inProcess->publicFile((string) parse_url($url, PHP_URL_PATH));
 
             if ($file !== null) {
@@ -127,7 +151,7 @@ class UrlFetcher
             }
         }
 
-        $response = $this->request($url, $client, $options);
+        $response = $this->request($url, $client, $options, $viaKernel);
 
         return $response['status'] >= 200 && $response['status'] < 300 ? $response['body'] : null;
     }
@@ -139,16 +163,26 @@ class UrlFetcher
             return;
         }
 
-        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        $host = self::normalizeHost((string) parse_url($url, PHP_URL_HOST));
 
-        if (! in_array($host, array_map('strtolower', $allowedHosts), true)) {
+        if (! in_array($host, array_map(self::normalizeHost(...), $allowedHosts), true)) {
             throw FetchFailed::hostNotAllowed($url, $host);
         }
     }
 
+    /** Allow-list form of a host: lowercase, without IPv6 brackets and without a trailing dot. */
+    private static function normalizeHost(string $host): string
+    {
+        return rtrim(trim(strtolower(trim($host)), '[]'), '.');
+    }
+
     private function resolve(string $base, string $location): string
     {
-        return (string) UriResolver::resolve(Utils::uriFor($base), Utils::uriFor($location));
+        try {
+            return (string) UriResolver::resolve(Utils::uriFor($base), Utils::uriFor($location));
+        } catch (Throwable) {
+            throw FetchFailed::invalidUrl($location);
+        }
     }
 
     private function isHtml(string $contentType): bool

@@ -64,7 +64,9 @@ return [
     /*
     |--------------------------------------------------------------------------
     | Fetching pages (bfsg:check, MCP): timeout in seconds, TLS verification, user agent, and inlining of
-    | same-origin <link rel="stylesheet"> files so the contrast analyzer sees them
+    | same-origin <link rel="stylesheet"> files so the contrast analyzer sees them.
+    | Allowed-host lists (e.g. for MCP) name plain hosts without scheme or port, case-insensitive; IPv6 hosts
+    | may be written with or without brackets ("::1", "[::1]") and a trailing dot is ignored ("example.com.").
     |--------------------------------------------------------------------------
     */
     'fetch' => [

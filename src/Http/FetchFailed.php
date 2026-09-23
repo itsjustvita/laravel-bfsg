@@ -37,6 +37,11 @@ final class FetchFailed extends RuntimeException
         return new self("Fetching {$url} stopped after ".UrlFetcher::MAX_REDIRECTS.' redirects.', $url);
     }
 
+    public static function error(string $url, string $detail): self
+    {
+        return new self("Fetching {$url} failed: {$detail}", $url);
+    }
+
     public static function connection(string $url, string $detail): self
     {
         return new self("Could not connect to {$url}: {$detail}", $url);
