@@ -16,10 +16,10 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * no TLS, no network. The request carries the SKIP_ATTRIBUTE so the package's own middleware ignores it, and
  * the kernel is not terminated (terminable middleware does not run for a check).
  *
- * Every fetch is isolated: resolved guards are forgotten and the session store is replaced before and after it,
- * and the previous request instance and default guard are restored afterwards, so no user, session data or
- * request leaks from one fetch into the next or into the calling process (long-lived MCP server, multi-page runs).
- * A user logged in on the calling process's guards is forgotten too; the guards resolve it again from their session.
+ * Every fetch is isolated: it runs with no resolved guards and a fresh session store, and afterwards the caller's
+ * state is put back exactly: its resolved guards (with their users), its session store, the session manager's
+ * drivers, its default guard and its request instance. No user, session data or request leaks from one fetch into
+ * the next, and the calling process (a long-lived MCP server, a multi-page run, or a web request) keeps its own.
  */
 class InProcessFetcher
 {
@@ -44,6 +44,7 @@ class InProcessFetcher
         $auth = $this->app->make('auth');
         $previousRequest = $this->app->bound('request') ? $this->app->make('request') : null;
         $previousGuard = $auth->getDefaultDriver();
+        $previous = $this->snapshot();
         $this->reset();
 
         try {
@@ -66,11 +67,47 @@ class InProcessFetcher
         } finally {
             $this->reset();
             $auth->shouldUse($previousGuard);
+            $this->restore($previous);
 
             if ($previousRequest !== null) {
                 $this->app->instance('request', $previousRequest);
                 Facade::clearResolvedInstance('request');
             }
+        }
+    }
+
+    /**
+     * The caller's resolved guards, session manager drivers and session store. AuthManager and Manager keep them in
+     * protected properties without accessors, so they are read and written through a closure bound to the object.
+     *
+     * @return array{guards: array<string, mixed>, drivers: ?array<string, mixed>, store: ?object}
+     */
+    private function snapshot(): array
+    {
+        $session = $this->app->bound('session') ? $this->app->make('session') : null;
+
+        return [
+            'guards' => (fn () => $this->guards)->call($this->app->make('auth')),
+            'drivers' => $session === null ? null : (fn () => $this->drivers)->call($session),
+            'store' => $this->app->resolved('session.store') ? $this->app->make('session.store') : null,
+        ];
+    }
+
+    /** @param  array{guards: array<string, mixed>, drivers: ?array<string, mixed>, store: ?object}  $previous */
+    private function restore(array $previous): void
+    {
+        (function (array $guards) {
+            $this->guards = $guards;
+        })->call($this->app->make('auth'), $previous['guards']);
+
+        if ($previous['drivers'] !== null) {
+            (function (array $drivers) {
+                $this->drivers = $drivers;
+            })->call($this->app->make('session'), $previous['drivers']);
+        }
+
+        if ($previous['store'] !== null) {
+            $this->app->instance('session.store', $previous['store']);
         }
     }
 

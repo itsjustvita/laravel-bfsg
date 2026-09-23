@@ -442,4 +442,20 @@ class UrlFetcherTest extends TestCase
 
         $this->assertStringContainsString('<style data-bfsg-inlined="/a.css">p{}</style><script>var x = 1; <link rel="stylesheet" href="/b.css">', $page->html);
     }
+
+    public function test_the_callers_session_store_and_logged_in_user_survive_an_in_process_fetch(): void
+    {
+        $this->app['router']->get('/who', fn () => response('<html><body>'.(auth()->check() ? 'IN:'.auth()->id() : 'GUEST').' '.e((string) session('outer')).'</body></html>'));
+        auth()->setUser(new GenericUser(['id' => 7]));
+        $store = app('session.store');
+        $store->put('outer', 'kept');
+
+        $html = $this->fetcher()->fetch('/who')->html;
+
+        $this->assertStringContainsString('<body>GUEST </body>', $html, 'the fetch sees neither the caller\'s user nor its session');
+        $this->assertSame(7, auth()->id(), 'the caller is still logged in');
+        $this->assertSame($store, app('session.store'));
+        $this->assertSame($store, app('session')->driver());
+        $this->assertSame('kept', session('outer'));
+    }
 }
