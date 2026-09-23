@@ -329,6 +329,31 @@ class CssParserTest extends TestCase
         $this->assertNull($parser->resolveVariables('var(--b'));
     }
 
+    public function test_nested_custom_properties_are_capped_instead_of_expanding_exponentially(): void
+    {
+        $css = ':root { --v0: #111; ';
+
+        for ($level = 1; $level <= 8; $level++) {
+            $css .= "--v$level: ".implode(' ', array_fill(0, 8, 'var(--v'.($level - 1).')')).'; ';
+        }
+
+        [$parser] = $this->parsed($css.'}', '<p id="t">x</p>');
+
+        $start = microtime(true);
+        $this->assertNull($parser->resolveVariables('var(--v8)'));
+        $this->assertLessThan(0.1, microtime(true) - $start);
+        $this->assertSame(str_repeat('#111 ', 7).'#111', $parser->resolveVariables('var(--v1)'), 'short values still resolve');
+    }
+
+    public function test_custom_properties_overridden_outside_the_root_are_approximate(): void
+    {
+        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } .dark { --fg: #eee } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'));
+        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } html.dark { --fg: #eee } p { color: var(--fg) }', '<p id="t">x</p>'));
+        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'));
+        $this->assertSame(['#111111', '#fafafa', true], $this->colors(':root { --fg: #111; --bg: #fafafa } .x { --fg: #222 } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'));
+        $this->assertSame(['#111111', '#fafafa', false], $this->colors('@layer theme { :root { --fg: #111 } } @media screen { :root { --bg: #fafafa } } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'), '@layer and plain screen media are unconditional');
+    }
+
     public function test_match_expressions_bucket_by_the_rightmost_compound(): void
     {
         $parser = new CssParser;
@@ -339,14 +364,23 @@ class CssParserTest extends TestCase
         $this->assertSame(['class', 'x'], $parser->matchExpression('p:not(.y).x')['bucket']);
         $this->assertNull($parser->matchExpression('a:hover'));
         $this->assertStringStartsWith('self::', $parser->matchExpression('.a .b')['expression']);
+        $this->assertNull($parser->matchExpression('nav a[href="#top"]')['bucket'], 'a # inside an attribute value is not an id');
+        $this->assertNull($parser->matchExpression('a[href$=".pdf"]')['bucket'], 'a . inside an attribute value is not a class');
+        $this->assertSame(['class', 'btn'], $parser->matchExpression('a[href$=".pdf"].btn')['bucket']);
+        $this->assertNull($parser->matchExpression('p:not(#intro)')['bucket'], 'a negated id is not a bucket');
+        $this->assertSame(['class', 'bg-[#fff]'], $parser->matchExpression('.dark .bg-\[\#fff\]')['bucket'], 'escapes are decoded');
+        $this->assertSame(['class', 'title'], $parser->matchExpression('[data-x=".5"].title')['bucket']);
     }
 
     public function test_bucketed_rules_match_exactly_what_the_document_query_matches(): void
     {
         $selectors = ['.card .title', '.card > .title', 'section .card .title', 'main > section > .card', '#hero .title', 'div.card:first-child .title',
-            '.card :not(.title).meta', 'ul > li.item', 'ul li.item.active', '.list .item:last-child', '[data-x] .title', ':root .title', 'body #hero'];
+            '.card :not(.title).meta', 'ul > li.item', 'ul li.item.active', '.list .item:last-child', '[data-x] .title', ':root .title', 'body #hero',
+            'nav a[href="#top"]', 'a[href$=".pdf"]', 'a[href$=".pdf"].btn', 'p:not(#intro)', '.dark .bg-\[\#fff\]', '[data-x=".5"].title'];
         $body = '<main><section id="hero"><div class="card"><h2 class="title">A</h2><p class="meta">m</p></div><div class="card"><div><h3 class="title">B</h3></div></div></section>'
-            .'<section><ul class="list"><li class="item">1</li><li class="item active">2</li></ul><div data-x><span class="title">C</span></div></section></main>';
+            .'<section><ul class="list"><li class="item">1</li><li class="item active">2</li></ul><div data-x><span class="title">C</span></div></section>'
+            .'<nav><a href="#top">Top</a></nav><p id="intro">i</p><a href="/a.pdf">A</a><a class="btn" href="/b.pdf">B</a>'
+            .'<div class="dark"><span class="bg-[#fff]">D</span></div><span data-x=".5" class="title">E</span></main>';
         $css = implode(' ', array_map(fn (string $selector) => $selector.' { color: #123456 }', $selectors));
         [$parser, $document] = $this->parsed($css, $body);
         $parser->buildIndex();

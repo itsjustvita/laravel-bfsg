@@ -12,7 +12,7 @@ use Throwable;
  * supported selector subset, and computes text/background colours and font metrics.
  *
  * A rule is an array{selector: string, properties: array<string, array{value: string, important: bool}>,
- * specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}.
+ * specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}.
  */
 class CssParser
 {
@@ -35,7 +35,7 @@ class CssParser
 
     private const BOLD_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th', 'b', 'strong'];
 
-    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
+    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
     protected array $rules = [];
 
     /** @var array<string, list<int>> node path => indexes into */
@@ -68,6 +68,15 @@ class CssParser
     /** @var array<string, string>|null custom property name => value, from :root / html / :host */
     private ?array $customProperties = null;
 
+    /** @var array<string, true> custom property names also declared by non-root or conditional rules (substitution is approximate) */
+    private array $overriddenProperties = [];
+
+    /** @var array<string, array{0: ?string, 1: bool}> "depth:name" => substituted value (null: unresolvable) and whether it is approximate */
+    private array $resolvedProperties = [];
+
+    /** Substituted values longer than this are given up (approximate): guards against exponential var() nesting. */
+    private const MAX_RESOLVED_LENGTH = 4096;
+
     /** Selectors whose custom properties are resolved globally (Tailwind v4 and most design systems declare them here). */
     private const ROOT_SELECTORS = [':root', 'html', ':host'];
 
@@ -85,6 +94,7 @@ class CssParser
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
         $this->customProperties = null;
+        $this->overriddenProperties = $this->resolvedProperties = [];
 
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
             foreach ($this->parseStylesheet($css, count($this->rules)) as $rule) {
@@ -151,7 +161,7 @@ class CssParser
         return $document->styleSheets();
     }
 
-    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
     public function rules(): array
     {
         return $this->rules;
@@ -172,7 +182,7 @@ class CssParser
      * Tokenize one stylesheet into qualified rules. Comments are stripped; @media is kept for
      * all/screen only; @layer, @supports, @container are unwrapped; every other at-rule is dropped.
      *
-     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}>
+     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}>
      */
     public function parseStylesheet(string $css, int $orderOffset = 0): array
     {
@@ -278,7 +288,9 @@ class CssParser
      * The compounds of a supported selector, left to right; `combinator` joins a compound to the previous one
      * ('' for the first, ' ' descendant, '>' child). Null when any part is unsupported.
      *
-     * @return list<array{combinator: string, xpath: string, raw: string}>|null
+     * `tokens` holds the first id and the first class of the compound itself (not inside [...] or :not(...)).
+     *
+     * @return list<array{combinator: string, xpath: string, tokens: array{id?: string, class?: string}}>|null
      */
     private function compounds(string $selector): ?array
     {
@@ -294,14 +306,14 @@ class CssParser
         $combinator = '';
 
         while ($position < $length) {
-            $start = $position;
-            $compound = $this->compoundToXpath($selector, $position);
+            $tokens = [];
+            $compound = $this->compoundToXpath($selector, $position, $tokens);
 
             if ($compound === null) {
                 return null;
             }
 
-            $compounds[] = ['combinator' => $combinator, 'xpath' => $compound, 'raw' => substr($selector, $start, $position - $start)];
+            $compounds[] = ['combinator' => $combinator, 'xpath' => $compound, 'tokens' => $tokens];
             $whitespace = $this->skipWhitespace($selector, $position);
 
             if ($position >= $length) {
@@ -438,8 +450,8 @@ class CssParser
         return false;
     }
 
-    /** @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}>  $rules */
-    private function parseBlock(string $css, array &$rules, int $orderOffset): void
+    /** @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}>  $rules */
+    private function parseBlock(string $css, array &$rules, int $orderOffset, bool $conditional = false): void
     {
         $position = 0;
         $length = strlen($css);
@@ -463,10 +475,11 @@ class CssParser
 
                 $body = $this->readBlock($css, $position);
 
+                // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`).
                 if ($name === 'media' && HtmlDocument::mediaAppliesToScreen($prelude)) {
-                    $this->parseBlock($body, $rules, $orderOffset);
+                    $this->parseBlock($body, $rules, $orderOffset, $conditional || str_contains($prelude, '('));
                 } elseif (in_array($name, self::UNWRAPPED_AT_RULES, true)) {
-                    $this->parseBlock($body, $rules, $orderOffset);
+                    $this->parseBlock($body, $rules, $orderOffset, $conditional || in_array($name, ['supports', 'container'], true));
                 }
 
                 continue; // @font-face, @keyframes, @page, @property, print media, …
@@ -497,6 +510,7 @@ class CssParser
                     'specificity' => $this->calculateSpecificity($selector),
                     'order' => $orderOffset + count($rules),
                     'sheet' => 0,
+                    'conditional' => $conditional,
                 ];
             }
         }
@@ -572,40 +586,51 @@ class CssParser
             $inner = $axis.'::'.$compound['xpath'].($inner === '' ? '' : '['.$inner.']');
         }
 
-        $bucket = null;
-        $ident = '((?:[\w-]|\\\\.|[^\x00-\x7F])+)';
-
-        if (preg_match('/#'.$ident.'/', $last['raw'], $m) === 1) {
-            $bucket = ['id', $this->unescape($m[1])];
-        } elseif (preg_match('/\.'.$ident.'/', preg_replace('/:not\([^()]*\)/i', '', $last['raw']) ?? $last['raw'], $m) === 1) {
-            $bucket = ['class', $this->unescape($m[1])];
-        }
+        $bucket = match (true) {
+            isset($last['tokens']['id']) => ['id', $last['tokens']['id']],
+            isset($last['tokens']['class']) => ['class', $last['tokens']['class']],
+            default => null,
+        };
 
         return ['expression' => 'self::'.$last['xpath'].($inner === '' ? '' : '['.$inner.']'), 'bucket' => $bucket];
     }
 
     /**
      * Resolve every var(--name[, fallback]) in a value against the root custom properties (fallbacks used for
-     * undefined names, nested references followed up to 8 levels). Null when a reference cannot be resolved.
+     * undefined names, nested references followed up to 8 levels). Null when a reference cannot be resolved or
+     * the substituted value grows beyond MAX_RESOLVED_LENGTH.
      */
     public function resolveVariables(string $value, int $depth = 0): ?string
     {
+        return $this->substitute($value, $depth)[0];
+    }
+
+    /**
+     * resolveVariables() plus whether the result is approximate: a substituted name is also declared outside the
+     * unconditional root rules (`.dark { --fg: … }`, `@media (…) { :root { … } }`), so the element may see another value.
+     *
+     * @return array{0: ?string, 1: bool}
+     */
+    private function substitute(string $value, int $depth = 0): array
+    {
         if (stripos($value, 'var(') === false) {
-            return $value;
+            return [$value, false];
         }
 
         if ($depth > 8) {
-            return null;
+            return [null, true];
         }
 
+        $properties = $this->customProperties();
         $resolved = '';
         $position = 0;
+        $approximate = false;
 
         while (($start = stripos($value, 'var(', $position)) !== false) {
             $end = $this->closingParenthesis($value, $start + 3);
 
             if ($end === null) {
-                return null;
+                return [null, true];
             }
 
             $inner = substr($value, $start + 4, $end - $start - 4);
@@ -613,21 +638,37 @@ class CssParser
             $name = trim($parts[0] ?? '');
             $comma = strpos($inner, ',');
             $fallback = $comma === false ? null : trim(substr($inner, $comma + 1));
-            $replacement = $this->customProperties()[$name] ?? $fallback;
-            $replacement = $replacement === null ? null : $this->resolveVariables($replacement, $depth + 1);
 
-            if ($replacement === null) {
-                return null;
+            if (isset($properties[$name])) {
+                [$replacement, $nested] = $this->resolvedProperties[($depth + 1).':'.$name] ??= $this->substitute($properties[$name], $depth + 1);
+            } else {
+                [$replacement, $nested] = $fallback === null ? [null, true] : $this->substitute($fallback, $depth + 1);
             }
 
+            if ($replacement === null) {
+                return [null, true];
+            }
+
+            $approximate = $approximate || $nested || isset($this->overriddenProperties[$name]);
             $resolved .= substr($value, $position, $start - $position).$replacement;
             $position = $end + 1;
+
+            if (strlen($resolved) > self::MAX_RESOLVED_LENGTH) {
+                return [null, true];
+            }
         }
 
-        return $resolved.substr($value, $position);
+        $resolved .= substr($value, $position);
+
+        return strlen($resolved) > self::MAX_RESOLVED_LENGTH ? [null, true] : [$resolved, $approximate];
     }
 
-    /** @return array<string, string> custom properties declared on :root, html or :host (cascade winner) and on <html style> */
+    /**
+     * Custom properties declared on :root, html or :host outside media features, @supports and @container
+     * (cascade winner), and on <html style>. Names that other rules also declare are recorded as overridden.
+     *
+     * @return array<string, string>
+     */
     public function customProperties(): array
     {
         if ($this->customProperties !== null) {
@@ -635,14 +676,19 @@ class CssParser
         }
 
         $winners = [];
+        $this->overriddenProperties = [];
 
         foreach ($this->rules as $rule) {
-            if (! in_array(strtolower($rule['selector']), self::ROOT_SELECTORS, true)) {
-                continue;
-            }
+            $root = ! ($rule['conditional'] ?? false) && in_array(strtolower($rule['selector']), self::ROOT_SELECTORS, true);
 
             foreach ($rule['properties'] as $name => $declaration) {
-                if (str_starts_with($name, '--')) {
+                if (! str_starts_with($name, '--')) {
+                    continue;
+                }
+
+                if (! $root) {
+                    $this->overriddenProperties[$name] = true;
+                } else {
                     $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']]);
                 }
             }
@@ -665,7 +711,7 @@ class CssParser
         return array_intersect(array_keys($rule['properties']), self::INDEXED_PROPERTIES) !== [];
     }
 
-    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int}> */
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
     private function matchingRules(DOMElement $element): array
     {
         $this->buildIndex();
@@ -704,13 +750,14 @@ class CssParser
             return $this->backgroundCache[$key] = [$parent, $approximate];
         }
 
-        $value = $this->resolveVariables($value);
+        [$value, $variablesApproximate] = $this->substitute($value);
 
         if ($value === null) {
             return $this->backgroundCache[$key] = [$parent, true];
         }
 
         [$own, $ownApproximate] = Color::fromBackground($value);
+        $ownApproximate = $ownApproximate || $variablesApproximate;
 
         if ($own === null || $own->a <= 0) {
             return $this->backgroundCache[$key] = [$parent, $approximate || $ownApproximate];
@@ -738,14 +785,14 @@ class CssParser
             return $this->foregroundCache[$key] = [$parent, $approximate];
         }
 
-        $value = $this->resolveVariables($value);
+        [$value, $variablesApproximate] = $this->substitute($value);
         $own = $value === null || Color::isUnresolvable($value) ? null : Color::parse($value);
 
         if ($own === null) {
             return $this->foregroundCache[$key] = [$parent, true];
         }
 
-        return $this->foregroundCache[$key] = [$own, $approximate];
+        return $this->foregroundCache[$key] = [$own, $approximate || $variablesApproximate];
     }
 
     /** The value of whichever of background / background-color wins the cascade for the element. */
@@ -796,7 +843,8 @@ class CssParser
         };
     }
 
-    private function compoundToXpath(string $selector, int &$position): ?string
+    /** @param  array{id?: string, class?: string}  $tokens  receives the compound's first id and first class (decoded) */
+    private function compoundToXpath(string $selector, int &$position, array &$tokens = []): ?string
     {
         $length = strlen($selector);
         $name = '*';
@@ -810,7 +858,7 @@ class CssParser
         }
 
         while ($position < $length && ! ctype_space($selector[$position]) && $selector[$position] !== '>') {
-            $predicate = $this->simplePredicate($selector, $position);
+            $predicate = $this->simplePredicate($selector, $position, $tokens);
 
             if ($predicate === null) {
                 return null;
@@ -826,7 +874,8 @@ class CssParser
         return $name.($predicates === [] ? '' : '['.implode(' and ', $predicates).']');
     }
 
-    private function simplePredicate(string $selector, int &$position): ?string
+    /** @param  array{id?: string, class?: string}  $tokens */
+    private function simplePredicate(string $selector, int &$position, array &$tokens = []): ?string
     {
         $char = $selector[$position];
         $ident = '-?(?:[a-zA-Z_]|\\\\.|[^\x00-\x7F])(?:[\w-]|\\\\.|[^\x00-\x7F])*';
@@ -838,6 +887,7 @@ class CssParser
 
             $position += 1 + strlen($m[0]);
             $value = $this->unescape($m[0]);
+            $tokens[$char === '#' ? 'id' : 'class'] ??= $value;
 
             return $char === '#'
                 ? '@id='.HtmlDocument::xpathLiteral($value)
