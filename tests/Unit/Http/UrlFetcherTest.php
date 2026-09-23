@@ -220,4 +220,33 @@ class UrlFetcherTest extends TestCase
         $this->assertStringNotContainsString('secret</style>', $page->html);
         $this->assertCount(1, $page->warnings);
     }
+
+    public function test_credentials_are_not_sent_to_another_origin_on_redirects(): void
+    {
+        Http::fake([
+            'https://example.com/away' => Http::response('', 302, ['Location' => 'http://evil.example.net/steal']),
+            'https://example.com/down' => Http::response('', 302, ['Location' => 'http://example.com/plain']),
+            'https://example.com/port' => Http::response('', 302, ['Location' => 'https://example.com:8443/other']),
+            'https://example.com/same' => Http::response('', 302, ['Location' => '/landing']),
+            '*' => Http::response(self::PAGE, 200),
+        ]);
+        $client = fn () => (new AuthenticatedHttpClient)
+            ->withBearer('TOPSECRET', 'https://example.com')
+            ->withApiKey('K', 'X-API-Key', 'https://example.com')
+            ->withHeaders(['X-Tenant' => 'acme'], 'https://example.com')
+            ->withSessionCookie('laravel_session', 'sess', 'https://example.com/');
+        $leaks = fn (Request $request) => $request->hasHeader('Authorization') || $request->hasHeader('X-API-Key')
+            || $request->hasHeader('X-Tenant') || $request->hasHeader('Cookie');
+
+        foreach (['away' => 'http://evil.example.net/steal', 'down' => 'http://example.com/plain', 'port' => 'https://example.com:8443/other'] as $path => $target) {
+            $this->fetcher()->fetch("https://example.com/$path", new FetchOptions(client: $client()));
+            Http::assertSent(fn (Request $request) => $request->url() === $target);
+            Http::assertNotSent(fn (Request $request) => $request->url() === $target && $leaks($request));
+        }
+
+        $this->fetcher()->fetch('https://example.com/same', new FetchOptions(client: $client()));
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/landing'
+            && $request->hasHeader('Authorization', 'Bearer TOPSECRET') && $request->hasHeader('X-API-Key', 'K')
+            && $request->hasHeader('X-Tenant', 'acme') && ($request->header('Cookie')[0] ?? '') === 'laravel_session=sess');
+    }
 }

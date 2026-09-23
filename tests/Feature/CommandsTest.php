@@ -447,4 +447,18 @@ class CommandsTest extends TestCase
             ->expectsOutputToContain('Checking http://example.com/page')
             ->assertExitCode(1);
     }
+
+    public function test_tokens_are_not_sent_to_another_host_after_a_redirect(): void
+    {
+        Http::fake([
+            'https://example.com/moved' => Http::response('', 302, ['Location' => 'https://other.example.net/page']),
+            '*' => Http::response(self::ACCESSIBLE, 200),
+        ]);
+
+        [$exitCode] = $this->check(['url' => 'https://example.com/moved', '--bearer' => 'b-1', '--api-key' => 'k-2']);
+
+        $this->assertSame(0, $exitCode);
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/moved' && $request->hasHeader('Authorization', 'Bearer b-1'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://other.example.net/page' && ! $request->hasHeader('Authorization') && ! $request->hasHeader('X-API-Key'));
+    }
 }

@@ -269,15 +269,15 @@ class BfsgCheckCommand extends Command
         $origin = $this->origin($url);
 
         if ($token = $this->option('jwt')) {
-            $client->withJwt($token);
+            $client->withJwt($token, $origin);
         }
 
         if ($token = $this->option('bearer')) {
-            $client->withBearer($token);
+            $client->withBearer($token, $origin);
         }
 
         if ($key = $this->option('api-key')) {
-            $client->withApiKey($key, (string) $this->option('api-key-header'));
+            $client->withApiKey($key, (string) $this->option('api-key-header'), $origin);
         }
 
         if ($session = $this->option('session')) {
@@ -303,7 +303,7 @@ class BfsgCheckCommand extends Command
         $password = $this->option('password') ?? $env['password'];
 
         if (($email === null || $password === null) && $env['token'] !== null && ! $this->option('sanctum')) {
-            $client->withBearer($env['token']);
+            $client->withBearer($env['token'], $origin);
 
             return;
         }

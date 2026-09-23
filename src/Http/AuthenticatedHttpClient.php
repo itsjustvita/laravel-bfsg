@@ -4,7 +4,6 @@ namespace ItsJustVita\LaravelBfsg\Http;
 
 use Closure;
 use GuzzleHttp\Cookie\CookieJar;
-use GuzzleHttp\Cookie\SetCookie;
 use GuzzleHttp\Psr7\Request as PsrRequest;
 use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
@@ -18,13 +17,23 @@ use Illuminate\Support\Facades\Http;
  * HTTP client for bfsg:check, MCP and UrlFetcher: one cookie jar, one request factory (timeout, TLS verification,
  * user agent, no automatic redirects) and the login flows. Cookies are stored and sent by the client itself, so
  * they behave the same with a real transport and with Http::fake().
+ *
+ * Credentials (Authorization, API keys, custom headers, tokens from a login, a given session cookie) are bound to
+ * one origin (scheme, host, port) and only sent to that origin: redirects are followed by UrlFetcher, not Guzzle,
+ * so Guzzle's cross-origin and https-to-http stripping does not apply and this client does it instead.
  */
 class AuthenticatedHttpClient
 {
     private CookieJar $jar;
 
-    /** @var array<string, string> headers sent with every request (Authorization, API keys, custom headers) */
+    /** @var array<string, string> credential headers (Authorization, API keys, custom headers) */
     private array $headers = [];
+
+    /** @var array<string, ?string> header name => origin it is bound to (null = the origin of the next request) */
+    private array $headerOrigins = [];
+
+    /** @var array<string, array{0: string, 1: string}> cookie name => [value, origin] of given session cookies */
+    private array $credentialCookies = [];
 
     private int $timeout;
 
@@ -57,13 +66,12 @@ class AuthenticatedHttpClient
         return $this->jar;
     }
 
-    /** The factory every request is built from. */
+    /** The factory every request is built from; credential headers and cookies are added per request for their origin. */
     public function request(): PendingRequest
     {
         return Http::timeout($this->timeout)
             ->withUserAgent($this->userAgent)
-            ->withOptions(['verify' => $this->verifySsl, 'allow_redirects' => false])
-            ->withHeaders($this->headers);
+            ->withOptions(['verify' => $this->verifySsl, 'allow_redirects' => false]);
     }
 
     /** @param  array<string, string>  $headers */
@@ -163,43 +171,41 @@ class AuthenticatedHttpClient
         $this->acceptTokenOrSession($response, $loginUrl);
     }
 
-    public function withBearer(string $token): static
+    /** @param  string|null  $origin  the only origin the token is sent to; null = the origin of the next request */
+    public function withBearer(string $token, ?string $origin = null): static
     {
-        $this->headers['Authorization'] = 'Bearer '.$token;
-
-        return $this;
+        return $this->withHeaders(['Authorization' => 'Bearer '.$token], $origin);
     }
 
     /** JWTs are bearer tokens (RFC 6750); tymon/jwt-auth and Passport read `Authorization: Bearer`. */
-    public function withJwt(string $token): static
+    public function withJwt(string $token, ?string $origin = null): static
     {
-        return $this->withBearer($token);
+        return $this->withBearer($token, $origin);
     }
 
-    public function withApiKey(string $key, string $header = 'X-API-Key'): static
+    public function withApiKey(string $key, string $header = 'X-API-Key', ?string $origin = null): static
     {
-        $this->headers[$header] = $key;
+        return $this->withHeaders([$header => $key], $origin);
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     * @param  string|null  $origin  the only origin (any URL of it) the headers are sent to; null = the origin of the next request
+     */
+    public function withHeaders(array $headers, ?string $origin = null): static
+    {
+        foreach ($headers as $name => $value) {
+            $this->headers[$name] = $value;
+            $this->headerOrigins[$name] = $origin === null ? null : self::origin($origin);
+        }
 
         return $this;
     }
 
-    /** @param  array<string, string>  $headers */
-    public function withHeaders(array $headers): static
-    {
-        $this->headers = array_merge($this->headers, $headers);
-
-        return $this;
-    }
-
-    /** An existing session cookie, scoped to the host of $url. */
+    /** An existing session cookie, sent only to the origin of $url (host-only, same scheme and port). */
     public function withSessionCookie(string $name, string $value, string $url): static
     {
-        $this->jar->setCookie(new SetCookie([
-            'Name' => $name,
-            'Value' => $value,
-            'Domain' => (string) parse_url($url, PHP_URL_HOST),
-            'Path' => '/',
-        ]));
+        $this->credentialCookies[$name] = [$value, self::origin($url)];
 
         return $this;
     }
@@ -213,18 +219,41 @@ class AuthenticatedHttpClient
     /** Whether the jar holds a session cookie for the host of $url: `*_session`, `PHPSESSID`, or the app's session cookie. */
     public function hasSessionCookie(string $url): bool
     {
+        return $this->sessionCookies($url) !== [];
+    }
+
+    /** @return array<string, string> session cookies (name => value) for the host of $url */
+    private function sessionCookies(string $url): array
+    {
         $host = (string) parse_url($url, PHP_URL_HOST);
         $appCookie = $host !== '' && $host === parse_url((string) config('app.url'), PHP_URL_HOST) ? (string) config('session.cookie') : null;
+        $isSession = fn (string $name): bool => preg_match('/_session$/i', $name) === 1 || $name === 'PHPSESSID' || $name === $appCookie;
+        $found = [];
 
         foreach ($this->jar as $cookie) {
             $name = (string) $cookie->getName();
 
-            if ($cookie->matchesDomain($host) && (preg_match('/_session$/i', $name) === 1 || $name === 'PHPSESSID' || $name === $appCookie)) {
-                return true;
+            if ($cookie->matchesDomain($host) && $isSession($name)) {
+                $found[$name] = (string) $cookie->getValue();
             }
         }
 
-        return false;
+        foreach ($this->credentialCookies as $name => [$value, $origin]) {
+            if ($origin === self::origin($url) && $isSession($name)) {
+                $found[$name] ??= $value;
+            }
+        }
+
+        return $found;
+    }
+
+    /** scheme://host:port with the default port made explicit, lowercased */
+    public static function origin(string $url): string
+    {
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $port = parse_url($url, PHP_URL_PORT) ?? ($scheme === 'https' ? 443 : 80);
+
+        return $scheme.'://'.strtolower(rtrim((string) parse_url($url, PHP_URL_HOST), '.')).':'.$port;
     }
 
     /** @return array{email: ?string, password: ?string, token: ?string} BFSG_AUTH_EMAIL, BFSG_AUTH_PASSWORD, BFSG_AUTH_TOKEN */
@@ -239,16 +268,49 @@ class AuthenticatedHttpClient
     private function dispatch(string $method, string $url, array $headers, Closure $send): Response
     {
         $psr = $this->jar->withCookieHeader(new PsrRequest($method, $url));
-        $request = $this->request()->withHeaders($headers);
+        $request = $this->request()->withHeaders($this->credentialHeaders($url))->withHeaders($headers);
+        $cookie = $this->cookieHeader($psr->getHeaderLine('Cookie'), $url);
 
-        if ($psr->hasHeader('Cookie')) {
-            $request->withHeaders(['Cookie' => $psr->getHeaderLine('Cookie')]);
+        if ($cookie !== '') {
+            $request->withHeaders(['Cookie' => $cookie]);
         }
 
         $response = $send($request);
         $this->jar->extractCookies($psr, $response->toPsrResponse());
 
         return $response;
+    }
+
+    /** @return array<string, string> the credential headers bound to the origin of $url (unbound ones are bound to it now) */
+    private function credentialHeaders(string $url): array
+    {
+        $origin = self::origin($url);
+        $headers = [];
+
+        foreach ($this->headers as $name => $value) {
+            $this->headerOrigins[$name] ??= $origin;
+
+            if ($this->headerOrigins[$name] === $origin) {
+                $headers[$name] = $value;
+            }
+        }
+
+        return $headers;
+    }
+
+    /** The jar's Cookie header plus the given session cookies of this origin (a jar cookie of the same name wins). */
+    private function cookieHeader(string $jarHeader, string $url): string
+    {
+        $pairs = $jarHeader === '' ? [] : explode('; ', $jarHeader);
+        $names = array_map(fn (string $pair) => explode('=', $pair, 2)[0], $pairs);
+
+        foreach ($this->credentialCookies as $name => [$value, $origin]) {
+            if ($origin === self::origin($url) && ! in_array($name, $names, true)) {
+                $pairs[] = $name.'='.$value;
+            }
+        }
+
+        return implode('; ', $pairs);
     }
 
     private function attempt(string $url, Closure $send): Response
@@ -289,7 +351,7 @@ class AuthenticatedHttpClient
         $token = is_array($json) ? ($json['token'] ?? $json['access_token'] ?? ($json['data']['token'] ?? null)) : null;
 
         if (is_string($token) && $token !== '') {
-            $this->withBearer($token);
+            $this->withBearer($token, $loginUrl);
 
             return;
         }

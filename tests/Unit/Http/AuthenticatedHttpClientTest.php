@@ -275,4 +275,39 @@ class AuthenticatedHttpClientTest extends TestCase
             putenv('BFSG_AUTH_PASSWORD');
         }
     }
+
+    public function test_credential_headers_are_bound_to_one_origin(): void
+    {
+        Http::fake(['https://api.example.com/login' => Http::response(['token' => 'from-login'], 200), '*' => Http::response('', 200)]);
+
+        $unbound = $this->client()->withBearer('first-origin');
+        $unbound->get('https://app.example.com/a');
+        $unbound->get('https://app.example.com:444/b');
+        $unbound->get('https://elsewhere.example.org/c');
+
+        $login = $this->client();
+        $login->loginWithJson('https://api.example.com/login', 'u', 'p');
+        $login->get('https://api.example.com/data');
+        $login->get('http://api.example.com/data');
+        $login->get('https://cdn.example.net/x');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://app.example.com/a' && $request->hasHeader('Authorization', 'Bearer first-origin'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://api.example.com/data' && $request->hasHeader('Authorization', 'Bearer from-login'));
+
+        foreach (['https://app.example.com:444/b', 'https://elsewhere.example.org/c', 'http://api.example.com/data', 'https://cdn.example.net/x'] as $url) {
+            Http::assertNotSent(fn (Request $request) => $request->url() === $url && $request->hasHeader('Authorization'));
+        }
+    }
+
+    public function test_a_given_session_cookie_is_host_only_and_never_sent_over_http(): void
+    {
+        Http::fake(['*' => Http::response('', 200)]);
+
+        $client = $this->client()->withSessionCookie('laravel_session', 'from-browser', 'https://app.example.com/dashboard');
+        $this->assertTrue($client->hasSessionCookie('https://app.example.com/'));
+        $client->get('https://sub.app.example.com/');
+        $client->get('http://app.example.com/');
+
+        Http::assertNotSent(fn (Request $request) => $request->hasHeader('Cookie'));
+    }
 }
