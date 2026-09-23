@@ -20,6 +20,9 @@ class LinkAnalyzer extends BaseAnalyzer
         'weiter', 'lesen', 'jetzt', 'los', 'herunterladen', 'dieser link',
     ];
 
+    /** Longest link text still taken as a language name on a link with hreflang/lang ("Nederlands", "Português"). */
+    private const MAX_LANGUAGE_NAME = 12;
+
     private const NEW_WINDOW_HINTS = [
         'new window', 'new tab', 'opens in', 'external', 'neues fenster', 'neuem fenster', 'neuer tab',
         'neuen tab', 'neuem tab', 'öffnet in', 'extern',
@@ -69,8 +72,9 @@ class LinkAnalyzer extends BaseAnalyzer
         $subject = $authored !== '' ? $authored : $name;
         $normalized = Text::lower(Text::stripTrailingPunctuation($subject));
 
-        // Language switchers ("DE", "EN") declare their purpose through hreflang/lang.
-        if ($link->hasAttribute('hreflang') || $link->hasAttribute('lang')) {
+        // Language switchers ("DE", "EN", "Deutsch") declare their purpose through hreflang/lang; generic text does not.
+        if (($link->hasAttribute('hreflang') || $link->hasAttribute('lang'))
+            && Text::length($normalized) <= self::MAX_LANGUAGE_NAME && ! in_array($normalized, self::GENERIC_NAMES, true)) {
             return;
         }
 

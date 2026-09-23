@@ -99,4 +99,11 @@ class InputPurposeAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<form role="search"><input name="name"></form><search><input name="email"></search><input type="search" name="city">'));
     }
+
+    public function test_autocomplete_values_inside_search_are_still_validated(): void
+    {
+        $violations = $this->analyze('<form role="search"><input name="q" autocomplete="serach"></form><search><input name="email" autocomplete="emial"></search>');
+
+        $this->assertViolationCount($violations, 'input_purpose.invalid_autocomplete', 2);
+    }
 }

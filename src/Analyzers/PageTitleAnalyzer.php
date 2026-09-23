@@ -78,12 +78,13 @@ class PageTitleAnalyzer extends BaseAnalyzer
     }
 
     /**
-     * A title of at most two words whose first segment is generic but whose other segment names the site
-     * ("Home | Acme", "Startseite – Firma"): it identifies the home page of a site, so it is only a notice.
+     * A title of at most two words with a generic segment on either side of the site name ("Home | Acme",
+     * "Firma – Startseite"): it identifies the home page of a site, so it is only a notice.
      */
     protected function hasGenericPageSegment(string $title): bool
     {
-        return preg_match_all('/[\pL\pN]+/u', $title) <= 2 && $this->generic($this->segments($title)[0] ?? $title);
+        return preg_match_all('/[\pL\pN]+/u', $title) <= 2
+            && array_filter($this->segments($title), fn (string $segment) => $this->generic($segment)) !== [];
     }
 
     /** @return list<string> */

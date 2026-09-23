@@ -169,6 +169,13 @@ class LinkAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($this->analyze('<a href="/en">EN</a>'), 'links.non_descriptive');
     }
 
+    public function test_hreflang_and_lang_do_not_excuse_generic_link_text(): void
+    {
+        $violations = $this->analyze('<a href="/en/offer" hreflang="en">click here</a><a href="/angebot" lang="de">mehr</a>');
+
+        $this->assertViolationCount($violations, 'links.non_descriptive', 2);
+    }
+
     public function test_page_numbers_inside_navigation_are_judged_in_context(): void
     {
         $violations = $this->analyze('<nav aria-label="Pagination"><span>1</span><a href="?page=2">2</a><a href="?page=3">3</a></nav>'

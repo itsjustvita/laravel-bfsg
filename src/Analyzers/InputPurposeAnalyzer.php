@@ -59,10 +59,6 @@ class InputPurposeAnalyzer extends BaseAnalyzer
     protected function inspect(): void
     {
         foreach ($this->queryVisible('//input|//select|//textarea') as $field) {
-            if ($this->insideSearch($field)) {
-                continue;
-            }
-
             $value = trim($field->getAttribute('autocomplete'));
 
             if ($value !== '' && ! $this->isValidAutocomplete($value)) {
@@ -75,7 +71,7 @@ class InputPurposeAnalyzer extends BaseAnalyzer
                 continue;
             }
 
-            if (! $this->isPersonalDataField($field)) {
+            if ($this->insideSearch($field) || ! $this->isPersonalDataField($field)) {
                 continue;
             }
 
