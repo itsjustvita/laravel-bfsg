@@ -22,8 +22,13 @@ class FormAnalyzer extends BaseAnalyzer
 
     protected array $rules = ['4.1.2', '1.3.1', '3.3.2'];
 
+    /** @var array<int, string> form object id => text of its description and legends (per analyze run) */
+    private array $formTexts = [];
+
     protected function inspect(): void
     {
+        $this->formTexts = [];
+
         foreach ($this->queryVisible('//input|//select|//textarea') as $control) {
             $this->checkControl($control);
         }
@@ -132,7 +137,7 @@ class FormAnalyzer extends BaseAnalyzer
         $id = trim($control->getAttribute('id'));
 
         if ($id !== '') {
-            foreach ($this->query('//label[@for='.$this->document->xpathLiteral($id).']') as $label) {
+            foreach ($this->document->labelsFor($id) as $label) {
                 $texts[] = Element::text($label);
             }
         }
@@ -144,11 +149,7 @@ class FormAnalyzer extends BaseAnalyzer
         $form = Element::closest($control, 'form');
 
         if ($form !== null) {
-            $texts[] = $this->referencedText($form, 'aria-describedby');
-
-            foreach ($this->query('.//legend', $form) as $legend) {
-                $texts[] = Element::text($legend);
-            }
+            $texts[] = $this->formText($form);
         }
 
         $haystack = Text::lower(implode(' ', $texts));
@@ -160,6 +161,15 @@ class FormAnalyzer extends BaseAnalyzer
         }
 
         return false;
+    }
+
+    /** The form's description and legend texts, collected once per form instead of once per control. */
+    protected function formText(DOMElement $form): string
+    {
+        return $this->formTexts[spl_object_id($form)] ??= implode(' ', [
+            $this->referencedText($form, 'aria-describedby'),
+            ...array_map(fn (DOMElement $legend): string => Element::text($legend), $this->query('.//legend', $form)),
+        ]);
     }
 
     protected function referencedText(DOMElement $element, string $attribute): string

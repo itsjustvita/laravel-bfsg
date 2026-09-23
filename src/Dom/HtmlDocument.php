@@ -27,6 +27,9 @@ final class HtmlDocument
     /** @var array<string, int> */
     private array $duplicateIds = [];
 
+    /** @var array<string, list<DOMElement>>|null */
+    private ?array $labelsByFor = null;
+
     private function __construct(
         private DOMDocument $dom,
         private bool $fragment,
@@ -177,6 +180,25 @@ final class HtmlDocument
         return $this->byId;
     }
 
+    /**
+     * The <label for="…"> elements pointing at an id, in document order. The for-value is matched
+     * exactly (like the XPath //label[@for=…] it replaces); the map is built once per document.
+     *
+     * @return list<DOMElement>
+     */
+    public function labelsFor(string $id): array
+    {
+        if ($this->labelsByFor === null) {
+            $this->labelsByFor = [];
+
+            foreach ($this->query('//label[@for]') as $label) {
+                $this->labelsByFor[$label->getAttribute('for')][] = $label;
+            }
+        }
+
+        return $this->labelsByFor[$id] ?? [];
+    }
+
     /** @return array<string, int> id => number of occurrences (only ids that occur more than once) */
     public function duplicateIds(): array
     {
@@ -272,6 +294,7 @@ final class HtmlDocument
 
         $this->byId = null;
         $this->duplicateIds = [];
+        $this->labelsByFor = null;
         $this->cssParser = null;
 
         return count($victims);

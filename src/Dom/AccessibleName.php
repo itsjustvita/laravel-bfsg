@@ -112,7 +112,7 @@ final class AccessibleName
         $id = trim($element->getAttribute('id'));
 
         if ($id !== '') {
-            foreach ($document->query('//label[@for='.$document->xpathLiteral($id).']') as $label) {
+            foreach ($document->labelsFor($id) as $label) {
                 $name = self::content($label, false, $element);
 
                 if ($name !== '') {

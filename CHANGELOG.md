@@ -49,6 +49,7 @@ Phases 1 (foundation) and 2 (analyzer round) of v3. See UPGRADE.md (written in P
 - `bfsg:mcp-server` works with laravel/mcp 1.x (it crashed with a `StdioTransport` TypeError): the command starts the server through laravel/mcp's `Registrar` (handle `bfsg`), which builds the stdio transport for the installed version. Supported: `laravel/mcp ^0.6.4 || ^1.0`.
 - MCP tools carry the documented snake_case names (`analyze_html`, `analyze_url`, `check_contrast`, `list_analyzers`, `get_history`, `get_report`, `generate_report`); they were exposed as kebab-case (`analyze-html`, …) before.
 - `bfsg:history --trend --limit=N` shows the latest N reports in chronological order (it showed the oldest N).
+- `forms` scales linearly with the number of controls (4000 labelled required inputs: 5.1 s → 0.05 s): `label[for]` is resolved through a per-document map (`HtmlDocument::labelsFor()`), and a form's legends/description are collected once per form.
 
 ## [2.2.4] - 2026-09-18
 
