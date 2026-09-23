@@ -396,4 +396,19 @@ class UrlFetcherTest extends TestCase
         $this->assertStringNotContainsString('source', $page->html);
         $this->assertContains('Stylesheet /big.css was not inlined: larger than 10 bytes.', $page->warnings);
     }
+
+    public function test_unbound_credentials_are_bound_to_the_requested_origin_before_any_redirect(): void
+    {
+        $this->app['router']->get('/go', fn () => redirect()->away('https://evil.example.net/'));
+        Http::fake(['*' => Http::response(self::PAGE, 200)]);
+        $client = (new AuthenticatedHttpClient)->withBearer('UNBOUND')->withApiKey('K')->withHeaders(['X-Tenant' => 'acme']);
+
+        $this->fetcher()->fetch('/go', new FetchOptions(client: $client));
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://evil.example.net/');
+        Http::assertNotSent(fn (Request $request) => $request->hasHeader('Authorization') || $request->hasHeader('X-API-Key') || $request->hasHeader('X-Tenant'));
+
+        $client->get('http://localhost/api');
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://localhost/api' && $request->hasHeader('Authorization', 'Bearer UNBOUND'));
+    }
 }

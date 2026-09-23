@@ -32,6 +32,8 @@ class UrlFetcher
         $client = $options->client ?? new AuthenticatedHttpClient;
         $requested = $this->absolute($url);
         $current = $requested;
+        // Credentials given without an origin belong to the page asked for, never to a host it redirects to
+        $client->bindUnboundHeadersTo($requested);
         $redirects = 0;
         $viaKernel = $options->inProcess;
 

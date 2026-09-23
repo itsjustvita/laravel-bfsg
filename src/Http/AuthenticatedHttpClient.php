@@ -234,6 +234,18 @@ class AuthenticatedHttpClient
         return $this;
     }
 
+    /** Bind every credential header that has no origin yet to the origin of $url (UrlFetcher: the requested URL). */
+    public function bindUnboundHeadersTo(string $url): static
+    {
+        $origin = self::origin($url);
+
+        foreach ($this->headerOrigins as $name => $bound) {
+            $this->headerOrigins[$name] = $bound ?? $origin;
+        }
+
+        return $this;
+    }
+
     /** An existing session cookie, sent only to the origin of $url (host-only, same scheme and port). */
     public function withSessionCookie(string $name, string $value, string $url): static
     {
