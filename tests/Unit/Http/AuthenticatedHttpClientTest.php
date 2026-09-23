@@ -92,12 +92,34 @@ class AuthenticatedHttpClientTest extends TestCase
         $this->assertSame('credentials', $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'wrong'))->reason);
     }
 
-    public function test_a_2xx_login_form_with_a_regenerated_session_is_a_success(): void
+    public function test_a_2xx_answer_with_the_login_form_fails_even_with_a_reissued_session_cookie(): void
     {
-        $this->fakeLogin([self::LOGIN_PAGE, 200, ['Set-Cookie' => 'app_session=regenerated; Path=/']]);
+        // EncryptCookies re-encrypts laravel_session on every response, so a changed cookie value proves nothing
+        $this->fakeLogin([self::LOGIN_PAGE, 200, ['Set-Cookie' => 'app_session=reissued; Path=/']]);
+        $this->assertSame('credentials', $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p'))->reason);
+    }
+
+    public function test_a_2xx_answer_with_a_form_posting_to_the_login_url_is_a_failure(): void
+    {
+        $this->fakeLogin(['<html><body><form method="post" action="https://app.example.com/login"><input name="pin"></form></body></html>', 200, ['Set-Cookie' => 'app_session=reissued; Path=/']]);
+        $this->assertSame('credentials', $this->failure(fn () => $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p', [], ['password' => 'pin']))->reason, 'a form posting to the login URL');
+    }
+
+    public function test_a_2xx_page_with_an_unrelated_form_is_a_login(): void
+    {
+        $this->fakeLogin(['<html><body><form action="/search"><input name="q"></form></body></html>', 200, ['Set-Cookie' => 'app_session=user; Path=/']]);
 
         $this->client()->loginWithForm('https://app.example.com/login', 'u', 'p');
         $this->addToAssertionCount(1);
+    }
+
+    public function test_a_json_2xx_that_reports_a_failure_is_a_credentials_failure(): void
+    {
+        foreach ([['ok' => false], ['success' => false], ['errors' => ['email' => ['These credentials do not match our records.']]]] as $body) {
+            Http::fake(['*' => Http::response($body, 200, ['Set-Cookie' => 'api_session='.uniqid().'; Path=/'])]);
+
+            $this->assertSame('credentials', $this->failure(fn () => $this->client()->loginWithJson('https://api.example.com/login', 'u', 'p'))->reason, json_encode($body));
+        }
     }
 
     public function test_a_two_factor_challenge_is_a_failure(): void

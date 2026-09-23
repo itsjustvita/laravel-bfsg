@@ -154,7 +154,7 @@ class AuthenticatedHttpClient
         $before = $this->sessionCookies($loginUrl);
         $response = $this->attempt($loginUrl, fn () => $this->postForm($loginUrl, $data, $this->csrfHeaders($loginUrl, ['Accept' => 'text/html,application/xhtml+xml', 'Referer' => $loginUrl])));
 
-        $this->assertLoggedIn($response, $loginUrl, $before);
+        $this->assertLoggedIn($response, $loginUrl, $before, $fieldNames);
     }
 
     /**
@@ -382,13 +382,16 @@ class AuthenticatedHttpClient
     }
 
     /**
-     * A redirect away from the login page (not to a two-factor challenge) is a login. A 2xx answer is one when the
-     * session cookie changed (Laravel regenerates the session ID on login), or when a session cookie is present
-     * and the answer does not contain a password field (a re-rendered login form means the login failed).
+     * A redirect away from the login page (not to a two-factor challenge) is a login. A 2xx answer that still shows a
+     * login form (a password field, the configured password field, or a form posting to the login URL) is a failed
+     * login whatever the cookies say; any other 2xx is one when a session cookie is present. The "cookie changed"
+     * test alone is not enough: Laravel's EncryptCookies re-encrypts the session cookie on every response, so its
+     * value changes even when the session ID does not (the comparison only means something for unencrypted cookies).
      *
      * @param  array<string, string>  $before  session cookies before the POST
+     * @param  array{username?: string, password?: string}  $fieldNames
      */
-    private function assertLoggedIn(Response $response, string $loginUrl, array $before): void
+    private function assertLoggedIn(Response $response, string $loginUrl, array $before, array $fieldNames = []): void
     {
         $this->rejectFailures($response, $loginUrl);
 
@@ -399,18 +402,43 @@ class AuthenticatedHttpClient
         }
 
         if ($response->successful()) {
-            $passwordField = preg_match('/<input\b[^>]*\btype\s*=\s*["\']?password\b/i', $response->body()) === 1;
-
-            if ($this->sessionChanged($loginUrl, $before) || (! $passwordField && $this->hasSessionCookie($loginUrl))) {
-                return;
+            if ($this->showsLoginForm($response->body(), $loginUrl, $fieldNames['password'] ?? 'password')) {
+                throw AuthenticationFailed::credentials($loginUrl, $response->status());
             }
 
-            if ($passwordField) {
-                throw AuthenticationFailed::credentials($loginUrl, $response->status());
+            if ($this->sessionChanged($loginUrl, $before) || $this->hasSessionCookie($loginUrl)) {
+                return;
             }
         }
 
         throw AuthenticationFailed::noSession($loginUrl, $response->status());
+    }
+
+    /** A password input, an input named like the password field, or a form whose action is the login URL. */
+    private function showsLoginForm(string $html, string $loginUrl, string $passwordField): bool
+    {
+        if (preg_match('/<input\b[^>]*\btype\s*=\s*["\']?password\b/i', $html) === 1
+            || preg_match('/<input\b[^>]*\bname\s*=\s*["\']?'.preg_quote($passwordField, '/').'(?=["\'\s>\/])/i', $html) === 1) {
+            return true;
+        }
+
+        preg_match_all('/<form\b[^>]*\baction\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))/i', $html, $forms, PREG_SET_ORDER);
+
+        foreach ($forms as $form) {
+            $action = html_entity_decode(($form[1] ?? '').($form[2] ?? '').($form[3] ?? ''), ENT_QUOTES);
+
+            try {
+                $target = (string) UriResolver::resolve(Utils::uriFor($loginUrl), Utils::uriFor($action));
+            } catch (Throwable) {
+                continue;
+            }
+
+            if ($action !== '' && $this->samePath($target, $loginUrl)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -426,6 +454,10 @@ class AuthenticatedHttpClient
 
         if (is_array($json) && ($json['two_factor'] ?? false) === true) {
             throw AuthenticationFailed::twoFactor($loginUrl);
+        }
+
+        if (is_array($json) && (($json['ok'] ?? null) === false || ($json['success'] ?? null) === false || ! empty($json['errors']))) {
+            throw AuthenticationFailed::credentials($loginUrl, $response->status());
         }
 
         if ($response->redirect()) {
