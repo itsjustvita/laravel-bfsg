@@ -2,261 +2,452 @@
 
 namespace ItsJustVita\LaravelBfsg\Commands;
 
-use Exception;
 use Illuminate\Console\Command;
+use Illuminate\Contracts\Auth\Authenticatable;
+use Illuminate\Support\Facades\Auth;
+use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
-use ItsJustVita\LaravelBfsg\Facades\Bfsg;
+use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Browser\BrowserAnalyzer;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Http\FetchOptions;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Violation;
+use Symfony\Component\Console\Formatter\OutputFormatter;
+use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
+use Throwable;
 
+/**
+ * Checks one page. Exit codes: 0 threshold met, 1 threshold exceeded (--fail-on / --min-score), 2 operational
+ * error (invalid option, fetch, authentication, browser, database). With --format=json|markdown only the report
+ * is written to stdout; every status line goes to stderr.
+ */
 class BfsgCheckCommand extends Command
 {
-    protected $signature = 'bfsg:check {url?}
-                            {--auth : Enable authentication}
-                            {--email= : Email for authentication}
-                            {--password= : Password for authentication}
-                            {--username-field= : Custom username field name (default: email)}
-                            {--password-field= : Custom password field name (default: password)}
-                            {--login-url= : Custom login URL (default: /login)}
-                            {--json-auth : Use JSON authentication instead of form-based}
-                            {--bearer= : Bearer token for API authentication}
-                            {--jwt= : JWT token for authentication}
-                            {--api-key= : API key for authentication}
-                            {--api-key-header= : API key header name (default: X-API-Key)}
-                            {--session= : Session cookie value (format: name=value)}
-                            {--guard= : Laravel guard name to use}
-                            {--sanctum : Use Laravel Sanctum authentication}
-                            {--detailed : Show detailed violation information}
-                            {--save : Save results to database}
-                            {--format=cli : Output format (cli, json, html, pdf)}
-                            {--verify-ssl=false : Verify SSL certificates (set to true for production)}';
+    public const OPERATIONAL_ERROR = 2;
 
-    protected $description = 'Check a URL for accessibility compliance';
+    public const FORMATS = ['cli', 'json', 'markdown', 'html', 'pdf'];
 
-    protected AuthenticatedHttpClient $httpClient;
+    private const FAIL_ON = ['error', 'warning', 'notice', 'none'];
 
-    public function handle()
+    private const AUTH_OPTIONS = ['auth', 'bearer', 'jwt', 'api-key', 'session', 'sanctum'];
+
+    protected $signature = 'bfsg:check {url? : URL, or a path of this application (default: /)}
+        {--browser : Render the page with Playwright before the analysis}
+        {--headless=true : Run the browser headless (true|false)}
+        {--timeout=30000 : Browser timeout in milliseconds}
+        {--wait-for=body : CSS selector the browser waits for}
+        {--engine=chromium : Browser engine: chromium|firefox|webkit}
+        {--format=cli : Output format: cli|json|markdown|html|pdf}
+        {--output= : Write the report to this file (json, markdown, html, pdf)}
+        {--fail-on=error : Exit 1 on findings of this severity or higher: error|warning|notice|none}
+        {--min-score= : Exit 1 when the score is below this value (0-100)}
+        {--only= : Comma-separated analyzer keys to run}
+        {--except= : Comma-separated analyzer keys to skip}
+        {--locale= : Locale of messages and reports (default: bfsg.locale, then app.locale)}
+        {--detailed : Show element, selector and snippet of every finding}
+        {--save : Store the report in the database}
+        {--insecure : Do not verify TLS certificates}
+        {--no-inline-css : Do not inline same-origin stylesheets}
+        {--allow-login-page : Analyze the page even when the URL redirected to the login page}
+        {--auth : Log in first (--email/--password, or BFSG_AUTH_EMAIL/BFSG_AUTH_PASSWORD, or BFSG_AUTH_TOKEN as bearer token)}
+        {--email= : User for --auth}
+        {--password= : Password for --auth}
+        {--username-field= : Login form field for the user (default: email)}
+        {--password-field= : Login form field for the password (default: password)}
+        {--login-url= : Login URL, absolute or relative to the checked site (default: bfsg.authentication.default_login_url)}
+        {--json-auth : Log in with a JSON request (token or session cookie)}
+        {--bearer= : Bearer token}
+        {--jwt= : JSON Web Token (sent as bearer token)}
+        {--api-key= : API key}
+        {--api-key-header=X-API-Key : Header for --api-key}
+        {--session= : Existing session cookie as name=value}
+        {--sanctum : Log in through Laravel Sanctum (csrf-cookie, then login)}
+        {--guard= : Guard used by --as}
+        {--as= : For pages of this application: act as the user with this id or email}';
+
+    protected $description = 'Check a page for accessibility (BFSG / WCAG 2.1) and report the findings';
+
+    private string $locale;
+
+    public function handle(Bfsg $bfsg, UrlFetcher $fetcher, ReportRepository $repository, BrowserAnalyzer $browser): int
     {
-        $url = $this->argument('url') ?? '/';
-
-        $this->info("🔍 Checking accessibility for: {$url}");
-        $this->newLine();
-
         try {
-            $this->httpClient = (new AuthenticatedHttpClient)->withVerifySsl($this->verifySsl());
+            $format = $this->format();
+            $failOn = $this->failOn();
+            $minScore = $this->minScore();
+            $registry = $this->registry($bfsg);
+            $this->locale = $this->option('locale') ?: (config('bfsg.locale') ?: app()->getLocale());
 
-            // Handle authentication if needed
-            if ($this->usesAuthentication()) {
-                $this->handleAuthentication(app(UrlFetcher::class)->absolute($url));
+            if ($this->option('save') && ! $repository->isMigrated()) {
+                throw new InvalidArgumentException('--save needs the bfsg tables with the v3 columns: run php artisan migrate');
             }
 
-            // Fetch the page (in-process for URLs of this application) and analyze it as a full document
-            $page = app(UrlFetcher::class)->fetch($url, new FetchOptions(client: $this->httpClient, loginUrl: $this->option('login-url')));
+            $url = $fetcher->absolute($this->argument('url') ?? '/');
+            $this->status($this->trans('cli.checking', ['url' => $url]));
+            [$html, $url] = $this->option('browser') ? $this->render($browser, $url) : $this->fetch($fetcher, $url);
 
-            if ($page->landedOnLogin) {
-                throw new Exception("{$url} redirected to the login page {$page->finalUrl}; authenticate first.");
-            }
+            $result = $registry->analyze($html, ['url' => $url, 'locale' => $this->locale, 'fragment' => false]);
+            $report = new ReportGenerator($result, $this->locale);
 
-            $url = $page->finalUrl;
-            $result = Bfsg::analyze($page->html, ['url' => $url, 'fragment' => false]);
-            $violations = $result->toArray()['violations'];
+            $this->emit($report, $format);
 
-            // Handle output based on format
-            $format = $this->option('format');
-            if (in_array($format, ['json', 'markdown', 'html', 'pdf'], true)) {
-                $this->outputReport(new ReportGenerator($result), $format);
-            } else {
-                $this->outputCli($violations);
-            }
-
-            // Save to database if requested
             if ($this->option('save')) {
-                $this->saveResults($result);
+                $this->status($this->trans('cli.stored', ['id' => $repository->store($result, ['source' => 'bfsg:check'])->id]));
             }
 
-            return $result->count() === 0 ? Command::SUCCESS : Command::FAILURE;
+            if ($format !== 'cli') {
+                $this->status($this->summaryLine($report));
+            }
 
-        } catch (Exception $e) {
-            $this->error('❌ Error: '.$e->getMessage());
+            return $this->thresholdExceeded($result, $report, $failOn, $minScore) ? self::FAILURE : self::SUCCESS;
+        } catch (Throwable $e) {
+            $this->stderr()->writeln('<error>'.OutputFormatter::escape($e->getMessage()).'</error>');
 
-            return Command::FAILURE;
+            return self::OPERATIONAL_ERROR;
         }
     }
 
-    /**
-     * Whether any authentication option was given
-     */
-    protected function usesAuthentication(): bool
+    private function format(): string
     {
-        foreach (['auth', 'bearer', 'jwt', 'api-key', 'session'] as $option) {
+        $format = strtolower((string) $this->option('format'));
+
+        if (! in_array($format, self::FORMATS, true)) {
+            throw new InvalidArgumentException("Unknown --format={$format}. Use one of: ".implode(', ', self::FORMATS).'.');
+        }
+
+        if ($format === 'cli' && $this->option('output') !== null) {
+            throw new InvalidArgumentException('--output needs --format=json, markdown, html or pdf.');
+        }
+
+        return $format;
+    }
+
+    private function failOn(): ?Severity
+    {
+        $failOn = strtolower((string) $this->option('fail-on'));
+
+        if (! in_array($failOn, self::FAIL_ON, true)) {
+            throw new InvalidArgumentException("Unknown --fail-on={$failOn}. Use one of: ".implode(', ', self::FAIL_ON).'.');
+        }
+
+        return $failOn === 'none' ? null : Severity::from($failOn);
+    }
+
+    private function minScore(): ?int
+    {
+        $minScore = $this->option('min-score');
+
+        if ($minScore === null) {
+            return null;
+        }
+
+        if (! ctype_digit((string) $minScore) || (int) $minScore > 100) {
+            throw new InvalidArgumentException("--min-score must be a whole number from 0 to 100, got [{$minScore}].");
+        }
+
+        return (int) $minScore;
+    }
+
+    /** The registry narrowed by --only / --except; unknown keys are an error. */
+    private function registry(Bfsg $bfsg): Bfsg
+    {
+        $registry = $bfsg->except([]);
+
+        foreach (['only', 'except'] as $option) {
+            $keys = array_values(array_filter(array_map('trim', explode(',', (string) $this->option($option)))));
+
+            if ($keys === []) {
+                continue;
+            }
+
+            $unknown = array_diff($keys, $bfsg->keys());
+
+            if ($unknown !== []) {
+                throw new InvalidArgumentException("Unknown analyzer in --{$option}: ".implode(', ', $unknown).'. Available: '.implode(', ', $bfsg->keys()).'.');
+            }
+
+            $registry = $option === 'only' ? $registry->only($keys) : $registry->except($keys);
+        }
+
+        return $registry;
+    }
+
+    /** @return array{0: string, 1: string} HTML and final URL */
+    private function fetch(UrlFetcher $fetcher, string $url): array
+    {
+        $remoteAuth = array_filter(self::AUTH_OPTIONS, fn (string $option) => (bool) $this->option($option)) !== [];
+        $user = $this->actingAs($fetcher, $url);
+
+        $page = $fetcher->fetch($url, new FetchOptions(
+            client: $remoteAuth ? $this->authenticatedClient($url) : new AuthenticatedHttpClient(verifySsl: $this->option('insecure') ? false : null),
+            actingAs: $user,
+            guard: $this->option('guard'),
+            inlineStylesheets: $this->option('no-inline-css') ? false : null,
+            loginUrl: $this->option('login-url'),
+            inProcess: ! $remoteAuth,
+        ));
+
+        foreach ($page->warnings as $warning) {
+            $this->status($this->trans('cli.warning', ['message' => $warning]));
+        }
+
+        if ($page->redirected) {
+            $this->status($this->trans('cli.redirected', ['url' => $page->finalUrl]));
+        }
+
+        if ($page->landedOnLogin && ! $this->option('allow-login-page')) {
+            throw new InvalidArgumentException("{$url} redirected to the login page {$page->finalUrl}. Authenticate (--as, --auth, --bearer, --session) or pass --allow-login-page to check the login page.");
+        }
+
+        return [$page->html, $page->finalUrl];
+    }
+
+    /** @return array{0: string, 1: string} */
+    private function render(BrowserAnalyzer $browser, string $url): array
+    {
+        foreach ([...self::AUTH_OPTIONS, 'as'] as $option) {
             if ($this->option($option)) {
-                return true;
+                throw new InvalidArgumentException("--browser cannot be combined with --{$option}: the browser does not share the login.");
             }
         }
 
-        return false;
+        $headless = filter_var($this->option('headless'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+        $timeout = (string) $this->option('timeout');
+
+        if ($headless === null || ! ctype_digit($timeout) || (int) $timeout === 0) {
+            throw new InvalidArgumentException('--headless must be true or false and --timeout a positive number of milliseconds.');
+        }
+
+        $this->status($this->trans('cli.rendering', ['url' => $url, 'engine' => $this->option('engine')]));
+
+        return [$browser->render($url, [
+            'headless' => $headless,
+            'timeout' => (int) $timeout,
+            'waitFor' => (string) $this->option('wait-for'),
+            'engine' => (string) $this->option('engine'),
+        ]), $url];
     }
 
-    protected function verifySsl(): bool
+    private function actingAs(UrlFetcher $fetcher, string $url): ?Authenticatable
     {
-        return filter_var($this->option('verify-ssl'), FILTER_VALIDATE_BOOLEAN);
+        $value = $this->option('as');
+
+        if ($value === null) {
+            return null;
+        }
+
+        if (! $fetcher->isSameApp($url)) {
+            throw new InvalidArgumentException('--as only works for pages of this application (a path or the host of app.url).');
+        }
+
+        $guard = Auth::guard($this->option('guard'));
+
+        if (! method_exists($guard, 'getProvider')) {
+            throw new InvalidArgumentException('The guard ['.($this->option('guard') ?? 'default').'] has no user provider for --as.');
+        }
+
+        $provider = $guard->getProvider();
+        $user = ctype_digit((string) $value) ? $provider->retrieveById($value) : null;
+        $user ??= $provider->retrieveByCredentials(['email' => $value]);
+
+        if (! $user instanceof Authenticatable) {
+            throw new InvalidArgumentException("No user found for --as={$value}.");
+        }
+
+        return $user;
     }
 
-    /**
-     * scheme://host[:port] of the URL being checked
-     */
-    protected function originOf(string $url): string
+    /** A client carrying the requested authentication (tokens, cookies, or a login performed now). */
+    private function authenticatedClient(string $url): AuthenticatedHttpClient
     {
-        $parts = parse_url($url);
+        $client = new AuthenticatedHttpClient(verifySsl: $this->option('insecure') ? false : null);
+        $origin = $this->origin($url);
 
-        if (empty($parts['scheme']) || empty($parts['host'])) {
-            throw new Exception("Invalid URL: {$url}");
+        if ($token = $this->option('jwt')) {
+            $client->withJwt($token);
         }
 
-        $origin = $parts['scheme'].'://'.$parts['host'];
-
-        if (! empty($parts['port'])) {
-            $origin .= ':'.$parts['port'];
+        if ($token = $this->option('bearer')) {
+            $client->withBearer($token);
         }
 
-        return $origin;
-    }
-
-    /**
-     * Resolve --login-url (absolute or relative to the origin), falling back to the configured default
-     */
-    protected function resolveLoginUrl(string $origin): string
-    {
-        $loginUrl = $this->option('login-url') ?: config('bfsg.authentication.default_login_url', '/login');
-
-        if (preg_match('#^https?://#i', $loginUrl)) {
-            return $loginUrl;
-        }
-
-        return $origin.'/'.ltrim($loginUrl, '/');
-    }
-
-    protected function handleAuthentication(string $url): void
-    {
-        $origin = $this->originOf($url);
-
-        if ($jwt = $this->option('jwt')) {
-            $this->httpClient->withJwt($jwt);
-
-            return;
-        }
-
-        if ($bearer = $this->option('bearer')) {
-            $this->httpClient->withBearer($bearer);
-
-            return;
-        }
-
-        if ($apiKey = $this->option('api-key')) {
-            $this->httpClient->withApiKey($apiKey, $this->option('api-key-header') ?? 'X-API-Key');
-
-            return;
+        if ($key = $this->option('api-key')) {
+            $client->withApiKey($key, (string) $this->option('api-key-header'));
         }
 
         if ($session = $this->option('session')) {
-            if (strpos($session, '=') === false) {
-                throw new Exception('Session format must be: name=value');
+            if (! str_contains($session, '=')) {
+                throw new InvalidArgumentException('--session must look like name=value.');
             }
 
             [$name, $value] = explode('=', $session, 2);
-            $this->httpClient->withSessionCookie($name, $value, $url);
+            $client->withSessionCookie(trim($name), trim($value), $url);
+        }
+
+        if ($this->option('auth') || $this->option('sanctum')) {
+            $this->login($client, $origin);
+        }
+
+        return $client;
+    }
+
+    private function login(AuthenticatedHttpClient $client, string $origin): void
+    {
+        $env = AuthenticatedHttpClient::credentialsFromEnv();
+        $email = $this->option('email') ?? $env['email'];
+        $password = $this->option('password') ?? $env['password'];
+
+        if (($email === null || $password === null) && $env['token'] !== null && ! $this->option('sanctum')) {
+            $client->withBearer($env['token']);
 
             return;
         }
 
-        if ($this->option('auth')) {
-            $email = $this->option('email') ?? $this->ask('Email');
-            $password = $this->option('password') ?? $this->secret('Password');
-
-            if (! $email || ! $password) {
-                throw new Exception('Email and password are required for authentication');
-            }
-
-            $fieldNames = array_filter(['username' => $this->option('username-field'), 'password' => $this->option('password-field')]);
-
-            if ($this->option('sanctum')) {
-                $this->httpClient->loginWithSanctum($origin, $email, $password, fieldNames: $fieldNames);
-            } elseif ($this->option('json-auth')) {
-                $this->httpClient->loginWithJson($this->resolveLoginUrl($origin), $email, $password, fieldNames: $fieldNames);
-            } else {
-                $this->httpClient->loginWithForm($this->resolveLoginUrl($origin), $email, $password, fieldNames: $fieldNames);
-            }
-
-            $this->info('✅ Authentication successful');
+        if ($this->input->isInteractive()) {
+            $email ??= $this->ask('Email');
+            $password ??= $this->secret('Password');
         }
+
+        if (! is_string($email) || $email === '' || ! is_string($password) || $password === '') {
+            throw new InvalidArgumentException('--auth needs --email and --password (or BFSG_AUTH_EMAIL and BFSG_AUTH_PASSWORD, or BFSG_AUTH_TOKEN).');
+        }
+
+        $fieldNames = array_filter(['username' => $this->option('username-field'), 'password' => $this->option('password-field')]);
+        $loginUrl = $this->loginUrl($origin);
+
+        match (true) {
+            (bool) $this->option('sanctum') => $client->loginWithSanctum($origin, $email, $password, (string) parse_url($loginUrl, PHP_URL_PATH), $fieldNames),
+            (bool) $this->option('json-auth') => $client->loginWithJson($loginUrl, $email, $password, [], $fieldNames),
+            default => $client->loginWithForm($loginUrl, $email, $password, [], $fieldNames),
+        };
     }
 
-    protected function outputCli(array $violations): void
+    private function loginUrl(string $origin): string
     {
-        if (empty($violations)) {
-            $this->info('✅ No accessibility issues found!');
+        $loginUrl = (string) ($this->option('login-url') ?: config('bfsg.authentication.default_login_url', '/login'));
+
+        return preg_match('#^https?://#i', $loginUrl) === 1 ? $loginUrl : $origin.'/'.ltrim($loginUrl, '/');
+    }
+
+    private function origin(string $url): string
+    {
+        $parts = parse_url($url);
+
+        return $parts['scheme'].'://'.$parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '');
+    }
+
+    private function emit(ReportGenerator $report, string $format): void
+    {
+        if ($format === 'cli') {
+            $this->printCli($report);
 
             return;
         }
 
-        // Display violations
-        foreach ($violations as $category => $issues) {
-            $count = count($issues);
-            $this->error("❌ {$category} - {$count} issues found:");
-
-            foreach ($issues as $issue) {
-                $rule = $issue['rule'] ?? 'BFSG';
-                $message = "  - [{$rule}] {$issue['message']}";
-
-                if ($this->option('detailed')) {
-                    // Show additional details
-                    if (isset($issue['element'])) {
-                        $message .= " (Element: {$issue['element']})";
-                    }
-                    if (! empty($issue['snippet'])) {
-                        $message .= " ({$issue['snippet']})";
-                    }
-                }
-
-                $this->line($message);
-
-                if (isset($issue['suggestion'])) {
-                    $this->line("    💡 {$issue['suggestion']}");
-                }
-            }
-            $this->newLine();
-        }
-
-        // Summary
-        $totalIssues = array_sum(array_map('count', $violations));
-        $this->warn("Total issues found: {$totalIssues}");
-    }
-
-    protected function outputReport(ReportGenerator $report, string $format): void
-    {
         $report->format($format);
+        $output = $this->option('output');
 
-        if (in_array($format, ['json', 'markdown'], true)) {
+        if ($output === null && in_array($format, ['json', 'markdown'], true)) {
             $this->output->write($report->render(), false, OutputInterface::OUTPUT_RAW);
 
             return;
         }
 
-        $path = $report->saveTo($report->defaultPath());
-        $summary = $report->summary();
-
-        $this->info("Report saved to: {$path}");
-        $this->info("Compliance Score: {$summary['score']}% (Grade: {$summary['grade']})");
+        $this->status($this->trans('cli.report_written', ['path' => $report->saveTo($output ?? $report->defaultPath())]));
     }
 
-    protected function saveResults(AnalysisResult $result): void
+    private function printCli(ReportGenerator $report): void
     {
-        $dbReport = app(ReportRepository::class)->store($result);
+        $result = $report->result();
 
-        $this->info("Results saved to database (Report #{$dbReport->id})");
+        if ($result->count() === 0) {
+            $this->line('<info>'.OutputFormatter::escape($this->trans('no_issues')).'</info>');
+        }
+
+        foreach ($result->byAnalyzer() as $analyzer => $violations) {
+            $this->line('<options=bold>'.OutputFormatter::escape($analyzer).'</> ('.count($violations).')');
+
+            foreach ($violations as $violation) {
+                $this->printViolation($violation);
+            }
+
+            $this->newLine();
+        }
+
+        $this->line(OutputFormatter::escape($this->summaryLine($report)));
+    }
+
+    private function printViolation(Violation $violation): void
+    {
+        $style = match ($violation->severity) {
+            Severity::Error => 'fg=red',
+            Severity::Warning => 'fg=yellow',
+            Severity::Notice => 'fg=cyan',
+        };
+        $rule = $violation->rule === null ? $this->trans('no_rule') : $this->trans('rule').' '.$violation->rule;
+        $escape = fn (?string $text): string => OutputFormatter::escape((string) $text);
+
+        $this->line("  <{$style}>[".$escape($violation->severity->label($this->locale)).']</> '.$escape($rule).' '.$escape($violation->message($this->locale)));
+        $this->line('      '.$escape($this->trans('suggestion').': '.$violation->suggestion($this->locale)));
+
+        if ($this->option('detailed')) {
+            if ($violation->element !== null) {
+                $this->line('      '.$escape($this->trans('element').': '.$violation->element.'  '.$violation->selector));
+            }
+
+            if ($violation->snippet !== null) {
+                $this->line('      '.$escape($violation->snippet));
+            }
+        }
+    }
+
+    private function summaryLine(ReportGenerator $report): string
+    {
+        return $this->trans('cli.summary', $report->summary());
+    }
+
+    private function thresholdExceeded(AnalysisResult $result, ReportGenerator $report, ?Severity $failOn, ?int $minScore): bool
+    {
+        if ($failOn !== null) {
+            foreach ($result->all() as $violation) {
+                if ($violation->severity->atLeast($failOn)) {
+                    $this->status($this->trans('cli.fail_on', ['severity' => $failOn->label($this->locale)]));
+
+                    return true;
+                }
+            }
+        }
+
+        if ($minScore !== null && $report->score() < $minScore) {
+            $this->status($this->trans('cli.min_score', ['score' => $report->score(), 'min' => $minScore]));
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /** @param  array<string, mixed>  $replace */
+    private function trans(string $key, array $replace = []): string
+    {
+        return (string) __('bfsg::report.'.$key, array_map(fn ($value) => is_bool($value) ? ($value ? 'true' : 'false') : $value, $replace), $this->locale ?? null);
+    }
+
+    private function status(string $message): void
+    {
+        $this->stderr()->writeln('<comment>'.OutputFormatter::escape($message).'</comment>');
+    }
+
+    /** stderr of a console output; the output itself otherwise (tests with a buffered output). */
+    private function stderr(): OutputInterface
+    {
+        $output = $this->output->getOutput();
+
+        return $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
     }
 }

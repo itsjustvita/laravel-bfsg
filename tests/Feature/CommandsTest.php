@@ -2,316 +2,449 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
+use Illuminate\Process\PendingProcess;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Schema;
+use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Tests\Support\CapturedOutput;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class CommandsTest extends TestCase
 {
-    public function test_bfsg_check_command_exists()
+    use RefreshDatabase;
+
+    /** Zero findings of any severity (CleanPageBaselineTest 'commands'). */
+    private const ACCESSIBLE = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
+        .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+        .'<main id="main"><h1>Welcome</h1>'
+        .'<img src="photo.jpg" alt="A descriptive alt text">'
+        .'<form aria-label="Contact"><label for="email">Email</label>'
+        .'<input type="email" id="email" name="email" autocomplete="email"></form>'
+        .'<a href="/about">Learn more about our company</a>'
+        .'<div aria-live="polite"></div>'
+        .'</main><footer><p>Footer content</p></footer>'
+        .'</body></html>';
+
+    private const ERRORS = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
+
+    private static function page(string $extra): string
     {
-        $this->artisan('list')
-            ->assertSuccessful()
-            ->expectsOutputToContain('bfsg:check');
+        return str_replace('<div aria-live="polite"></div>', '<div aria-live="polite"></div>'.$extra, self::ACCESSIBLE);
     }
 
-    public function test_bfsg_analyze_command_exists()
+    /** @return array{0: int, 1: CapturedOutput} */
+    private function check(array $parameters): array
     {
-        $this->artisan('list')
-            ->assertSuccessful()
-            ->expectsOutputToContain('bfsg:analyze');
+        $output = new CapturedOutput;
+
+        return [Artisan::call('bfsg:check', $parameters, $output), $output];
     }
 
-    public function test_bfsg_check_command_with_invalid_url()
+    private function fakeSite(string $html = self::ACCESSIBLE): void
     {
-        Http::fake([
-            'http://invalid-server.example/*' => Http::response('', 500),
-        ]);
-
-        $this->artisan('bfsg:check', ['url' => 'http://invalid-server.example/page'])
-            ->assertFailed()
-            ->expectsOutputToContain('Error');
+        Http::fake(['http://example.com/*' => Http::response($html, 200, ['Content-Type' => 'text/html; charset=UTF-8'])]);
     }
 
-    public function test_bfsg_check_command_with_json_format()
+    public function test_commands_are_registered_and_bfsg_analyze_is_gone(): void
     {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
-            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
-            .'<main id="main"><h1>Welcome</h1>'
-            .'<img src="photo.jpg" alt="A descriptive alt text">'
-            .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
-            .'<a href="/about">Learn more about our company</a>'
-            .'<div aria-live="polite"></div>'
-            .'</main><footer><p>Footer content</p></footer>'
-            .'</body></html>';
+        $commands = array_keys(Artisan::all());
 
-        Http::fake([
-            'http://example.com/*' => Http::response($html, 200),
-        ]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'http://example.com/page',
-            '--format' => 'json',
-        ])->assertSuccessful();
+        $this->assertContains('bfsg:check', $commands);
+        $this->assertContains('bfsg:history', $commands);
+        $this->assertNotContains('bfsg:analyze', $commands);
     }
 
-    public function test_bfsg_check_command_with_violations()
+    /** @return array<string, array{0: string, 1: array<string, mixed>, 2: int}> */
+    public static function exitCodes(): array
     {
-        $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
+        $notice = self::page('<a href="https://partner.example/" target="_blank" rel="noopener">Partner site of our company</a>');
+        $warning = self::page('<div tabindex="2">Panel</div>');
 
-        Http::fake([
-            'http://example.com/*' => Http::response($html, 200),
-        ]);
-
-        $this->artisan('bfsg:check', ['url' => 'http://example.com/page'])
-            ->assertFailed();
+        return [
+            'clean page' => [self::ACCESSIBLE, [], 0],
+            'errors fail by default' => [self::ERRORS, [], 1],
+            'notices pass by default' => [$notice, [], 0],
+            'notices fail with --fail-on=notice' => [$notice, ['--fail-on' => 'notice'], 1],
+            'warnings pass with --fail-on=error' => [$warning, [], 0],
+            'warnings fail with --fail-on=warning' => [$warning, ['--fail-on' => 'warning'], 1],
+            'errors pass with --fail-on=none' => [self::ERRORS, ['--fail-on' => 'none'], 0],
+            'score below --min-score' => [$warning, ['--min-score' => '99'], 1],
+            'score at --min-score' => [$warning, ['--min-score' => '98'], 0],
+            'unknown format' => [self::ACCESSIBLE, ['--format' => 'xml'], 2],
+            'unknown fail-on' => [self::ACCESSIBLE, ['--fail-on' => 'critical'], 2],
+            'min-score not a number' => [self::ACCESSIBLE, ['--min-score' => 'abc'], 2],
+            'min-score above 100' => [self::ACCESSIBLE, ['--min-score' => '101'], 2],
+            'unknown analyzer in --only' => [self::ACCESSIBLE, ['--only' => 'images,nope'], 2],
+            'unknown analyzer in --except' => [self::ACCESSIBLE, ['--except' => 'nope'], 2],
+            '--output with cli' => [self::ACCESSIBLE, ['--output' => '/tmp/x.txt'], 2],
+        ];
     }
 
-    public function test_bfsg_check_command_with_detailed_option()
+    #[DataProvider('exitCodes')]
+    public function test_exit_codes(string $html, array $options, int $expected): void
     {
-        $html = '<!DOCTYPE html><html><body><img src="test.jpg"></body></html>';
+        $this->fakeSite($html);
 
-        Http::fake([
-            'http://example.com/*' => Http::response($html, 200),
-        ]);
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', ...$options]);
 
-        $this->artisan('bfsg:check', [
-            'url' => 'http://example.com/page',
-            '--detailed' => true,
-        ])->assertFailed();
+        $this->assertSame($expected, $exitCode, $output->stdout().$output->stderr());
     }
 
-    public function test_bfsg_check_command_success_with_accessible_html()
+    public function test_operational_errors_exit_2_with_the_reason_on_stderr(): void
     {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
-            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
-            .'<main id="main"><h1>Welcome</h1>'
-            .'<img src="photo.jpg" alt="A descriptive alt text">'
-            .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
-            .'<a href="/about">Learn more about our company</a>'
-            .'<div aria-live="polite"></div>'
-            .'</main><footer><p>Footer content</p></footer>'
-            .'</body></html>';
-
-        Http::fake([
-            'http://example.com/*' => Http::response($html, 200),
-        ]);
-
-        $this->artisan('bfsg:check', ['url' => 'http://example.com/page'])
-            ->assertSuccessful();
-    }
-
-    public function test_bfsg_analyze_command_server_side_mode()
-    {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test</title></head>'
-            .'<body><h1>Title</h1></body></html>';
-
-        Http::fake([
-            'http://example.com/*' => Http::response($html, 200),
-        ]);
-
-        $this->artisan('bfsg:analyze', [
-            'url' => 'http://example.com/page',
-        ])->assertSuccessful()
-            ->expectsOutputToContain('Using server-side analysis');
-    }
-
-    public function test_bfsg_analyze_command_browser_mode()
-    {
-        $this->artisan('bfsg:analyze', [
-            'url' => 'http://example.com/page',
-            '--browser' => true,
-        ])->expectsOutputToContain('Using browser rendering');
-    }
-
-    protected function accessibleHtml(): string
-    {
-        return '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
-            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
-            .'<main id="main"><h1>Welcome</h1>'
-            .'<img src="photo.jpg" alt="A descriptive alt text">'
-            .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
-            .'<a href="/about">Learn more about our company</a>'
-            .'<div aria-live="polite"></div>'
-            .'</main><footer><p>Footer content</p></footer>'
-            .'</body></html>';
-    }
-
-    public function test_bfsg_check_with_jwt_auth_without_auth_flag()
-    {
-        Http::fake(['http://example.com/*' => Http::response($this->accessibleHtml(), 200)]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'http://example.com/page',
-            '--jwt' => 'jwt-token-123',
-        ])->assertSuccessful();
-
-        Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer jwt-token-123'));
-    }
-
-    public function test_bfsg_check_with_api_key_auth_without_auth_flag()
-    {
-        Http::fake(['http://example.com/*' => Http::response($this->accessibleHtml(), 200)]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'http://example.com/page',
-            '--api-key' => 'key-456',
-            '--api-key-header' => 'X-Custom-Auth',
-        ])->assertSuccessful();
-
-        Http::assertSent(fn ($request) => $request->hasHeader('X-Custom-Auth', 'key-456'));
-    }
-
-    public function test_bfsg_check_resolves_default_login_url_against_origin()
-    {
-        Http::fake([
-            'https://example.com/login' => Http::response('', 302, ['Set-Cookie' => 'laravel_session=abc; Path=/']),
-            'https://example.com/dashboard' => Http::response($this->accessibleHtml(), 200),
-            '*' => Http::response('Not Found', 404),
-        ]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'https://example.com/dashboard',
-            '--auth' => true,
-            '--email' => 'user@example.com',
-            '--password' => 'secret',
-        ])->assertSuccessful();
-
-        Http::assertSent(fn ($request) => $request->method() === 'POST' && $request->url() === 'https://example.com/login');
-    }
-
-    public function test_bfsg_check_resolves_relative_login_url_against_origin()
-    {
-        Http::fake([
-            'https://example.com/admin/login' => Http::response('', 302, ['Set-Cookie' => 'laravel_session=abc; Path=/']),
-            'https://example.com/dashboard' => Http::response($this->accessibleHtml(), 200),
-            '*' => Http::response('Not Found', 404),
-        ]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'https://example.com/dashboard',
-            '--auth' => true,
-            '--email' => 'user@example.com',
-            '--password' => 'secret',
-            '--login-url' => '/admin/login',
-        ])->assertSuccessful();
-
-        Http::assertSent(fn ($request) => $request->method() === 'POST' && $request->url() === 'https://example.com/admin/login');
-    }
-
-    public function test_bfsg_check_accepts_absolute_login_url()
-    {
-        Http::fake([
-            'https://auth.example.com/login' => Http::response('', 302, ['Set-Cookie' => 'laravel_session=abc; Path=/']),
-            'https://example.com/dashboard' => Http::response($this->accessibleHtml(), 200),
-            '*' => Http::response('Not Found', 404),
-        ]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'https://example.com/dashboard',
-            '--auth' => true,
-            '--email' => 'user@example.com',
-            '--password' => 'secret',
-            '--login-url' => 'https://auth.example.com/login',
-        ])->assertSuccessful();
-
-        Http::assertSent(fn ($request) => $request->method() === 'POST' && $request->url() === 'https://auth.example.com/login');
-    }
-
-    public function test_bfsg_check_sanctum_uses_origin_for_csrf_cookie()
-    {
-        Http::fake([
-            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, [
-                'Set-Cookie' => ['XSRF-TOKEN=csrf; Path=/', 'laravel_session=abc; Path=/'],
-            ]),
-            'https://app.example.com/login' => Http::response(['message' => 'ok'], 200),
-            'https://app.example.com/dashboard' => Http::response($this->accessibleHtml(), 200),
-            '*' => Http::response('Not Found', 404),
-        ]);
-
-        $this->artisan('bfsg:check', [
-            'url' => 'https://app.example.com/dashboard',
-            '--auth' => true,
-            '--sanctum' => true,
-            '--email' => 'user@example.com',
-            '--password' => 'secret',
-        ])->assertSuccessful();
-
-        Http::assertSent(fn ($request) => $request->url() === 'https://app.example.com/sanctum/csrf-cookie');
-        Http::assertSent(fn ($request) => $request->method() === 'POST' && $request->url() === 'https://app.example.com/login');
-    }
-
-    public function test_bfsg_check_applies_verify_ssl_option_to_login_request()
-    {
-        $verify = [];
-
-        Http::fake(function ($request, $options) use (&$verify) {
-            $verify[$request->url()] = $options['verify'] ?? true;
-
-            return match ($request->url()) {
-                'https://example.com/login' => Http::response('', 302, ['Set-Cookie' => 'laravel_session=abc; Path=/']),
-                default => Http::response($this->accessibleHtml(), 200),
+        Http::fake(function (Request $request) {
+            return match (parse_url($request->url(), PHP_URL_PATH)) {
+                '/500' => Http::response('Server Error', 500),
+                '/api' => Http::response(['ok' => true], 200, ['Content-Type' => 'application/json']),
+                default => throw new ConnectionException('Connection refused'),
             };
         });
 
-        $this->artisan('bfsg:check', [
-            'url' => 'https://example.com/dashboard',
-            '--auth' => true,
-            '--email' => 'user@example.com',
-            '--password' => 'secret',
-            '--verify-ssl' => 'false',
-        ])->assertSuccessful();
+        foreach (['http://example.com/500' => 'HTTP 500', 'http://example.com/api' => 'not an HTML page', 'http://down.example.com/' => 'Connection refused', 'ftp://example.com/' => 'Invalid URL'] as $url => $reason) {
+            [$exitCode, $output] = $this->check(['url' => $url]);
 
-        $this->assertFalse($verify['https://example.com/login']);
-        $this->assertFalse($verify['https://example.com/dashboard']);
+            $this->assertSame(2, $exitCode, $url);
+            $this->assertStringContainsString($reason, $output->stderr(), $url);
+            $this->assertSame('', $output->stdout(), $url);
+        }
     }
 
-    public function test_bfsg_check_with_bearer_auth()
+    public function test_json_stdout_is_only_the_report(): void
     {
-        $html = '<!DOCTYPE html><html lang="en"><head><title>Test Page - Company</title></head><body>'
-            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
-            .'<main id="main"><h1>Welcome</h1>'
-            .'<img src="photo.jpg" alt="A descriptive alt text">'
-            .'<form aria-label="Contact"><label for="email">Email</label>'
-            .'<input type="email" id="email" name="email" autocomplete="email"></form>'
-            .'<a href="/about">Learn more about our company</a>'
-            .'<div aria-live="polite"></div>'
-            .'</main><footer><p>Footer content</p></footer>'
-            .'</body></html>';
+        $this->fakeSite(self::ERRORS);
 
-        Http::fake([
-            'http://example.com/*' => Http::response($html, 200),
-        ]);
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', '--format' => 'json']);
 
-        $this->artisan('bfsg:check', [
-            'url' => 'http://example.com/page',
-            '--bearer' => 'test-token-123',
-        ])->assertSuccessful();
+        $report = json_decode($output->stdout(), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame(1, $exitCode);
+        $this->assertSame('http://example.com/page', $report['url']);
+        $this->assertSame('images.missing_alt', $report['violations']['images'][0]['key']);
+        $this->assertStringContainsString('Checking http://example.com/page', $output->stderr());
+        $this->assertStringContainsString('score', $output->stderr());
+    }
 
-        Http::assertSent(function ($request) {
-            return $request->hasHeader('Authorization', 'Bearer test-token-123');
+    public function test_markdown_stdout_is_only_the_report(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [, $output] = $this->check(['url' => 'http://example.com/page', '--format' => 'markdown']);
+
+        $this->assertStringStartsWith("# Accessibility Report\n", $output->stdout());
+        $this->assertStringNotContainsString('Checking', $output->stdout());
+    }
+
+    public function test_html_and_pdf_are_written_to_files_and_the_path_goes_to_stderr(): void
+    {
+        $this->fakeSite(self::ERRORS);
+        $directory = sys_get_temp_dir().'/bfsg-cli-'.uniqid();
+        config()->set('bfsg.reporting.output_path', $directory);
+
+        try {
+            [, $html] = $this->check(['url' => 'http://example.com/page', '--format' => 'html']);
+            [, $pdf] = $this->check(['url' => 'http://example.com/page', '--format' => 'pdf', '--output' => $directory.'/custom.pdf']);
+            [, $json] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--output' => $directory.'/report.json']);
+
+            $this->assertSame('', $html->stdout());
+            $this->assertMatchesRegularExpression('#Report written to '.preg_quote($directory, '#').'/report_[0-9_-]+\.html#', $html->stderr());
+            $this->assertCount(1, glob($directory.'/report_*.html'));
+            $this->assertStringStartsWith('%PDF', (string) file_get_contents($directory.'/custom.pdf'));
+            $this->assertStringContainsString('Report written to '.$directory.'/custom.pdf', $pdf->stderr());
+            $this->assertSame('', $json->stdout());
+            $this->assertSame('http://example.com/page', json_decode((string) file_get_contents($directory.'/report.json'), true)['url']);
+        } finally {
+            array_map('unlink', glob($directory.'/*'));
+            rmdir($directory);
+        }
+    }
+
+    public function test_cli_output_is_localized_and_detailed(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', '--locale' => 'de', '--detailed' => true]);
+
+        $this->assertSame(1, $exitCode);
+        $this->assertStringContainsString('[Fehler] WCAG 1.1.1 Bild ohne Textalternative (test.jpg)', $output->stdout());
+        $this->assertStringContainsString('Element: img  /html[1]/body[1]/img[1]', $output->stdout());
+        $this->assertStringContainsString('<img src="test.jpg">', $output->stdout());
+        $this->assertStringContainsString('Befunde (', $output->stdout());
+        $this->assertStringContainsString('Prüfe http://example.com/page', $output->stderr());
+    }
+
+    public function test_clean_pages_say_so(): void
+    {
+        $this->fakeSite();
+
+        [, $output] = $this->check(['url' => 'http://example.com/page']);
+
+        $this->assertStringContainsString('No accessibility issues found.', $output->stdout());
+    }
+
+    public function test_only_and_except_select_analyzers(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [, $only] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--only' => 'images, language']);
+        [, $except] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--except' => 'images']);
+
+        $this->assertSame(['images', 'language'], json_decode($only->stdout(), true)['analyzers']);
+        $this->assertNotContains('images', json_decode($except->stdout(), true)['analyzers']);
+        $this->assertArrayNotHasKey('images', json_decode($except->stdout(), true)['violations']);
+    }
+
+    public function test_locale_option_sets_messages_and_report_locale(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [, $output] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--locale' => 'de']);
+        $report = json_decode($output->stdout(), true);
+
+        $this->assertSame('de', $report['locale']);
+        $this->assertSame('Bild ohne Textalternative (test.jpg)', $report['violations']['images'][0]['message']);
+    }
+
+    public function test_insecure_and_no_inline_css(): void
+    {
+        $options = [];
+        Http::fake(function (Request $request, array $requestOptions) use (&$options) {
+            $options[$request->url()] = $requestOptions['verify'] ?? null;
+
+            return Http::response('<html lang="en"><head><title>Styled page</title><link rel="stylesheet" href="/app.css"></head><body><main><h1>Hi</h1></main></body></html>', 200);
         });
+
+        $this->check(['url' => 'https://self-signed.example.com/', '--insecure' => true, '--no-inline-css' => true]);
+
+        $this->assertSame(['https://self-signed.example.com/' => false], $options, 'TLS not verified, stylesheet not fetched');
     }
 
     public function test_paths_of_this_application_are_checked_in_process(): void
     {
-        $this->app['router']->get('/bfsg-inprocess', fn () => response('<!DOCTYPE html><html><body><img src="x.jpg"></body></html>'));
+        $this->app['router']->get('/bfsg-inprocess', fn () => response(self::ERRORS));
 
-        $this->artisan('bfsg:check', ['url' => '/bfsg-inprocess'])
-            ->expectsOutputToContain('images')
-            ->assertFailed();
+        [$exitCode, $output] = $this->check(['url' => '/bfsg-inprocess', '--format' => 'json']);
 
+        $this->assertSame(1, $exitCode);
+        $this->assertSame('http://localhost/bfsg-inprocess', json_decode($output->stdout(), true)['url']);
         Http::assertNothingSent();
     }
 
-    public function test_non_html_responses_are_rejected(): void
+    public function test_as_acts_as_a_user_of_this_application(): void
     {
-        Http::fake(['http://example.com/*' => Http::response(['ok' => true], 200, ['Content-Type' => 'application/json'])]);
+        Schema::create('users', function ($table) {
+            $table->id();
+            $table->string('email');
+            $table->string('password');
+        });
+        DB::table('users')->insert(['id' => 7, 'email' => 'jane@example.com', 'password' => Hash::make('secret')]);
+        config()->set('auth.providers.users', ['driver' => 'database', 'table' => 'users']);
+        $this->app['router']->get('/account', fn () => auth()->check() ? response(self::ACCESSIBLE) : redirect('/login'));
+        $this->app['router']->get('/login', fn () => response(self::ERRORS));
 
-        $this->artisan('bfsg:check', ['url' => 'http://example.com/api'])
-            ->expectsOutputToContain('not an HTML page')
-            ->assertFailed();
+        [$guest, $guestOutput] = $this->check(['url' => '/account']);
+        [$byLogin] = $this->check(['url' => '/account', '--allow-login-page' => true]);
+        [$byId] = $this->check(['url' => '/account', '--as' => '7']);
+        $this->app['auth']->forgetGuards();
+        [$byEmail] = $this->check(['url' => '/account', '--as' => 'jane@example.com']);
+        [$unknown, $unknownOutput] = $this->check(['url' => '/account', '--as' => 'nobody@example.com']);
+        [$remote, $remoteOutput] = $this->check(['url' => 'https://elsewhere.example.com/', '--as' => '7']);
+
+        $this->assertSame(2, $guest);
+        $this->assertStringContainsString('redirected to the login page', $guestOutput->stderr());
+        $this->assertSame(1, $byLogin, 'the login page itself is analyzed');
+        $this->assertSame(0, $byId);
+        $this->assertSame(0, $byEmail);
+        $this->assertSame(2, $unknown);
+        $this->assertStringContainsString('No user found', $unknownOutput->stderr());
+        $this->assertSame(2, $remote);
+        $this->assertStringContainsString('only works for pages of this application', $remoteOutput->stderr());
+    }
+
+    public function test_form_login_resolves_the_login_url_against_the_origin(): void
+    {
+        $logins = ['https://example.com/login', 'https://example.com/admin/login', 'https://auth.example.com/login'];
+
+        Http::fake(fn (Request $request) => match (true) {
+            in_array($request->url(), $logins, true) => Http::response('', 302, ['Location' => 'https://example.com/dashboard', 'Set-Cookie' => 'laravel_session=abc; Path=/']),
+            $request->url() === 'https://example.com/dashboard' => Http::response(self::ACCESSIBLE, 200),
+            default => Http::response('Not Found', 404),
+        });
+
+        foreach ([[[], $logins[0]], [['--login-url' => '/admin/login'], $logins[1]], [['--login-url' => 'https://auth.example.com/login'], $logins[2]]] as [$options, $loginUrl]) {
+            [$exitCode, $output] = $this->check(['url' => 'https://example.com/dashboard', '--auth' => true, '--email' => 'user@example.com', '--password' => 'secret', ...$options]);
+
+            $this->assertSame(0, $exitCode, $loginUrl.': '.$output->stderr());
+            Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === $loginUrl);
+        }
+    }
+
+    public function test_failed_logins_exit_2_with_the_cause(): void
+    {
+        Http::fake([
+            'https://example.com/login' => fn (Request $request) => $request->method() === 'GET'
+                ? Http::response('<form><input type="hidden" name="_token" value="t"></form>', 200)
+                : Http::response('', 419),
+        ]);
+
+        [$exitCode, $output] = $this->check(['url' => 'https://example.com/dashboard', '--auth' => true, '--email' => 'u@example.com', '--password' => 'p']);
+
+        $this->assertSame(2, $exitCode);
+        $this->assertStringContainsString('CSRF', $output->stderr());
+    }
+
+    public function test_auth_without_credentials_is_an_error_in_non_interactive_runs(): void
+    {
+        [$exitCode, $output] = $this->check(['url' => 'https://example.com/', '--auth' => true, '--no-interaction' => true]);
+
+        $this->assertSame(2, $exitCode);
+        $this->assertStringContainsString('BFSG_AUTH_EMAIL', $output->stderr());
+    }
+
+    public function test_credentials_and_token_from_the_environment(): void
+    {
+        Http::fake([
+            'https://example.com/login' => Http::response('', 302, ['Location' => '/home', 'Set-Cookie' => 'laravel_session=abc; Path=/']),
+            '*' => Http::response(self::ACCESSIBLE, 200),
+        ]);
+
+        putenv('BFSG_AUTH_EMAIL=ci@example.com');
+        putenv('BFSG_AUTH_PASSWORD=from-env');
+
+        try {
+            $this->assertSame(0, $this->check(['url' => 'https://example.com/dashboard', '--auth' => true])[0]);
+            Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request['email'] === 'ci@example.com' && $request['password'] === 'from-env');
+        } finally {
+            putenv('BFSG_AUTH_EMAIL');
+            putenv('BFSG_AUTH_PASSWORD');
+        }
+
+        putenv('BFSG_AUTH_TOKEN=env-token');
+
+        try {
+            $this->assertSame(0, $this->check(['url' => 'https://example.com/api-page', '--auth' => true])[0]);
+            Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/api-page' && $request->hasHeader('Authorization', 'Bearer env-token'));
+        } finally {
+            putenv('BFSG_AUTH_TOKEN');
+        }
+    }
+
+    public function test_sanctum_login_uses_the_origin(): void
+    {
+        Http::fake([
+            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, ['Set-Cookie' => ['XSRF-TOKEN=csrf; Path=/', 'laravel_session=abc; Path=/']]),
+            'https://app.example.com/login' => Http::response(['message' => 'ok'], 200),
+            'https://app.example.com/dashboard' => Http::response(self::ACCESSIBLE, 200),
+            '*' => Http::response('Not Found', 404),
+        ]);
+
+        [$exitCode] = $this->check(['url' => 'https://app.example.com/dashboard', '--sanctum' => true, '--email' => 'user@example.com', '--password' => 'secret']);
+
+        $this->assertSame(0, $exitCode);
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://app.example.com/login' && $request->hasHeader('X-XSRF-TOKEN', 'csrf'));
+    }
+
+    public function test_token_api_key_and_session_options(): void
+    {
+        $this->fakeSite();
+
+        $this->check(['url' => 'http://example.com/a', '--bearer' => 'b-1']);
+        $this->check(['url' => 'http://example.com/b', '--jwt' => 'j-2']);
+        $this->check(['url' => 'http://example.com/c', '--api-key' => 'k-3', '--api-key-header' => 'X-Custom-Auth']);
+        $this->check(['url' => 'http://example.com/d', '--session' => 'laravel_session=s-4']);
+        [$invalid, $output] = $this->check(['url' => 'http://example.com/e', '--session' => 'no-equals-sign']);
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://example.com/a' && $request->hasHeader('Authorization', 'Bearer b-1'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://example.com/b' && $request->hasHeader('Authorization', 'Bearer j-2'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://example.com/c' && $request->hasHeader('X-Custom-Auth', 'k-3'));
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://example.com/d' && ($request->header('Cookie')[0] ?? '') === 'laravel_session=s-4');
+        $this->assertSame(2, $invalid);
+        $this->assertStringContainsString('name=value', $output->stderr());
+    }
+
+    public function test_auth_options_fetch_pages_of_this_application_over_http(): void
+    {
+        Http::fake(['http://localhost/*' => Http::response(self::ACCESSIBLE, 200)]);
+
+        [$exitCode] = $this->check(['url' => '/dashboard', '--bearer' => 'token']);
+
+        $this->assertSame(0, $exitCode);
+        Http::assertSent(fn (Request $request) => $request->url() === 'http://localhost/dashboard' && $request->hasHeader('Authorization', 'Bearer token'));
+    }
+
+    public function test_save_stores_the_report(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', '--save' => true]);
+
+        $report = BfsgReport::query()->sole();
+        $this->assertSame(1, $exitCode);
+        $this->assertSame('http://example.com/page', $report->url);
+        $this->assertSame('bfsg:check', $report->metadata['source']);
+        $this->assertStringContainsString("Stored as report #{$report->id}", $output->stderr());
+    }
+
+    public function test_save_without_tables_exits_2_with_the_migrate_hint(): void
+    {
+        $this->fakeSite();
+        Schema::drop('bfsg_violations');
+
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', '--save' => true]);
+
+        $this->assertSame(2, $exitCode);
+        $this->assertStringContainsString('php artisan migrate', $output->stderr());
+        Http::assertNothingSent();
+    }
+
+    public function test_browser_mode_renders_with_playwright_and_analyzes_the_result(): void
+    {
+        $commands = [];
+        Process::fake(function (PendingProcess $process) use (&$commands) {
+            $commands[] = (array) $process->command;
+
+            return Process::result(($process->command[1] ?? '') === '-e' ? '' : self::ERRORS);
+        });
+
+        [$exitCode, $output] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, '--engine' => 'webkit', '--timeout' => '5000', '--format' => 'json']);
+
+        $this->assertSame(1, $exitCode, $output->stderr());
+        $this->assertSame('https://spa.example.com/', json_decode($output->stdout(), true)['url']);
+        $this->assertCount(2, $commands);
+        $this->assertStringContainsString('Rendering https://spa.example.com/ with webkit', $output->stderr());
+        Http::assertNothingSent();
+    }
+
+    public function test_browser_mode_errors_exit_2(): void
+    {
+        Process::fake(fn () => Process::result('', "Cannot find module 'playwright'", 1));
+
+        [$missing, $missingOutput] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true]);
+        [$engine, $engineOutput] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, '--engine' => 'opera']);
+        [$auth, $authOutput] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, '--bearer' => 'x']);
+        [$headless] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, '--headless' => 'maybe']);
+
+        $this->assertSame(2, $missing);
+        $this->assertStringContainsString('npm install playwright', $missingOutput->stderr());
+        $this->assertSame(2, $engine);
+        $this->assertStringContainsString('Unknown browser engine [opera]', $engineOutput->stderr());
+        $this->assertSame(2, $auth);
+        $this->assertStringContainsString('cannot be combined with --bearer', $authOutput->stderr());
+        $this->assertSame(2, $headless);
+    }
+
+    public function test_pending_command_output_still_contains_the_status_lines(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        $this->artisan('bfsg:check', ['url' => 'http://example.com/page'])
+            ->expectsOutputToContain('Checking http://example.com/page')
+            ->assertExitCode(1);
     }
 }

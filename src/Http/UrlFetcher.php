@@ -66,7 +66,7 @@ class UrlFetcher
             landedOnLogin: $redirects > 0 && $this->isLoginPage($current, $options),
             contentType: $response['contentType'] === '' ? 'text/html' : $response['contentType'],
             warnings: $warnings,
-            inProcess: $this->isSameApp($current),
+            inProcess: $options->inProcess && $this->isSameApp($current),
         );
     }
 
@@ -99,7 +99,7 @@ class UrlFetcher
     /** @return array{status: int, location: ?string, contentType: string, body: string} */
     private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options): array
     {
-        if ($this->isSameApp($url)) {
+        if ($options->inProcess && $this->isSameApp($url)) {
             return $this->inProcess->get($url, $options->actingAs, $options->guard);
         }
 
@@ -119,7 +119,7 @@ class UrlFetcher
 
     private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options): ?string
     {
-        if ($this->isSameApp($url)) {
+        if ($options->inProcess && $this->isSameApp($url)) {
             $file = $this->inProcess->publicFile((string) parse_url($url, PHP_URL_PATH));
 
             if ($file !== null) {

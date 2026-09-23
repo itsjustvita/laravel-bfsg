@@ -23,4 +23,15 @@ return [
     'snippet' => 'Code',
     'no_rule' => 'No WCAG criterion',
     'source' => 'laravel-bfsg on GitHub',
+    'cli' => [
+        'checking' => 'Checking :url',
+        'rendering' => 'Rendering :url with :engine',
+        'redirected' => 'Redirected to :url',
+        'warning' => 'Warning: :message',
+        'summary' => ':total findings (:errors errors, :warnings warnings, :notices notices), score :score of 100, grade :grade',
+        'report_written' => 'Report written to :path',
+        'stored' => 'Stored as report #:id',
+        'fail_on' => 'Failed: findings with severity :severity or higher',
+        'min_score' => 'Failed: score :score is below the minimum of :min',
+    ],
 ];

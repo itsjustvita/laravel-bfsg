@@ -56,7 +56,8 @@ class BfsgServiceProviderTest extends TestCase
         $registeredCommands = array_keys(\Artisan::all());
 
         $this->assertContains('bfsg:check', $registeredCommands);
-        $this->assertContains('bfsg:analyze', $registeredCommands);
+        $this->assertContains('bfsg:history', $registeredCommands);
+        $this->assertNotContains('bfsg:analyze', $registeredCommands, 'replaced by bfsg:check --browser');
     }
 
     public function test_facade_resolves(): void

@@ -3,7 +3,6 @@
 namespace ItsJustVita\LaravelBfsg;
 
 use Illuminate\Support\ServiceProvider;
-use ItsJustVita\LaravelBfsg\Commands\AnalyzeUrlCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
 use ItsJustVita\LaravelBfsg\Commands\BfsgHistoryCommand;
 use ItsJustVita\LaravelBfsg\Commands\McpServerCommand;
@@ -64,7 +63,7 @@ class BfsgServiceProvider extends ServiceProvider
             ], 'bfsg-lang');
 
             // Register commands
-            $commands = [BfsgCheckCommand::class, AnalyzeUrlCommand::class, BfsgHistoryCommand::class];
+            $commands = [BfsgCheckCommand::class, BfsgHistoryCommand::class];
 
             if (class_exists(Server::class)) {
                 $commands[] = McpServerCommand::class;

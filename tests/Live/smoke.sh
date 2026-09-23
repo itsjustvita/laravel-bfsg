@@ -32,6 +32,20 @@ pass() {
     echo "ok   $*"
 }
 
+# check <name> <expected exit code> <bfsg:check arguments...>: stdout -> $WORK/<name>.out, stderr -> $WORK/<name>.err
+check() {
+    local name="$1" expected="$2"
+    shift 2
+    php artisan bfsg:check "$@" >"$WORK/$name.out" 2>"$WORK/$name.err"
+    local code=$?
+    [ "$code" = "$expected" ] || { cat "$WORK/$name.out" "$WORK/$name.err"; fail "bfsg:check $* exited $code, expected $expected"; }
+}
+
+# pure_json <file>: the whole file is one JSON document (no status lines around it)
+pure_json() {
+    php -r 'json_decode(stream_get_contents(STDIN), flags: JSON_THROW_ON_ERROR);' <"$1" 2>/dev/null
+}
+
 cd "$APP_DIR" || fail "cannot enter $APP_DIR"
 
 LOG=storage/logs/laravel.log
@@ -43,6 +57,7 @@ pass "php artisan about"
 
 php artisan list --raw | grep -q '^bfsg:check' || fail "bfsg:check is not registered"
 php artisan list --raw | grep -q '^bfsg:mcp-server' || fail "bfsg:mcp-server is not registered (laravel/mcp installed?)"
+if php artisan list --raw | grep -q '^bfsg:analyze'; then fail "bfsg:analyze is still registered (replaced by bfsg:check --browser)"; fi
 pass "bfsg commands registered"
 
 # 2. Every publish tag works
@@ -78,49 +93,57 @@ done
 curl -s -o /dev/null "$BASE/live/accessible" || { cat "$WORK/serve.log"; fail "php artisan serve did not come up on $BASE"; }
 pass "php artisan serve on $BASE"
 
-# 5. bfsg:check finds the planted defects on the broken page
-php artisan bfsg:check "$BASE/live/broken" --format=json >"$WORK/broken.out" 2>"$WORK/broken.err"
+# 5. bfsg:check finds the planted defects on the broken page; stdout is pure JSON; errors exit 1
+check broken 1 "$BASE/live/broken" --format=json
+pure_json "$WORK/broken.out" || { head -c 300 "$WORK/broken.out"; fail "stdout of bfsg:check --format=json is not pure JSON"; }
 php "$LIVE_DIR/violation-keys.php" <"$WORK/broken.out" >"$WORK/broken.keys" || fail "bfsg:check --format=json on the broken page"
 for key in images.missing_alt forms.control_missing_label links.missing_name language.missing_lang page_title.missing_title contrast.insufficient focus.outline_removed keyboard.click_without_keyboard headings.skipped_level; do
     grep -q " $key\$" "$WORK/broken.keys" || { cat "$WORK/broken.keys"; fail "bfsg:check did not report $key on the broken page"; }
 done
-pass "bfsg:check broken page: $(wc -l <"$WORK/broken.keys" | tr -d ' ') findings incl. all expected keys"
+grep -q "Checking $BASE/live/broken" "$WORK/broken.err" || { cat "$WORK/broken.err"; fail "status lines are not on stderr"; }
+pass "bfsg:check broken page: $(wc -l <"$WORK/broken.keys" | tr -d ' ') findings incl. all expected keys, pure JSON on stdout, exit 1"
 
-# 6. ... and no errors on the accessible page
-php artisan bfsg:check "$BASE/live/accessible" --format=json >"$WORK/accessible.out" 2>"$WORK/accessible.err"
+# 6. ... and no errors on the accessible page (exit 0)
+check accessible 0 "$BASE/live/accessible" --format=json
 php "$LIVE_DIR/violation-keys.php" <"$WORK/accessible.out" >"$WORK/accessible.keys" || fail "bfsg:check --format=json on the accessible page"
 if grep -q '^error ' "$WORK/accessible.keys"; then
     cat "$WORK/accessible.keys"
     fail "bfsg:check reported errors on the accessible page"
 fi
-pass "bfsg:check accessible page: no errors ($(wc -l <"$WORK/accessible.keys" | tr -d ' ') findings)"
+pass "bfsg:check accessible page: no errors ($(wc -l <"$WORK/accessible.keys" | tr -d ' ') findings), exit 0"
 
 # 6b. A path of this application is fetched in-process through the HTTP kernel (no web server, no .test hack)
-php artisan bfsg:check /live/broken --format=json >"$WORK/inprocess.out" 2>"$WORK/inprocess.err"
+check inprocess 1 /live/broken --format=json
 php "$LIVE_DIR/violation-keys.php" <"$WORK/inprocess.out" >"$WORK/inprocess.keys" || fail "bfsg:check --format=json on the path /live/broken"
 for key in images.missing_alt language.missing_lang page_title.missing_title; do
     grep -q " $key\$" "$WORK/inprocess.keys" || { cat "$WORK/inprocess.keys" "$WORK/inprocess.err"; fail "in-process bfsg:check /live/broken did not report $key"; }
 done
 pass "bfsg:check /live/broken in-process: $(wc -l <"$WORK/inprocess.keys" | tr -d ' ') findings"
 
-# 6c. Non-HTML answers are an error, never a pass
-if php artisan bfsg:check "$BASE/live/json" >"$WORK/json-check.out" 2>&1; then
-    cat "$WORK/json-check.out"
-    fail "bfsg:check exited 0 on a JSON response"
-fi
-grep -q 'not an HTML page' "$WORK/json-check.out" || { cat "$WORK/json-check.out"; fail "bfsg:check did not explain why the JSON response was rejected"; }
-pass "bfsg:check rejects a JSON response"
+# 6c. Non-HTML answers are an operational error (exit 2), never a pass
+check json-route 2 "$BASE/live/json"
+grep -q 'not an HTML page' "$WORK/json-route.err" || { cat "$WORK/json-route.err"; fail "bfsg:check did not explain why the JSON response was rejected"; }
+pass "bfsg:check rejects a JSON response with exit 2"
 
-# 6d. HTML report: written to a file, localized, current version, and it passes the package's own analyzers
-php artisan bfsg:check /live/broken --format=html >"$WORK/html-report.out" 2>&1
-REPORT="$(grep -o '/[^ ]*report_[0-9_-]*\.html' "$WORK/html-report.out" | head -1)"
-{ [ -n "$REPORT" ] && [ -f "$REPORT" ]; } || { cat "$WORK/html-report.out"; fail "bfsg:check --format=html did not write a report file"; }
+# 6d. Options: --fail-on, unknown analyzers, markdown on stdout, --output
+check fail-on-none 0 /live/broken --fail-on=none
+check unknown-analyzer 2 /live/broken --only=nope
+check markdown 1 /live/broken --format=markdown
+[ "$(head -c 2 "$WORK/markdown.out")" = '# ' ] || { head -5 "$WORK/markdown.out"; fail "--format=markdown did not print the Markdown report"; }
+check output 1 /live/broken --format=json --output="$WORK/report.json"
+[ ! -s "$WORK/output.out" ] || { cat "$WORK/output.out"; fail "--output still printed to stdout"; }
+pure_json "$WORK/report.json" || fail "--output did not write the JSON report"
+grep -q "$WORK/report.json" "$WORK/output.err" || fail "--output did not name the file on stderr"
+pass "bfsg:check --fail-on=none, --only validation, --format=markdown, --output"
+
+# 6e. HTML report: written to a file, localized, current version, and it passes the package's own analyzers
+check html-report 1 /live/broken --format=html
+REPORT="$(grep -o '/[^ ]*report_[0-9_-]*\.html' "$WORK/html-report.err" | head -1)"
+{ [ -n "$REPORT" ] && [ -f "$REPORT" ]; } || { cat "$WORK/html-report.err"; fail "bfsg:check --format=html did not write a report file"; }
 grep -q '<html lang="en">' "$REPORT" || fail "the HTML report does not declare lang=\"en\""
 if grep -q 'v1\.5\.0\|2\.1\.0' "$REPORT"; then fail "the HTML report shows a stale package version"; fi
 cp "$REPORT" public/bfsg-live-report.html
-php artisan bfsg:check "$BASE/bfsg-live-report.html" --format=json >"$WORK/report-check.out" 2>"$WORK/report-check.err"
-php "$LIVE_DIR/violation-keys.php" <"$WORK/report-check.out" >"$WORK/report-check.keys" || fail "bfsg:check on the HTML report"
-[ ! -s "$WORK/report-check.keys" ] || { cat "$WORK/report-check.keys"; fail "the HTML report fails the package's own analyzers"; }
+check report-check 0 "$BASE/bfsg-live-report.html" --format=json --fail-on=notice
 rm -f public/bfsg-live-report.html
 pass "HTML report: lang, version, passes its own analyzers"
 
