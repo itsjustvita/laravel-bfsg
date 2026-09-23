@@ -6,6 +6,7 @@ use Carbon\CarbonInterface;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
@@ -156,5 +157,78 @@ class ReportRepositoryTest extends TestCase
         $this->assertSame('/html[1]/body[1]/img[1]', $violation->context['selector']);
         $this->assertInstanceOf(BfsgReport::class, $violation->report);
         $this->assertSame(3, BfsgReport::factory()->count(3)->create()->count());
+    }
+
+    private function migrateOn(string $connection): void
+    {
+        config()->set("database.connections.$connection", ['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'foreign_key_constraints' => true]);
+        config()->set('bfsg.reporting.database.connection', $connection);
+    }
+
+    public function test_a_fresh_install_through_the_migrator_on_the_configured_connection(): void
+    {
+        $this->migrateOn('bfsg_fresh');
+
+        $this->artisan('migrate', ['--database' => 'bfsg_fresh', '--path' => realpath(__DIR__.'/../../database/migrations'), '--realpath' => true])->assertSuccessful();
+
+        $schema = Schema::connection('bfsg_fresh');
+        $this->assertTrue($schema->hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $this->assertSame(
+            ['2026_09_18_000000_add_context_and_fingerprint_to_bfsg_violations', 'create_bfsg_tables'],
+            DB::connection('bfsg_fresh')->table('migrations')->orderBy('id')->pluck('migration')->all(),
+            'the dated upgrade sorts first and is a no-op on a fresh install',
+        );
+
+        $report = (new ReportRepository)->store($this->sampleResult());
+        $this->assertSame('bfsg_fresh', $report->getConnectionName());
+        $this->assertSame(2, DB::connection('bfsg_fresh')->table('bfsg_violations')->count());
+    }
+
+    public function test_the_migrator_upgrades_a_v2_table_with_rows(): void
+    {
+        $this->migrateOn('bfsg_v2');
+        $schema = Schema::connection('bfsg_v2');
+        $schema->create('bfsg_reports', function (Blueprint $table) {
+            $table->id();
+            $table->string('url');
+            $table->integer('total_violations')->default(0);
+            $table->float('score')->default(0);
+            $table->string('grade')->nullable();
+            $table->json('metadata')->nullable();
+            $table->timestamps();
+        });
+        $schema->create('bfsg_violations', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('report_id')->constrained('bfsg_reports')->cascadeOnDelete();
+            $table->string('analyzer');
+            $table->string('severity');
+            $table->text('message');
+            $table->text('element')->nullable();
+            $table->string('wcag_rule')->nullable();
+            $table->text('suggestion')->nullable();
+            $table->timestamp('created_at')->useCurrent();
+            $table->index('analyzer');
+            $table->index('severity');
+        });
+        $db = DB::connection('bfsg_v2');
+        $reportId = $db->table('bfsg_reports')->insertGetId(['url' => 'https://v2.example.com/', 'total_violations' => 1, 'score' => 95, 'grade' => 'A']);
+        $db->table('bfsg_violations')->insert(['report_id' => $reportId, 'analyzer' => 'images', 'severity' => 'error', 'message' => 'v2 message']);
+        $repository = app('migration.repository');
+        $repository->setSource('bfsg_v2');
+        $repository->createRepository();
+        $repository->log('create_bfsg_tables', 1);
+
+        $this->artisan('migrate', ['--database' => 'bfsg_v2', '--path' => realpath(__DIR__.'/../../database/migrations'), '--realpath' => true])->assertSuccessful();
+
+        $this->assertTrue($schema->hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $row = $db->table('bfsg_violations')->sole();
+        $this->assertSame('v2 message', $row->message);
+        $this->assertNull($row->key);
+        $this->assertNull($row->fingerprint);
+        $this->assertTrue((new ReportRepository)->isMigrated());
+
+        $this->artisan('migrate:rollback', ['--database' => 'bfsg_v2', '--path' => realpath(__DIR__.'/../../database/migrations'), '--realpath' => true])->assertSuccessful();
+        $this->assertFalse($schema->hasColumn('bfsg_violations', 'fingerprint'));
+        $this->assertSame('v2 message', $db->table('bfsg_violations')->value('message'));
     }
 }
