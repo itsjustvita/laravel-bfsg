@@ -15,16 +15,24 @@ use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Support\Locale;
 use ItsJustVita\LaravelBfsg\Violation;
+use Symfony\Component\Console\Exception\ExceptionInterface as ConsoleException;
 use Symfony\Component\Console\Formatter\OutputFormatter;
+use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\ConsoleOutputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 use Throwable;
 
 /**
  * Checks one page. Exit codes: 0 threshold met, 1 threshold exceeded (--fail-on / --min-score), 2 operational
- * error (invalid option, fetch, authentication, browser, database). With --format=json|markdown only the report
- * is written to stdout; every status line goes to stderr.
+ * error (unknown or invalid option, option combination that would be ignored, fetch, authentication, browser,
+ * database). With --format=json|markdown only the report is written to stdout (also with -q); every status line
+ * goes to stderr.
+ *
+ * Programmatic calls: stderr exists only on a ConsoleOutputInterface. Artisan::call() with the default buffered
+ * output (and Artisan::output()) therefore receives the status lines in the same buffer as the report; pass
+ * --output=<file> to get the report alone, or an output that implements ConsoleOutputInterface.
  */
 class BfsgCheckCommand extends Command
 {
@@ -35,6 +43,12 @@ class BfsgCheckCommand extends Command
     private const FAIL_ON = ['error', 'warning', 'notice', 'none'];
 
     private const AUTH_OPTIONS = ['auth', 'bearer', 'jwt', 'api-key', 'session', 'sanctum'];
+
+    /** Options only --browser reads (they have defaults, so "given" means present on the command line). */
+    private const BROWSER_OPTIONS = ['headless', 'timeout', 'wait-for', 'engine'];
+
+    /** Options only a login (--auth, --sanctum) reads. --login-url is exempt: it also names the login page to detect. */
+    private const LOGIN_OPTIONS = ['email', 'password', 'username-field', 'password-field'];
 
     protected $signature = 'bfsg:check {url? : URL, or a path of this application (default: /)}
         {--browser : Render the page with Playwright before the analysis}
@@ -74,14 +88,30 @@ class BfsgCheckCommand extends Command
 
     private string $locale;
 
+    /** Unknown options and missing arguments are operational errors (exit 2), never the threshold exit code 1. */
+    public function run(InputInterface $input, OutputInterface $output): int
+    {
+        try {
+            return parent::run($input, $output);
+        } catch (ConsoleException $e) {
+            $stderr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
+            $stderr->writeln('<error>'.OutputFormatter::escape($e->getMessage()).'</error>');
+
+            return self::OPERATIONAL_ERROR;
+        }
+    }
+
     public function handle(Bfsg $bfsg, UrlFetcher $fetcher, ReportRepository $repository, BrowserAnalyzer $browser): int
     {
         try {
             $format = $this->format();
             $failOn = $this->failOn();
             $minScore = $this->minScore();
+            $this->assertOptionCombinations();
             $registry = $this->registry($bfsg);
-            $this->locale = $this->option('locale') ?: (config('bfsg.locale') ?: app()->getLocale());
+            $this->locale = $this->option('locale') !== null
+                ? Locale::validate((string) $this->option('locale'))
+                : (config('bfsg.locale') ?: app()->getLocale());
 
             if ($this->option('save') && ! $repository->isMigrated()) {
                 throw new InvalidArgumentException('--save needs the bfsg tables with the v3 columns: run php artisan migrate');
@@ -153,6 +183,51 @@ class BfsgCheckCommand extends Command
         return (int) $minScore;
     }
 
+    /** Options that would be silently ignored in this combination are an error. */
+    private function assertOptionCombinations(): void
+    {
+        $given = fn (string $option): bool => $this->input->hasParameterOption('--'.$option, true);
+        $auth = array_values(array_filter(self::AUTH_OPTIONS, fn (string $option) => (bool) $this->option($option)));
+
+        if ($this->option('browser')) {
+            $login = [...$auth, ...($this->option('as') !== null ? ['as'] : [])];
+
+            if ($login !== []) {
+                throw new InvalidArgumentException("--browser cannot be combined with --{$login[0]}: the browser does not share the login.");
+            }
+        } else {
+            foreach (self::BROWSER_OPTIONS as $option) {
+                if ($given($option)) {
+                    throw new InvalidArgumentException("--{$option} needs --browser.");
+                }
+            }
+        }
+
+        if ($this->option('as') !== null && $auth !== []) {
+            throw new InvalidArgumentException("--as cannot be combined with --{$auth[0]}: --as acts as the user in-process, the auth options fetch over HTTP.");
+        }
+
+        if ($this->option('guard') !== null && $this->option('as') === null) {
+            throw new InvalidArgumentException('--guard needs --as.');
+        }
+
+        if (! $this->option('auth') && ! $this->option('sanctum')) {
+            foreach (self::LOGIN_OPTIONS as $option) {
+                if ($this->option($option) !== null) {
+                    throw new InvalidArgumentException("--{$option} needs --auth or --sanctum.");
+                }
+            }
+        }
+
+        if ($this->option('json-auth') && ! $this->option('auth')) {
+            throw new InvalidArgumentException('--json-auth needs --auth.');
+        }
+
+        if ($given('api-key-header') && ! $this->option('api-key')) {
+            throw new InvalidArgumentException('--api-key-header needs --api-key.');
+        }
+    }
+
     /** The registry narrowed by --only / --except; unknown keys are an error. */
     private function registry(Bfsg $bfsg): Bfsg
     {
@@ -172,6 +247,10 @@ class BfsgCheckCommand extends Command
             }
 
             $registry = $option === 'only' ? $registry->only($keys) : $registry->except($keys);
+
+            if ($registry->keys() === []) {
+                throw new InvalidArgumentException('--only and --except leave no analyzer to run.');
+            }
         }
 
         return $registry;
@@ -210,12 +289,6 @@ class BfsgCheckCommand extends Command
     /** @return array{0: string, 1: string} */
     private function render(BrowserAnalyzer $browser, string $url): array
     {
-        foreach ([...self::AUTH_OPTIONS, 'as'] as $option) {
-            if ($this->option($option)) {
-                throw new InvalidArgumentException("--browser cannot be combined with --{$option}: the browser does not share the login.");
-            }
-        }
-
         $headless = filter_var($this->option('headless'), FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
         $timeout = (string) $this->option('timeout');
 
@@ -353,7 +426,8 @@ class BfsgCheckCommand extends Command
         $output = $this->option('output');
 
         if ($output === null && in_array($format, ['json', 'markdown'], true)) {
-            $this->output->write($report->render(), false, OutputInterface::OUTPUT_RAW);
+            // VERBOSITY_QUIET: -q silences the status lines, never the report itself.
+            $this->output->write($report->render(), false, OutputInterface::OUTPUT_RAW | OutputInterface::VERBOSITY_QUIET);
 
             return;
         }

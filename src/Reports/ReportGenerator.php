@@ -7,6 +7,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\View;
 use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
+use ItsJustVita\LaravelBfsg\Support\Locale;
 use ItsJustVita\LaravelBfsg\Support\PackageVersion;
 use ItsJustVita\LaravelBfsg\Violation;
 use RuntimeException;
@@ -29,11 +30,25 @@ class ReportGenerator
 
     private CarbonImmutable $analyzedAt;
 
+    /** Makes defaultPath() unique when two reports are written within the same second. */
+    private string $pathSuffix;
+
+    /**
+     * @throws InvalidArgumentException when an explicit or result locale is not well-formed (it becomes a path
+     *                                  segment of the translation loader); config/app locales are trusted
+     */
     public function __construct(private AnalysisResult $result, ?string $locale = null, ?ScoreCalculator $scores = null)
     {
-        $this->locale = $locale ?? $result->locale() ?? (config('bfsg.locale') ?: app()->getLocale());
+        $given = $locale ?? $result->locale();
+
+        if ($given !== null && ! Locale::isWellFormed($given)) {
+            throw new InvalidArgumentException("Invalid locale [{$given}]. Use a language code such as en, de or de_AT.");
+        }
+
+        $this->locale = $given ?? (config('bfsg.locale') ?: app()->getLocale());
         $this->scores = $scores ?? ScoreCalculator::fromConfig();
         $this->analyzedAt = CarbonImmutable::now();
+        $this->pathSuffix = bin2hex(random_bytes(3));
     }
 
     /** @throws InvalidArgumentException for a format outside FORMATS */
@@ -131,28 +146,29 @@ class ReportGenerator
         };
     }
 
-    /** Write the rendered report to $path (directories are created) and return the path. */
+    /** Render the report, then write it to $path (directories are created) and return the path. */
     public function saveTo(string $path): string
     {
+        $content = $this->render();
         $directory = dirname($path);
 
         if (! is_dir($directory) && ! mkdir($directory, 0755, true) && ! is_dir($directory)) {
             throw new RuntimeException("Could not create the report directory {$directory}.");
         }
 
-        if (file_put_contents($path, $this->render()) === false) {
+        if (file_put_contents($path, $content) === false) {
             throw new RuntimeException("Could not write the report to {$path}.");
         }
 
         return $path;
     }
 
-    /** `bfsg.reporting.output_path`/report_{Y-m-d_His}.{extension} */
+    /** `bfsg.reporting.output_path`/report_{Y-m-d_His}_{6 hex}.{extension}, stable for this report */
     public function defaultPath(): string
     {
         $directory = rtrim((string) (config('bfsg.reporting.output_path') ?: storage_path('app/bfsg-reports')), '/');
 
-        return $directory.'/report_'.$this->analyzedAt->format('Y-m-d_His').'.'.$this->extension();
+        return $directory.'/report_'.$this->analyzedAt->format('Y-m-d_His').'_'.$this->pathSuffix.'.'.$this->extension();
     }
 
     private function html(): string
@@ -162,11 +178,16 @@ class ReportGenerator
 
     private function pdf(): string
     {
-        if (! class_exists(Pdf::class)) {
+        if (! $this->pdfAvailable()) {
             throw new RuntimeException('PDF reports require barryvdh/laravel-dompdf: composer require barryvdh/laravel-dompdf');
         }
 
         return Pdf::loadHTML($this->html())->output();
+    }
+
+    protected function pdfAvailable(): bool
+    {
+        return class_exists(Pdf::class);
     }
 
     /** @return array<string, mixed> */

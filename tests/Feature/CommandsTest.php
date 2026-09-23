@@ -12,7 +12,9 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
+use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Tests\Support\CapturedOutput;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -85,6 +87,24 @@ class CommandsTest extends TestCase
             'unknown analyzer in --only' => [self::ACCESSIBLE, ['--only' => 'images,nope'], 2],
             'unknown analyzer in --except' => [self::ACCESSIBLE, ['--except' => 'nope'], 2],
             '--output with cli' => [self::ACCESSIBLE, ['--output' => '/tmp/x.txt'], 2],
+            'score alone fails with --fail-on=none' => [self::ERRORS, ['--fail-on' => 'none', '--min-score' => '100'], 1],
+            'unknown option' => [self::ACCESSIBLE, ['--failon' => 'warning'], 2],
+            'empty analyzer selection' => [self::ACCESSIBLE, ['--only' => 'images', '--except' => 'images'], 2],
+            'malformed locale' => [self::ACCESSIBLE, ['--locale' => '../../tmp/zz'], 2],
+            'locale without translations' => [self::ACCESSIBLE, ['--locale' => 'xx'], 2],
+            '--as with --bearer' => [self::ACCESSIBLE, ['--as' => '7', '--bearer' => 'token'], 2],
+            '--as with --auth' => [self::ACCESSIBLE, ['--as' => '7', '--auth' => true, '--email' => 'a@example.com', '--password' => 'p'], 2],
+            '--as with --session' => [self::ACCESSIBLE, ['--as' => '7', '--session' => 'a=b'], 2],
+            '--engine without --browser' => [self::ACCESSIBLE, ['--engine' => 'firefox'], 2],
+            '--timeout without --browser' => [self::ACCESSIBLE, ['--timeout' => '5000'], 2],
+            '--wait-for without --browser' => [self::ACCESSIBLE, ['--wait-for' => 'main'], 2],
+            '--headless without --browser' => [self::ACCESSIBLE, ['--headless' => 'false'], 2],
+            '--email without --auth' => [self::ACCESSIBLE, ['--email' => 'a@example.com'], 2],
+            '--password without --auth' => [self::ACCESSIBLE, ['--password' => 'p'], 2],
+            '--username-field without --auth' => [self::ACCESSIBLE, ['--username-field' => 'login'], 2],
+            '--json-auth without --auth' => [self::ACCESSIBLE, ['--json-auth' => true], 2],
+            '--api-key-header without --api-key' => [self::ACCESSIBLE, ['--api-key-header' => 'X-Key'], 2],
+            '--guard without --as' => [self::ACCESSIBLE, ['--guard' => 'web'], 2],
         ];
     }
 
@@ -137,8 +157,60 @@ class CommandsTest extends TestCase
 
         [, $output] = $this->check(['url' => 'http://example.com/page', '--format' => 'markdown']);
 
+        $result = app(Bfsg::class)->analyze(self::ERRORS, ['url' => 'http://example.com/page', 'locale' => 'en', 'fragment' => false]);
+        $expected = (new ReportGenerator($result, 'en'))->format('markdown')->render();
+        $withoutDates = fn (string $text) => preg_replace('/\d{4}-\d{2}-\d{2} \d{2}:\d{2}/', 'DATE', $text);
+
         $this->assertStringStartsWith("# Accessibility Report\n", $output->stdout());
-        $this->assertStringNotContainsString('Checking', $output->stdout());
+        $this->assertSame($withoutDates($expected), $withoutDates($output->stdout()), 'stdout is exactly the report');
+        $this->assertStringContainsString('Checking', $output->stderr());
+    }
+
+    public function test_unknown_options_exit_2_with_the_reason_on_stderr(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--min_score' => '90']);
+
+        $this->assertSame(2, $exitCode, 'a typo is an operational error, never the threshold exit code 1');
+        $this->assertSame('', $output->stdout());
+        $this->assertStringContainsString('The "--min_score" option does not exist.', $output->stderr());
+        Http::assertNothingSent();
+    }
+
+    public function test_ignored_option_combinations_are_rejected_with_a_reason(): void
+    {
+        $this->fakeSite();
+
+        $cases = [
+            'the auth options fetch over HTTP' => ['--as' => '7', '--bearer' => 'token'],
+            '--engine needs --browser.' => ['--engine' => 'firefox'],
+            '--email needs --auth or --sanctum.' => ['--email' => 'a@example.com'],
+            '--api-key-header needs --api-key.' => ['--api-key-header' => 'X-Key'],
+            '--guard needs --as.' => ['--guard' => 'web'],
+            'Unsupported locale [xx]' => ['--locale' => 'xx'],
+            '--only and --except leave no analyzer to run.' => ['--only' => 'images', '--except' => 'images'],
+        ];
+
+        foreach ($cases as $reason => $options) {
+            [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', ...$options]);
+
+            $this->assertSame(2, $exitCode, $reason);
+            $this->assertStringContainsString($reason, $output->stderr());
+            $this->assertSame('', $output->stdout(), $reason);
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_quiet_silences_status_lines_but_not_the_report(): void
+    {
+        $this->fakeSite(self::ERRORS);
+
+        [$exitCode, $output] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--quiet' => true]);
+
+        $this->assertSame(1, $exitCode);
+        $this->assertSame('http://example.com/page', json_decode($output->stdout(), true, flags: JSON_THROW_ON_ERROR)['url']);
     }
 
     public function test_html_and_pdf_are_written_to_files_and_the_path_goes_to_stderr(): void
@@ -153,7 +225,7 @@ class CommandsTest extends TestCase
             [, $json] = $this->check(['url' => 'http://example.com/page', '--format' => 'json', '--output' => $directory.'/report.json']);
 
             $this->assertSame('', $html->stdout());
-            $this->assertMatchesRegularExpression('#Report written to '.preg_quote($directory, '#').'/report_[0-9_-]+\.html#', $html->stderr());
+            $this->assertMatchesRegularExpression('#Report written to '.preg_quote($directory, '#').'/report_[0-9_-]+_[0-9a-f]{6}\.html#', $html->stderr());
             $this->assertCount(1, glob($directory.'/report_*.html'));
             $this->assertStringStartsWith('%PDF', (string) file_get_contents($directory.'/custom.pdf'));
             $this->assertStringContainsString('Report written to '.$directory.'/custom.pdf', $pdf->stderr());

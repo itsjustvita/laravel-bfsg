@@ -1,11 +1,19 @@
 @php
     $t = fn (string $key, array $replace = []) => __('bfsg::report.'.$key, $replace, $locale);
     $summary = $report['summary'];
-    $cell = fn (?string $text) => str_replace(['|', "\n"], ['\|', ' '], (string) $text);
-    $code = function (string $text): string {
-        $fence = str_contains($text, '`') ? '``' : '`';
+    // Page-controlled text (messages carry page params, the URL, snippets) must not become Markdown structure or
+    // raw HTML: one line each, <, > and & as entities outside code spans, code spans fenced longer than any
+    // backtick run inside them (their content is literal, so no entity escaping there).
+    $line = fn (?string $text) => trim((string) preg_replace('/\s*\R\s*/u', ' ', (string) $text));
+    $text = fn (?string $value) => str_replace(['&', '<', '>'], ['&amp;', '&lt;', '&gt;'], $line($value));
+    $cell = fn (?string $value) => str_replace('|', '\|', $text($value));
+    $code = function (string $value) use ($line): string {
+        $value = $line($value);
+        preg_match_all('/`+/', $value, $runs);
+        $longest = max(array_map('strlen', $runs[0]) ?: [0]);
+        $fence = str_repeat('`', $longest + 1);
 
-        return $fence.($fence === '``' ? ' '.$text.' ' : $text).$fence;
+        return $fence.($longest > 0 ? ' '.$value.' ' : $value).$fence;
     };
 @endphp
 # {{ $t('title') }}
@@ -31,8 +39,8 @@
 
 @foreach($violations as $violation)
 - **{!! \ItsJustVita\LaravelBfsg\Severity::from($violation['severity'])->label($locale) !!}** · {!! $violation['rule'] === null ? $t('no_rule') : $t('rule').' '.$violation['rule'] !!}{!! $violation['element'] === null ? '' : ' · '.$code($violation['element']) !!}  
-  {!! $violation['message'] !!}  
-  _{!! $t('suggestion') !!}:_ {!! $violation['suggestion'] !!}  
+  {!! $text($violation['message']) !!}  
+  _{!! $t('suggestion') !!}:_ {!! $text($violation['suggestion']) !!}  
 @if($violation['snippet'] !== null)
   {!! $code($violation['snippet']) !!}
 @endif

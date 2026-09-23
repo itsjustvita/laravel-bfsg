@@ -13,9 +13,15 @@ final class PackageVersion
     public static function get(): string
     {
         try {
-            return InstalledVersions::getPrettyVersion(self::PACKAGE) ?? 'unknown';
+            return self::normalize(InstalledVersions::getPrettyVersion(self::PACKAGE) ?? 'unknown');
         } catch (OutOfBoundsException) {
             return 'unknown';
         }
+    }
+
+    /** Tags carry a leading "v" (v3.0.0); reports show the bare version (3.0.0, spec §12). Branch names stay. */
+    public static function normalize(string $version): string
+    {
+        return (string) preg_replace('/^v(?=\d)/', '', $version);
     }
 }

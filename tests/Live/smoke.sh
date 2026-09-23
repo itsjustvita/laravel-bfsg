@@ -138,7 +138,7 @@ pass "bfsg:check --fail-on=none, --only validation, --format=markdown, --output"
 
 # 6e. HTML report: written to a file, localized, current version, and it passes the package's own analyzers
 check html-report 1 /live/broken --format=html
-REPORT="$(grep -o '/[^ ]*report_[0-9_-]*\.html' "$WORK/html-report.err" | head -1)"
+REPORT="$(grep -o '/[^ ]*report_[0-9a-f_-]*\.html' "$WORK/html-report.err" | head -1)"
 { [ -n "$REPORT" ] && [ -f "$REPORT" ]; } || { cat "$WORK/html-report.err"; fail "bfsg:check --format=html did not write a report file"; }
 grep -q '<html lang="en">' "$REPORT" || fail "the HTML report does not declare lang=\"en\""
 if grep -q 'v1\.5\.0\|2\.1\.0' "$REPORT"; then fail "the HTML report shows a stale package version"; fi

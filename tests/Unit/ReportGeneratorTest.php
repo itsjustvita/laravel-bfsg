@@ -105,6 +105,7 @@ class ReportGeneratorTest extends TestCase
 
         $own = (new Bfsg)->analyze($html, ['url' => 'report.html']);
 
+        $this->assertCount(count(Bfsg::ANALYZERS), $own->analyzersRun(), 'every analyzer ran, so a clean result is not vacuous');
         $this->assertSame([], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element.' '.$violation->snippet, $own->all()));
     }
 
@@ -127,10 +128,64 @@ class ReportGeneratorTest extends TestCase
         $this->assertStringContainsString('Keine Barrierefreiheitsprobleme gefunden.', $clean);
     }
 
+    public function test_markdown_escapes_page_controlled_text(): void
+    {
+        $result = new AnalysisResult([
+            'images' => [new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1', ['src' => "x.jpg\"><img src=x onerror=alert(1)>\n\n# injected"], 'img', '/html[1]/body[1]/img[1]', "<img\n\nsrc=\"a``b\">")],
+        ], ['images'], 'https://example.com/<script>alert(1)</script>');
+
+        $markdown = (new ReportGenerator($result, 'en'))->format('markdown')->render();
+
+        $this->assertStringNotContainsString('<script>', $markdown);
+        $this->assertStringNotContainsString('<img src=x', $markdown);
+        $this->assertStringContainsString('| URL | https://example.com/&lt;script&gt;alert(1)&lt;/script&gt; |', $markdown);
+        $this->assertStringContainsString('(x.jpg"&gt;&lt;img src=x onerror=alert(1)&gt; # injected)', $markdown, 'newlines collapsed, no heading injected');
+        $this->assertStringContainsString('``` <img src="a``b"> ```', $markdown, 'the fence is longer than any backtick run in the snippet');
+        $this->assertStringNotContainsString("\n# injected", $markdown);
+    }
+
     public function test_pdf_report(): void
     {
         $this->assertStringStartsWith('%PDF', (new ReportGenerator($this->sampleResult()))->format('pdf')->render());
         $this->assertStringStartsWith('%PDF', (new ReportGenerator(new AnalysisResult([], [])))->format('pdf')->render());
+    }
+
+    public function test_pdf_without_dompdf_fails_with_the_install_hint_and_leaves_no_directory(): void
+    {
+        $report = new class(new AnalysisResult([], [])) extends ReportGenerator
+        {
+            protected function pdfAvailable(): bool
+            {
+                return false;
+            }
+        };
+        $directory = sys_get_temp_dir().'/bfsg-no-pdf-'.uniqid();
+
+        try {
+            $report->format('pdf')->saveTo($directory.'/report.pdf');
+            $this->fail('the PDF was written without dompdf');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('composer require barryvdh/laravel-dompdf', $e->getMessage());
+        }
+
+        $this->assertDirectoryDoesNotExist($directory, 'rendering happens before the directory is created');
+    }
+
+    public function test_default_paths_are_unique_per_report(): void
+    {
+        $first = (new ReportGenerator($this->sampleResult()))->format('html');
+        $second = (new ReportGenerator($this->sampleResult()))->format('html');
+
+        $this->assertNotSame($first->defaultPath(), $second->defaultPath(), 'two reports in the same second do not overwrite each other');
+        $this->assertSame($first->defaultPath(), $first->defaultPath(), 'stable for one report');
+    }
+
+    public function test_locales_that_are_not_well_formed_are_rejected(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid locale [../../tmp/zz]');
+
+        new ReportGenerator($this->sampleResult('../../tmp/zz'));
     }
 
     public function test_save_to_writes_the_rendered_report_and_default_paths_use_the_config(): void
@@ -139,7 +194,7 @@ class ReportGeneratorTest extends TestCase
         config()->set('bfsg.reporting.output_path', $directory);
         $report = (new ReportGenerator($this->sampleResult()))->format('markdown');
 
-        $this->assertMatchesRegularExpression('#^'.preg_quote($directory, '#').'/report_\d{4}-\d{2}-\d{2}_\d{6}\.md$#', $report->defaultPath());
+        $this->assertMatchesRegularExpression('#^'.preg_quote($directory, '#').'/report_\d{4}-\d{2}-\d{2}_\d{6}_[0-9a-f]{6}\.md$#', $report->defaultPath());
         $this->assertSame('pdf', (clone $report)->format('pdf')->extension());
 
         $path = $report->saveTo($directory.'/nested/r.md');
