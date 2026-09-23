@@ -26,6 +26,7 @@ set_env() {
 
 set_env APP_DEBUG true
 set_env BFSG_MIDDLEWARE_ENABLED true
+set_env BFSG_SAVE_TO_DB true
 
 php artisan config:clear >/dev/null
 echo "setup: itsjustvita/laravel-bfsg installed into $APP_DIR"

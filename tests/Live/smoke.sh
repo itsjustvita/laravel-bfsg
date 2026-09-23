@@ -179,6 +179,26 @@ header() { # url header-name -> value (empty when absent)
 [ "$(header "$BASE/live/redirect" Location)" = "$BASE/live/accessible" ] || fail "middleware: redirect location changed"
 pass "middleware: header on HTML only; JSON, download and redirect untouched"
 
+# 7b. Middleware terminate(): every analyzed page is stored (clean pages too), the log line carries counts only,
+#     and in-process requests of bfsg:check are never analyzed by the middleware
+curl -s -o /dev/null "$BASE/live/accessible"
+stored=""
+for _ in $(seq 1 25); do
+    php artisan bfsg:history --url="$BASE/live/broken" >"$WORK/mw-broken.out" 2>&1
+    php artisan bfsg:history --url="$BASE/live/accessible" >"$WORK/mw-accessible.out" 2>&1
+    if grep -q 'live/broken' "$WORK/mw-broken.out" && grep -q 'live/accessible' "$WORK/mw-accessible.out"; then
+        stored=yes
+        break
+    fi
+    sleep 0.2
+done
+[ -n "$stored" ] || { cat "$WORK/mw-broken.out" "$WORK/mw-accessible.out"; fail "middleware: pages were not stored after the response (terminate)"; }
+LOG_RUN="$(tail -c +"$((LOG_OFFSET + 1))" "$LOG" 2>/dev/null)"
+echo "$LOG_RUN" | grep -q "BFSG: [0-9]* violations on $BASE/live/broken {\"errors\":" || { echo "$LOG_RUN" | tail -5; fail "middleware: no count-only log line for the broken page"; }
+if echo "$LOG_RUN" | grep 'BFSG: ' | grep -q 'images.missing_alt'; then fail "middleware: the log line still carries the violation payload"; fi
+if echo "$LOG_RUN" | grep -q 'BFSG: [0-9]* violations on http://localhost'; then fail "middleware: analyzed an in-process request of bfsg:check"; fi
+pass "middleware: terminate() stores broken and clean pages, logs counts only, skips in-process checks"
+
 # 8. MCP server over stdio
 cat >"$WORK/mcp.in" <<'JSON'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"bfsg-live","version":"1"}}}

@@ -99,6 +99,7 @@ return [
     'middleware' => [
         'enabled' => env('BFSG_MIDDLEWARE_ENABLED', false),
         'log_violations' => true,
+        'log_channel' => null, // null = the default log channel
         'ignored_paths' => [
             'admin/*',
             'api/*',

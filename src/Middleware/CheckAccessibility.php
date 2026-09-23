@@ -4,97 +4,95 @@ namespace ItsJustVita\LaravelBfsg\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Log;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg;
+use ItsJustVita\LaravelBfsg\Http\InProcessFetcher;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
-use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\RedirectResponse;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
 
+/**
+ * Analyzes full HTML pages after the response has been sent (terminate), logs the counts per severity on the
+ * configured channel and stores the report when `bfsg.reporting.save_to_database` is on. With `app.debug` the
+ * analysis runs in handle() instead so the X-BFSG-Violations header can be set. Never breaks the page.
+ */
 class CheckAccessibility
 {
-    /**
-     * Handle an incoming request.
-     */
-    public function handle(Request $request, Closure $next)
+    /** Request attribute: handle() accepted the response for analysis. */
+    public const PENDING = 'bfsg.pending';
+
+    /** Request attribute: the result of a synchronous (debug) analysis, reused by terminate(). */
+    public const RESULT = 'bfsg.result';
+
+    public function handle(Request $request, Closure $next): mixed
     {
         $response = $next($request);
 
-        // Only check HTML responses
-        if (! $this->shouldCheck($request, $response)) {
-            return $response;
-        }
-
-        // Get HTML content
-        $html = $response->getContent();
-
-        if (! is_string($html) || trim($html) === '') {
-            return $response;
-        }
-
-        // The middleware must never break the page it inspects.
         try {
-            $result = Bfsg::analyze($html, ['url' => $request->fullUrl()]);
+            if ($this->shouldCheck($request, $response)) {
+                $request->attributes->set(self::PENDING, true);
 
-            if ($result->count() > 0) {
-                $this->handleViolations($request, $result);
-
-                // Add violations to response headers for debugging
                 if (config('app.debug')) {
-                    $response->headers->set('X-BFSG-Violations', (string) $result->count());
+                    $result = $this->analyze($request, $response);
+                    $request->attributes->set(self::RESULT, $result);
+
+                    if ($result->count() > 0) {
+                        $response->headers->set('X-BFSG-Violations', (string) $result->count());
+                    }
                 }
             }
         } catch (Throwable $e) {
-            Log::error('BFSG: accessibility analysis failed for '.$request->fullUrl(), [
-                'exception' => $e,
-            ]);
+            $this->failed($request, $e);
         }
 
         return $response;
     }
 
-    /**
-     * Determine if the response should be checked
-     */
-    protected function shouldCheck(Request $request, $response): bool
+    public function terminate(Request $request, SymfonyResponse $response): void
     {
-        // Only check GET requests
-        if (! $request->isMethod('GET')) {
+        if (! $request->attributes->get(self::PENDING)) {
+            return;
+        }
+
+        $request->attributes->remove(self::PENDING);
+
+        try {
+            $result = $request->attributes->get(self::RESULT) ?? $this->analyze($request, $response);
+
+            $this->log($result);
+
+            if (config('bfsg.reporting.save_to_database')) {
+                app(ReportRepository::class)->store($result, ['source' => 'middleware']);
+            }
+        } catch (Throwable $e) {
+            $this->failed($request, $e);
+        }
+    }
+
+    /** GET, a successful Illuminate HTML response with a body, not XHR/Livewire/Inertia, not an ignored path. */
+    protected function shouldCheck(Request $request, mixed $response): bool
+    {
+        if (! config('bfsg.middleware.enabled', false) || ! $request->isMethod('GET') || $request->attributes->get(InProcessFetcher::SKIP_ATTRIBUTE)) {
             return false;
         }
 
-        // Only full HTML page responses carry a body worth analyzing
-        if (! $response instanceof SymfonyResponse
-            || $response instanceof RedirectResponse
-            || $response instanceof JsonResponse
-            || $response instanceof StreamedResponse
-            || $response instanceof BinaryFileResponse) {
+        if ($request->ajax() || $request->headers->has('X-Livewire') || $request->headers->has('X-Inertia')) {
             return false;
         }
 
-        // Skip redirects, error pages and anything else that is not a 2xx page
-        if (! $response->isSuccessful()) {
+        if (! $response instanceof Response || ! $response->isSuccessful() || stripos((string) $response->headers->get('Content-Type', ''), 'text/html') === false) {
             return false;
         }
 
-        // Only check HTML responses
-        $contentType = $response->headers->get('Content-Type', '');
-        if (stripos($contentType, 'text/html') === false) {
+        $content = $response->getContent();
+
+        if (! is_string($content) || trim($content) === '') {
             return false;
         }
 
-        // Skip if disabled (config default is false)
-        if (! config('bfsg.middleware.enabled', false)) {
-            return false;
-        }
-
-        // Check if URL is in ignored paths
-        $ignoredPaths = config('bfsg.middleware.ignored_paths', []);
-        foreach ($ignoredPaths as $path) {
+        foreach ((array) config('bfsg.middleware.ignored_paths', []) as $path) {
             if ($request->is($path)) {
                 return false;
             }
@@ -103,39 +101,33 @@ class CheckAccessibility
         return true;
     }
 
-    /**
-     * Handle found violations
-     */
-    protected function handleViolations(Request $request, AnalysisResult $result): void
+    protected function analyze(Request $request, SymfonyResponse $response): AnalysisResult
     {
-        $url = $request->fullUrl();
-
-        // Log violations
-        if (config('bfsg.middleware.log_violations', true)) {
-            $counts = $result->countBySeverity();
-
-            Log::warning("BFSG: {$result->count()} accessibility violations found on {$url}", [
-                'url' => $url,
-                'errors' => $counts['error'],
-                'warnings' => $counts['warning'],
-                'notices' => $counts['notice'],
-                'violations' => $result->toArray()['violations'],
-                'user_id' => $request->user()?->id,
-                'ip' => $request->ip(),
-            ]);
-        }
-
-        // Store in database if configured
-        if (config('bfsg.reporting.save_to_database')) {
-            $this->storeViolations($result);
-        }
+        return Bfsg::analyze((string) $response->getContent(), ['url' => $request->fullUrl()]);
     }
 
-    /**
-     * Store the analysis in the database
-     */
-    protected function storeViolations(AnalysisResult $result): void
+    /** One line per page with findings; counts only, at warning level when the page is not accessible. */
+    protected function log(AnalysisResult $result): void
     {
-        app(ReportRepository::class)->store($result);
+        if ($result->count() === 0 || ! config('bfsg.middleware.log_violations', true)) {
+            return;
+        }
+
+        $counts = $result->countBySeverity();
+
+        Log::channel(config('bfsg.middleware.log_channel'))->log(
+            $result->isAccessible() ? 'info' : 'warning',
+            "BFSG: {$result->count()} violations on {$result->url()}",
+            ['errors' => $counts['error'], 'warnings' => $counts['warning'], 'notices' => $counts['notice']],
+        );
+    }
+
+    protected function failed(Request $request, Throwable $e): void
+    {
+        try {
+            Log::error('BFSG: accessibility analysis failed for '.$request->fullUrl(), ['exception' => $e]);
+        } catch (Throwable) {
+            // logging must not break the page either
+        }
     }
 }
