@@ -3,56 +3,52 @@
 namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Tool;
 use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
+use Throwable;
 
 #[IsReadOnly]
 class GetHistory extends Tool
 {
+    use ToolHelpers;
+
     protected string $name = 'get_history';
 
-    protected string $description = 'Retrieve stored accessibility check reports from the database. Optionally filter by URL.';
+    protected string $description = 'List stored accessibility reports, newest first, optionally for one URL.';
 
     public function schema(JsonSchema $schema): array
     {
         return [
-            'url' => $schema->string()->description('Filter reports by URL'),
-            'limit' => $schema->integer()->description('Maximum number of reports to return (default: 20)'),
+            'url' => $schema->string()->description('Only reports of this exact URL'),
+            'limit' => $schema->integer()->description('Maximum number of reports, 1-100 (default: 20)'),
         ];
     }
 
     public function handle(Request $request): Response
     {
         try {
-            $query = BfsgReport::query()->latest();
+            $query = BfsgReport::query()->latest()->latest('id');
 
-            $url = $request->get('url');
-            if (! empty($url)) {
+            if (($url = $this->stringArgument($request, 'url')) !== null) {
                 $query->forUrl($url);
             }
 
-            $limit = $request->get('limit', 20);
-            $reports = $query->limit((int) $limit)->get();
-
-            if ($reports->isEmpty()) {
-                return Response::json(['message' => 'No reports found.', 'reports' => []]);
-            }
-
-            $result = $reports->map(fn ($r) => [
-                'id' => $r->id,
-                'url' => $r->url,
-                'total_violations' => $r->total_violations,
-                'score' => $r->score,
-                'grade' => $r->grade,
-                'created_at' => $r->created_at->toIso8601String(),
-            ])->toArray();
-
-            return Response::json(['reports' => $result]);
-        } catch (\Exception $e) {
-            return Response::error('Database error: '.$e->getMessage().'. Make sure you have run: php artisan vendor:publish --tag=bfsg-migrations && php artisan migrate');
+            $reports = $query->limit(max(1, min(100, (int) $request->get('limit', 20))))->get();
+        } catch (Throwable $e) {
+            return Response::error('Database error: '.$e->getMessage().'. Run php artisan migrate.');
         }
+
+        return Response::json(['reports' => $reports->map(fn (BfsgReport $report) => [
+            'id' => $report->id,
+            'url' => $report->url,
+            'total_violations' => $report->total_violations,
+            'score' => (int) round($report->score),
+            'grade' => $report->grade,
+            'created_at' => $report->created_at?->toIso8601String(),
+        ])->values()->all()]);
     }
 }

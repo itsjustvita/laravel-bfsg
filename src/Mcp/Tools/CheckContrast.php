@@ -4,41 +4,50 @@ namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use ItsJustVita\LaravelBfsg\Css\Color;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsReadOnly;
 
+#[IsReadOnly]
 class CheckContrast extends Tool
 {
+    use ToolHelpers;
+
     protected string $name = 'check_contrast';
 
-    protected string $description = 'Check the contrast ratio between a foreground and background color. Returns ratio and WCAG AA/AAA pass/fail for normal and large text.';
+    protected string $description = 'Contrast ratio of a text colour on a background colour, with WCAG AA/AAA pass/fail for normal and large text. Accepts hex, rgb(), hsl(), oklch(), oklab() and named colours.';
 
     public function schema(JsonSchema $schema): array
     {
         return [
-            'foreground' => $schema->string()->description('Foreground color (hex, rgb, or named color)')->required(),
-            'background' => $schema->string()->description('Background color (hex, rgb, or named color)')->required(),
+            'foreground' => $schema->string()->description('Text colour, e.g. #767676 or oklch(55% 0 0)')->required(),
+            'background' => $schema->string()->description('Background colour, e.g. #ffffff')->required(),
         ];
     }
 
     public function handle(Request $request): Response
     {
-        $foreground = $request->get('foreground');
-        $background = $request->get('background');
+        $foreground = $this->stringArgument($request, 'foreground');
+        $background = $this->stringArgument($request, 'background');
 
-        if (empty($foreground) || empty($background)) {
-            return Response::error('Both foreground and background parameters are required.');
+        if ($foreground === null || $background === null) {
+            return Response::error('Both foreground and background must be colour strings.');
         }
 
-        $first = Color::parse((string) $foreground);
-        $second = Color::parse((string) $background);
+        $text = Color::parse($foreground);
+        $surface = Color::parse($background);
 
-        if ($first === null || $second === null) {
-            return Response::error('Could not calculate contrast ratio. Check that colors are valid (hex, rgb, or named colors).');
+        if ($text === null || $surface === null) {
+            return Response::error('Could not parse the colours. Use hex, rgb(), hsl(), oklch(), oklab() or a named colour.');
         }
 
-        $ratio = $first->contrastWith($second);
+        if ($text->a < 1) {
+            $text = $text->over($surface);
+        }
+
+        $ratio = $text->contrastRatio($surface);
 
         return Response::json([
             'foreground' => $foreground,

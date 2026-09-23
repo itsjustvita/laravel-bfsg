@@ -3,58 +3,55 @@
 namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Illuminate\Support\Facades\Http;
+use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Http\FetchFailed;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
 
+#[IsOpenWorld]
 class AnalyzeUrl extends Tool
 {
+    use ToolHelpers;
+
     protected string $name = 'analyze_url';
 
-    protected string $description = 'Fetch a URL and analyze its HTML for WCAG/BFSG accessibility violations.';
+    protected string $description = 'Fetch a page and analyze it for WCAG 2.1 / BFSG accessibility findings. Paths of this application (e.g. /contact) are rendered in-process; other URLs are fetched over HTTP, limited to the configured allowed hosts. Returns the laravel-bfsg JSON report.';
 
     public function schema(JsonSchema $schema): array
     {
         return [
-            'url' => $schema->string()->description('The URL to fetch and analyze')->required(),
-            'verify_ssl' => $schema->boolean()->description('Whether to verify SSL certificates (default: false)'),
+            'url' => $schema->string()->description('A URL, or a path of this application such as /contact')->required(),
+            'locale' => $schema->string()->description('Locale of messages and suggestions, e.g. en or de (default: the configured locale)'),
         ];
     }
 
     public function handle(Request $request): Response
     {
-        $url = $request->get('url');
-        $verifySsl = $request->get('verify_ssl', false);
+        $url = $this->stringArgument($request, 'url');
 
-        if (empty($url)) {
+        if ($url === null) {
             return Response::error('The url parameter is required.');
         }
 
         try {
-            $response = Http::withOptions(['verify' => $verifySsl])
-                ->timeout(30)
-                ->withUserAgent('BFSG-MCP/2.1')
-                ->get($url);
-
-            if ($response->failed()) {
-                return Response::error("Failed to fetch URL: {$url} (HTTP {$response->status()})");
-            }
-        } catch (\Exception $e) {
-            return Response::error("Failed to fetch URL: {$url} - {$e->getMessage()}");
+            $locale = $this->localeArgument($request);
+        } catch (InvalidArgumentException $e) {
+            return Response::error($e->getMessage());
         }
 
-        $result = app(Bfsg::class)->analyze($response->body(), ['url' => $url]);
-        $summary = (new ReportGenerator($result))->summary();
+        try {
+            $page = $this->fetchPage($url);
+        } catch (FetchFailed $e) {
+            return Response::error($e->getMessage());
+        }
 
-        return Response::json([
-            'url' => $url,
-            'violations' => $result->toArray()['violations'],
-            'total_issues' => $summary['total'],
-            'score' => $summary['score'],
-            'grade' => $summary['grade'],
-        ]);
+        $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
+
+        return Response::text((new ReportGenerator($result, $locale))->toJson());
     }
 }

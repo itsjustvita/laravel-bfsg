@@ -6,6 +6,7 @@ use Barryvdh\DomPDF\ServiceProvider;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
 use ItsJustVita\LaravelBfsg\BfsgServiceProvider;
+use Laravel\Mcp\Server\McpServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 class TestCase extends Orchestra
@@ -25,6 +26,8 @@ class TestCase extends Orchestra
         return [
             BfsgServiceProvider::class,
             ServiceProvider::class,
+            // laravel/mcp is optional (suggest); its provider resolves the tool Request for the MCP testing API
+            ...(class_exists(McpServiceProvider::class) ? [McpServiceProvider::class] : []),
         ];
     }
 

@@ -22,6 +22,11 @@ final class FetchFailed extends RuntimeException
         return new self("The host {$host} is not in the list of allowed hosts.", $url);
     }
 
+    public static function privateAddress(string $url, string $host, string $address): self
+    {
+        return new self("The host {$host} resolves to {$address}, a loopback, private, link-local or unspecified address. List it in bfsg.mcp.allowed_hosts to allow it.", $url);
+    }
+
     public static function status(string $url, int $status): self
     {
         return new self("Fetching {$url} failed with HTTP {$status}.", $url, $status);

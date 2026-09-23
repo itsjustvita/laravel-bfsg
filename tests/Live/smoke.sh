@@ -199,15 +199,46 @@ if echo "$LOG_RUN" | grep 'BFSG: ' | grep -q 'images.missing_alt'; then fail "mi
 if echo "$LOG_RUN" | grep -q 'BFSG: [0-9]* violations on http://localhost'; then fail "middleware: analyzed an in-process request of bfsg:check"; fi
 pass "middleware: terminate() stores broken and clean pages, logs counts only, skips in-process checks"
 
-# 8. MCP server over stdio
+# 8. MCP server over stdio: snake_case tools with annotations, current version, analyze_url of an app path in-process
 cat >"$WORK/mcp.in" <<'JSON'
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"bfsg-live","version":"1"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analyze_url","arguments":{"url":"/live/broken","locale":"de"}}}
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check_contrast","arguments":{"foreground":"#767676","background":"#ffffff"}}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"analyze_url","arguments":{"url":"http://169.254.169.254/latest/meta-data/"}}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"analyze_html","arguments":{"html":"<p>x</p>","locale":"../../../tmp/x"}}}
 JSON
 php artisan bfsg:mcp-server <"$WORK/mcp.in" >"$WORK/mcp.out" 2>&1 || { cat "$WORK/mcp.out"; fail "bfsg:mcp-server exited non-zero"; }
-grep -q '"analyze_html"' "$WORK/mcp.out" || { cat "$WORK/mcp.out"; fail "MCP tools/list does not list analyze_html"; }
-pass "MCP tools/list over stdio lists analyze_html"
+cat >"$WORK/mcp-check.php" <<'PHP'
+<?php
+$byId = [];
+foreach (file($argv[1], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+    $message = json_decode($line, true);
+    if (is_array($message) && isset($message['id'])) {
+        $byId[$message['id']] = $message;
+    }
+}
+$fail = function (string $why) { fwrite(STDERR, $why."\n"); exit(1); };
+$version = $byId[1]['result']['serverInfo']['version'] ?? '';
+if ($version === '' || $version === '2.1.0') { $fail("serverInfo.version is [$version]"); }
+$tools = array_column($byId[2]['result']['tools'] ?? [], null, 'name');
+foreach (['analyze_html', 'analyze_url', 'check_contrast', 'list_analyzers', 'get_history', 'get_report', 'generate_report'] as $name) {
+    isset($tools[$name]) || $fail("tools/list lacks $name");
+}
+($tools['analyze_html']['annotations']['readOnlyHint'] ?? false) === true || $fail('analyze_html is not annotated read-only');
+($tools['analyze_url']['annotations']['openWorldHint'] ?? false) === true || $fail('analyze_url is not annotated open-world');
+($byId[3]['result']['isError'] ?? true) === false || $fail('analyze_url failed: '.json_encode($byId[3] ?? null));
+$report = json_decode($byId[3]['result']['content'][0]['text'] ?? '', true);
+($report['locale'] ?? null) === 'de' || $fail('analyze_url ignored the locale');
+in_array('images.missing_alt', array_column($report['violations']['images'] ?? [], 'key'), true) || $fail('analyze_url did not report images.missing_alt');
+$contrast = json_decode($byId[4]['result']['content'][0]['text'] ?? '', true);
+($contrast['aa_normal'] ?? null) === true || $fail('check_contrast #767676 on white should pass AA');
+($byId[5]['result']['isError'] ?? false) === true || $fail('analyze_url fetched the cloud metadata address: '.json_encode($byId[5] ?? null));
+($byId[6]['result']['isError'] ?? false) === true || $fail('analyze_html accepted a path as locale: '.json_encode($byId[6] ?? null));
+PHP
+php "$WORK/mcp-check.php" "$WORK/mcp.out" || { cat "$WORK/mcp.out"; fail "MCP over stdio"; }
+pass "MCP over stdio: tools with annotations, analyze_url /live/broken in-process, check_contrast, private address and bad locale refused"
 
 # Only lines written during this run count.
 if [ -f "$LOG" ] && tail -c +"$((LOG_OFFSET + 1))" "$LOG" | grep -q '\.ERROR:'; then

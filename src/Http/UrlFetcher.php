@@ -39,6 +39,11 @@ class UrlFetcher
 
         while (true) {
             $this->assertAllowed($current, $options->allowedHosts);
+
+            if ($options->hopGuard !== null) {
+                ($options->hopGuard)($current);
+            }
+
             // In-process only while every hop so far was in-process: a remote page must not redirect into the kernel
             $viaKernel = $viaKernel && $this->isSameApp($current);
             try {

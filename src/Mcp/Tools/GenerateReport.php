@@ -4,92 +4,88 @@ namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
-use Illuminate\Support\Facades\Http;
+use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Http\FetchFailed;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
 use Laravel\Mcp\Server\Tool;
+use Laravel\Mcp\Server\Tools\Annotations\IsOpenWorld;
+use Throwable;
 
+#[IsOpenWorld]
 class GenerateReport extends Tool
 {
+    use ToolHelpers;
+
     protected string $name = 'generate_report';
 
-    protected string $description = 'Analyze a URL and generate a formatted accessibility report. Supports json, html, markdown, and pdf formats. Optionally saves results to database.';
+    protected string $description = 'Fetch a page, analyze it and return a report as json, markdown or html (pdf is written to the report directory and its path returned). Optionally store the report in the database.';
 
     public function schema(JsonSchema $schema): array
     {
         return [
-            'url' => $schema->string()->description('The URL to analyze')->required(),
-            'format' => $schema->string()->description('Report format: json, html, markdown, or pdf (default: json)'),
-            'save' => $schema->boolean()->description('Save results to database (default: false)'),
-            'verify_ssl' => $schema->boolean()->description('Whether to verify SSL certificates (default: false)'),
+            'url' => $schema->string()->description('A URL, or a path of this application such as /contact')->required(),
+            'format' => $schema->string()->description('json, markdown, html or pdf (default: json)'),
+            'locale' => $schema->string()->description('Locale of the report, e.g. en or de (default: the configured locale)'),
+            'save' => $schema->boolean()->description('Store the report in the database (default: false)'),
         ];
     }
 
     public function handle(Request $request): Response
     {
-        $url = $request->get('url');
-        $format = $request->get('format', 'json');
-        $save = $request->get('save', false);
-        $verifySsl = $request->get('verify_ssl', false);
+        $url = $this->stringArgument($request, 'url');
+        $format = $this->stringArgument($request, 'format') ?? 'json';
 
-        if (empty($url)) {
+        if ($url === null) {
             return Response::error('The url parameter is required.');
         }
 
-        $validFormats = ['json', 'html', 'markdown', 'pdf'];
-        if (! in_array($format, $validFormats)) {
-            return Response::error("Invalid format: {$format}. Use one of: ".implode(', ', $validFormats));
+        if (! in_array($format, ReportGenerator::FORMATS, true)) {
+            return Response::error("Invalid format [{$format}]. Use one of: ".implode(', ', ReportGenerator::FORMATS).'.');
         }
 
         if ($format === 'pdf' && ! class_exists(Pdf::class)) {
-            return Response::error('PDF format requires barryvdh/laravel-dompdf. Install with: composer require barryvdh/laravel-dompdf');
+            return Response::error('PDF reports require barryvdh/laravel-dompdf: composer require barryvdh/laravel-dompdf');
         }
 
         try {
-            $response = Http::withOptions(['verify' => $verifySsl])
-                ->timeout(30)
-                ->withUserAgent('BFSG-MCP/2.1')
-                ->get($url);
+            $locale = $this->localeArgument($request);
+        } catch (InvalidArgumentException $e) {
+            return Response::error($e->getMessage());
+        }
 
-            if ($response->failed()) {
-                return Response::error("Failed to fetch URL: {$url} (HTTP {$response->status()})");
+        try {
+            $page = $this->fetchPage($url);
+        } catch (FetchFailed $e) {
+            return Response::error($e->getMessage());
+        }
+
+        $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
+        $report = (new ReportGenerator($result, $locale))->format($format);
+        $payload = ['format' => $format, 'summary' => $report->summary()];
+
+        try {
+            if ($format === 'pdf') {
+                $payload['path'] = $report->saveTo($report->defaultPath());
+            } else {
+                $payload['report'] = $report->render();
             }
-        } catch (\Exception $e) {
-            return Response::error("Failed to fetch URL: {$url} - {$e->getMessage()}");
+        } catch (Throwable $e) {
+            return Response::error('Could not generate the report: '.$e->getMessage());
         }
 
-        $analysis = app(Bfsg::class)->analyze($response->body(), ['url' => $url]);
-
-        $reportGenerator = (new ReportGenerator($analysis))->format($format);
-        $summary = $reportGenerator->summary();
-
-        $result = [
-            'stats' => [
-                'total_issues' => $summary['total'],
-                'score' => $summary['score'],
-                'grade' => $summary['grade'],
-            ],
-            'format' => $format,
-        ];
-
-        if ($format === 'pdf') {
-            $path = $reportGenerator->saveTo($reportGenerator->defaultPath());
-            $result['report'] = "PDF saved to: {$path}";
-        } else {
-            $result['report'] = $reportGenerator->render();
-        }
-
-        if ($save) {
+        if ($request->get('save') === true) {
             try {
-                $result['report_id'] = app(ReportRepository::class)->store($analysis)->id;
-            } catch (\Exception $e) {
-                $result['save_error'] = 'Failed to save to database: '.$e->getMessage();
+                $payload['report_id'] = app(ReportRepository::class)->store($result, ['source' => 'mcp'])->id;
+            } catch (Throwable $e) {
+                $payload['save_error'] = 'Could not store the report: '.$e->getMessage();
             }
         }
 
-        return Response::json($result);
+        return Response::json($payload);
     }
 }

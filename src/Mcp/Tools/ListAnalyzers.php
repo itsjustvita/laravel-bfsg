@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 
 use Illuminate\Contracts\JsonSchema\JsonSchema;
+use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use Laravel\Mcp\Request;
 use Laravel\Mcp\Response;
@@ -14,7 +15,7 @@ class ListAnalyzers extends Tool
 {
     protected string $name = 'list_analyzers';
 
-    protected string $description = 'List every available BFSG/WCAG accessibility analyzer with its WCAG rules and enabled/disabled status.';
+    protected string $description = 'List the accessibility analyzers: registry key, class, description, WCAG success criteria and whether it runs (built-ins disabled in config/bfsg.php are listed as disabled; custom analyzers registered by the app are included).';
 
     public function schema(JsonSchema $schema): array
     {
@@ -23,22 +24,20 @@ class ListAnalyzers extends Tool
 
     public function handle(Request $request): Response
     {
-        $checks = config('bfsg.checks', []);
-        $registry = app(Bfsg::class)->analyzers();
+        $registry = app(Bfsg::class);
+        $running = $registry->analyzers();
         $analyzers = [];
 
-        foreach (Bfsg::ANALYZERS as $key => $class) {
-            $analyzer = $registry[$key] ?? app($class);
-            $meta = method_exists($analyzer, 'describe')
-                ? $analyzer->describe()
-                : ['key' => $key, 'description' => '', 'rules' => []];
+        foreach (array_unique([...array_keys(Bfsg::ANALYZERS), ...array_keys($running)]) as $key) {
+            $analyzer = $running[$key] ?? app(Bfsg::ANALYZERS[$key]);
+            $meta = $analyzer instanceof BaseAnalyzer ? $analyzer->describe() : ['description' => '', 'rules' => []];
 
             $analyzers[] = [
                 'name' => $key,
                 'class' => $analyzer::class,
                 'description' => $meta['description'],
                 'rules' => $meta['rules'],
-                'enabled' => (bool) ($checks[$key] ?? true),
+                'enabled' => isset($running[$key]),
             ];
         }
 
