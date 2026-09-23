@@ -283,6 +283,35 @@ class CommandsTest extends TestCase
         $this->assertSame('Bild ohne Textalternative (test.jpg)', $report['violations']['images'][0]['message']);
     }
 
+    /** @return array<string, array{0: string, 1: string, 2: string}> app.locale, app.fallback_locale, expected report locale */
+    public static function appLocales(): array
+    {
+        return [
+            'region and script' => ['zh_Hans_CN', 'en', 'en'],
+            'encoding suffix' => ['en_US.UTF-8', 'en', 'en'],
+            'fallback locale used' => ['zh_Hans_CN', 'de', 'de'],
+        ];
+    }
+
+    #[DataProvider('appLocales')]
+    public function test_app_locales_without_translations_fall_back_instead_of_failing(string $appLocale, string $fallback, string $expected): void
+    {
+        Http::fake([
+            'http://example.com/errors' => Http::response(self::ERRORS, 200, ['Content-Type' => 'text/html']),
+            'http://example.com/clean' => Http::response(self::ACCESSIBLE, 200, ['Content-Type' => 'text/html']),
+        ]);
+        config()->set('app.locale', $appLocale);
+        config()->set('app.fallback_locale', $fallback);
+        $this->app->setLocale($appLocale);
+
+        [$errors, $output] = $this->check(['url' => 'http://example.com/errors', '--format' => 'json']);
+        [$clean, $cleanOutput] = $this->check(['url' => 'http://example.com/clean']);
+
+        $this->assertSame(1, $errors, $output->stderr());
+        $this->assertSame($expected, json_decode($output->stdout(), true)['locale']);
+        $this->assertSame(0, $clean, $cleanOutput->stdout().$cleanOutput->stderr());
+    }
+
     public function test_insecure_and_no_inline_css(): void
     {
         $options = [];

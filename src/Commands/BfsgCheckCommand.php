@@ -109,9 +109,10 @@ class BfsgCheckCommand extends Command
             $minScore = $this->minScore();
             $this->assertOptionCombinations();
             $registry = $this->registry($bfsg);
+            // --locale comes from outside and must be valid; config/app locales fall back (Locale::default()).
             $this->locale = $this->option('locale') !== null
                 ? Locale::validate((string) $this->option('locale'))
-                : (config('bfsg.locale') ?: app()->getLocale());
+                : Locale::default();
 
             if ($this->option('save') && ! $repository->isMigrated()) {
                 throw new InvalidArgumentException('--save needs the bfsg tables with the v3 columns: run php artisan migrate');

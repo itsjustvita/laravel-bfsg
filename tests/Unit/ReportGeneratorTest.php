@@ -180,12 +180,29 @@ class ReportGeneratorTest extends TestCase
         $this->assertSame($first->defaultPath(), $first->defaultPath(), 'stable for one report');
     }
 
-    public function test_locales_that_are_not_well_formed_are_rejected(): void
+    public function test_explicit_locales_that_are_not_well_formed_are_rejected(): void
     {
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Invalid locale [../../tmp/zz]');
 
-        new ReportGenerator($this->sampleResult('../../tmp/zz'));
+        new ReportGenerator($this->sampleResult(), '../../tmp/zz');
+    }
+
+    public function test_result_and_config_locales_fall_back_instead_of_throwing(): void
+    {
+        $this->assertSame('en', (new ReportGenerator($this->sampleResult('../../tmp/zz')))->locale(), 'malformed result locale');
+        $this->assertSame('en', (new ReportGenerator($this->sampleResult('zh_Hans_CN')))->locale(), 'result locale without translations');
+
+        config()->set('bfsg.locale', 'zh_Hans_CN');
+        $result = (new Bfsg)->analyze('<html><body><img src="a.jpg"></body></html>', ['url' => 'https://example.com/']);
+        $report = new ReportGenerator($result);
+
+        $this->assertSame('en', $report->locale());
+        $this->assertStringContainsString('<html lang="en">', $report->format('html')->render());
+
+        config()->set('bfsg.locale', null);
+        $this->app->setLocale('en_US.UTF-8');
+        $this->assertSame('en', (new ReportGenerator($this->sampleResult()))->locale());
     }
 
     public function test_save_to_writes_the_rendered_report_and_default_paths_use_the_config(): void

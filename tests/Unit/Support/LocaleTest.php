@@ -20,12 +20,18 @@ class LocaleTest extends TestCase
             'region with underscore' => ['de_AT', true],
             'region with dash' => ['pt-BR', true],
             'script' => ['zh-Hans', true],
+            'numeric region' => ['es_419', true],
+            'script and region' => ['sr_Latn_RS', true],
+            'script and region with dashes' => ['zh-Hans-CN', true],
             'upper-case language' => ['DE', false],
+            'three subtags' => ['sr_Latn_RS_x', false],
+            'encoding suffix' => ['en_US.UTF-8', false],
+            'backslash' => ['de\\x', false],
+            'semicolon' => ['de;x', false],
             'path traversal' => ['../../tmp/zz', false],
             'slash' => ['de/x', false],
             'empty' => ['', false],
             'too long' => ['english', false],
-            'two subtags' => ['zh-Hans-CN', false],
         ];
     }
 
@@ -58,6 +64,37 @@ class LocaleTest extends TestCase
         }
 
         $this->assertFalse(Locale::isAvailable('fr'));
+    }
+
+    /** @return array<string, array{0: ?string, 1: string, 2: string, 3: string}> bfsg.locale, app.locale, app.fallback_locale, expected */
+    public static function defaults(): array
+    {
+        return [
+            'bfsg.locale wins' => ['de', 'en', 'en', 'de'],
+            'then app.locale' => [null, 'de', 'en', 'de'],
+            'malformed app.locale falls back' => [null, 'en_US.UTF-8', 'de', 'de'],
+            'app.locale without translations falls back' => [null, 'zh_Hans_CN', 'de', 'de'],
+            'malformed bfsg.locale falls back to app.locale' => ['../x', 'de', 'en', 'de'],
+            'then en' => ['xx', 'zh_Hans_CN', 'fr', 'en'],
+        ];
+    }
+
+    #[DataProvider('defaults')]
+    public function test_the_default_locale_comes_from_config_and_never_throws(?string $bfsg, string $app, string $fallback, string $expected): void
+    {
+        config()->set('bfsg.locale', $bfsg);
+        config()->set('app.fallback_locale', $fallback);
+        $this->app->setLocale($app);
+
+        $this->assertSame($expected, Locale::default());
+    }
+
+    public function test_sanitize_keeps_available_locales_and_replaces_the_rest_with_the_default(): void
+    {
+        $this->assertSame('de', Locale::sanitize('de'));
+        $this->assertSame('en', Locale::sanitize('zh_Hans_CN'));
+        $this->assertSame('en', Locale::sanitize('../../tmp/zz'));
+        $this->assertSame('en', Locale::sanitize(null));
     }
 
     public function test_validate_names_the_problem(): void

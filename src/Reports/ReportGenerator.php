@@ -34,18 +34,19 @@ class ReportGenerator
     private string $pathSuffix;
 
     /**
-     * @throws InvalidArgumentException when an explicit or result locale is not well-formed (it becomes a path
-     *                                  segment of the translation loader); config/app locales are trusted
+     * Locale: $locale (callers validate outside input with Support\Locale::validate()), else the result locale if it
+     * is available, else Support\Locale::default() (bfsg.locale, app.locale, app.fallback_locale, en).
+     *
+     * @throws InvalidArgumentException when an explicit $locale is not well-formed (it becomes a path segment of the
+     *                                  translation loader); result and config locales fall back instead
      */
     public function __construct(private AnalysisResult $result, ?string $locale = null, ?ScoreCalculator $scores = null)
     {
-        $given = $locale ?? $result->locale();
-
-        if ($given !== null && ! Locale::isWellFormed($given)) {
-            throw new InvalidArgumentException("Invalid locale [{$given}]. Use a language code such as en, de or de_AT.");
+        if ($locale !== null && ! Locale::isWellFormed($locale)) {
+            throw new InvalidArgumentException("Invalid locale [{$locale}]. Use a language code such as en, de or de_AT.");
         }
 
-        $this->locale = $given ?? (config('bfsg.locale') ?: app()->getLocale());
+        $this->locale = $locale ?? Locale::sanitize($result->locale());
         $this->scores = $scores ?? ScoreCalculator::fromConfig();
         $this->analyzedAt = CarbonImmutable::now();
         $this->pathSuffix = bin2hex(random_bytes(3));

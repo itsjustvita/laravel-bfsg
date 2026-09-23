@@ -179,6 +179,18 @@ class MiddlewareTest extends TestCase
         $this->assertGreaterThan(0, (int) $result->headers->get('X-BFSG-Violations'));
     }
 
+    public function test_a_bfsg_locale_without_translations_does_not_break_the_analysis(): void
+    {
+        config()->set('bfsg.locale', 'zh_Hans_CN');
+
+        $request = Request::create('/test', 'GET');
+        $response = new Response('<html><body><img src="test.jpg"></body></html>', 200, ['Content-Type' => 'text/html']);
+
+        $result = (new CheckAccessibility)->handle($request, fn () => $response);
+
+        $this->assertGreaterThan(0, (int) $result->headers->get('X-BFSG-Violations'));
+    }
+
     public function test_does_not_add_header_when_not_debug(): void
     {
         config()->set('app.debug', false);
