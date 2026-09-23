@@ -7,6 +7,7 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Http\AuthenticationFailed;
+use ItsJustVita\LaravelBfsg\Http\ResponseTooLarge;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class AuthenticatedHttpClientTest extends TestCase
@@ -353,5 +354,39 @@ class AuthenticatedHttpClientTest extends TestCase
         $client->get('http://app.example.com/');
 
         Http::assertNotSent(fn (Request $request) => $request->hasHeader('Cookie'));
+    }
+
+    public function test_tls_verification_stays_on_unless_explicitly_disabled(): void
+    {
+        foreach ([[null, true], ['', true], ['null', true], ['garbage', true], [true, true], ['true', true], ['0', false], ['false', false], [false, false]] as [$value, $expected]) {
+            config()->set('bfsg.fetch.verify_ssl', $value);
+            $this->assertSame($expected, (new AuthenticatedHttpClient)->verifiesSsl(), var_export($value, true));
+        }
+    }
+
+    public function test_credentials_are_read_from_server_and_env_variables(): void
+    {
+        $_SERVER['BFSG_AUTH_TOKEN'] = 'server-token';
+        $_ENV['BFSG_AUTH_EMAIL'] = 'env@example.com';
+
+        try {
+            $this->assertSame(['email' => 'env@example.com', 'password' => null, 'token' => 'server-token'], AuthenticatedHttpClient::credentialsFromEnv());
+        } finally {
+            unset($_SERVER['BFSG_AUTH_TOKEN'], $_ENV['BFSG_AUTH_EMAIL']);
+        }
+    }
+
+    public function test_a_response_larger_than_the_limit_is_rejected(): void
+    {
+        Http::fake(['*' => Http::response(str_repeat('x', 11), 200)]);
+
+        try {
+            $this->client()->get('https://example.com/big', [], 10);
+            $this->fail('ResponseTooLarge was not thrown');
+        } catch (ResponseTooLarge $e) {
+            $this->assertSame(10, $e->limit);
+        }
+
+        $this->assertSame(11, strlen($this->client()->get('https://example.com/big', [], 11)->body()));
     }
 }

@@ -32,6 +32,11 @@ final class FetchFailed extends RuntimeException
         return new self("{$url} is not an HTML page (Content-Type: {$contentType}).", $url, 200);
     }
 
+    public static function tooLarge(string $url, int $limit): self
+    {
+        return new self("{$url} is larger than {$limit} bytes.", $url);
+    }
+
     public static function tooManyRedirects(string $url): self
     {
         return new self("Fetching {$url} stopped after ".UrlFetcher::MAX_REDIRECTS.' redirects.', $url);

@@ -348,4 +348,52 @@ class UrlFetcherTest extends TestCase
         $this->assertSame(self::PAGE, $this->fetcher()->fetch('https://example.com/', new FetchOptions(allowedHosts: ['Example.COM.']))->html);
         $this->assertStringContainsString('not in the list of allowed hosts', $this->failure('https://example.com.evil.net/', new FetchOptions(allowedHosts: ['example.com']))->getMessage());
     }
+
+    public function test_pages_larger_than_the_page_limit_are_fetch_failed(): void
+    {
+        Http::fake(['*' => Http::response('<html>'.str_repeat('x', UrlFetcher::MAX_PAGE_BYTES), 200)]);
+        $this->app['router']->get('/huge', fn () => response('<html>'.str_repeat('x', UrlFetcher::MAX_PAGE_BYTES)));
+
+        $this->assertStringContainsString('larger than '.UrlFetcher::MAX_PAGE_BYTES.' bytes', $this->failure('https://example.com/huge')->getMessage());
+        $this->assertStringContainsString('larger than '.UrlFetcher::MAX_PAGE_BYTES.' bytes', $this->failure('/huge')->getMessage());
+    }
+
+    public function test_links_inside_comments_templates_noscript_and_scripts_are_not_inlined(): void
+    {
+        $html = '<html><head><!-- <link rel="stylesheet" href="/c.css"> --><template><link rel="stylesheet" href="/t.css"></template>'
+            .'<noscript><link rel="stylesheet" href="/n.css"></noscript><script>var s = \'<link rel="stylesheet" href="/s.css">\';</script>'
+            .'<link rel="stylesheet" href="/real.css"></head><body></body></html>';
+        Http::fake(['https://example.com/page' => Http::response($html, 200), '*' => Http::response('p{}', 200)]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertStringContainsString('<style data-bfsg-inlined="/real.css">p{}</style>', $page->html);
+        foreach (['c', 't', 'n', 's'] as $name) {
+            $this->assertStringContainsString('<link rel="stylesheet" href="/'.$name.'.css">', $page->html);
+        }
+        Http::assertNotSent(fn (Request $request) => preg_match('~/[ctns]\.css$~', $request->url()) === 1);
+    }
+
+    public function test_public_files_are_css_only_and_size_checked_before_reading(): void
+    {
+        config()->set('bfsg.fetch.max_stylesheet_bytes', 10);
+        $public = sys_get_temp_dir().'/bfsg-public-'.uniqid();
+        mkdir($public, 0777, true);
+        file_put_contents($public.'/index.php', '<?php echo "source";');
+        file_put_contents($public.'/big.css', str_repeat('x', 11));
+        $this->app->usePublicPath($public);
+        $this->app['router']->get('/styled', fn () => response('<html><head><link rel="stylesheet" href="/index.php"><link rel="stylesheet" href="/big.css"></head><body></body></html>'));
+
+        try {
+            $this->assertNull(app(InProcessFetcher::class)->publicFile('/index.php'));
+            $page = $this->fetcher()->fetch('/styled');
+        } finally {
+            unlink($public.'/index.php');
+            unlink($public.'/big.css');
+            rmdir($public);
+        }
+
+        $this->assertStringNotContainsString('source', $page->html);
+        $this->assertContains('Stylesheet /big.css was not inlined: larger than 10 bytes.', $page->warnings);
+    }
 }

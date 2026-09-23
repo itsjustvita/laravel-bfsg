@@ -11,7 +11,8 @@ use Throwable;
 /**
  * Replaces same-origin `<link rel="stylesheet">` elements whose media applies to screen with
  * `<style data-bfsg-inlined="{href}">`, in place so the cascade order is kept. At most `max_stylesheets`
- * are loaded, each at most `max_stylesheet_bytes`; failures leave the link and add a warning.
+ * are loaded, each at most `max_stylesheet_bytes`; failures leave the link and add a warning. Links inside comments,
+ * `<script>`, `<style>`, `<template>`, `<noscript>`, `<textarea>` and `<title>` are not stylesheets and stay untouched.
  */
 final class StylesheetInliner
 {
@@ -34,7 +35,12 @@ final class StylesheetInliner
         $warnings = [];
         $loaded = 0;
 
-        $html = preg_replace_callback('/<link\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>/i', function (array $m) use ($pageUrl, $load, &$warnings, &$loaded) {
+        // Comments and raw-text or inert elements are matched as a whole and left alone: a <link> inside them is not applied
+        $html = preg_replace_callback('/<!--.*?-->|<(script|style|template|noscript|textarea|title)\b[^>]*>.*?<\/\1\s*>|<link\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>/is', function (array $m) use ($pageUrl, $load, &$warnings, &$loaded) {
+            if (strncasecmp($m[0], '<link', 5) !== 0) {
+                return $m[0];
+            }
+
             $attributes = $this->attributes($m[0]);
             $rel = preg_split('/\s+/', strtolower($attributes['rel'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
             $href = trim($attributes['href'] ?? '');
@@ -59,6 +65,10 @@ final class StylesheetInliner
 
             try {
                 $css = $load($url);
+            } catch (ResponseTooLarge) {
+                $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+
+                return $m[0];
             } catch (Throwable $e) {
                 $warnings[] = "Stylesheet {$href} could not be loaded: {$e->getMessage()}";
 

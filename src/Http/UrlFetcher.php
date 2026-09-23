@@ -20,6 +20,9 @@ class UrlFetcher
 {
     public const MAX_REDIRECTS = 5;
 
+    /** Largest page body analyzed (bytes); remote transfers are aborted beyond it. Stylesheets use `bfsg.fetch.max_stylesheet_bytes`. */
+    public const MAX_PAGE_BYTES = 5 * 1024 * 1024;
+
     public function __construct(private InProcessFetcher $inProcess) {}
 
     /** @throws FetchFailed */
@@ -36,7 +39,11 @@ class UrlFetcher
             $this->assertAllowed($current, $options->allowedHosts);
             // In-process only while every hop so far was in-process: a remote page must not redirect into the kernel
             $viaKernel = $viaKernel && $this->isSameApp($current);
-            $response = $this->request($current, $client, $options, $viaKernel);
+            try {
+                $response = $this->request($current, $client, $options, $viaKernel, self::MAX_PAGE_BYTES);
+            } catch (ResponseTooLarge $e) {
+                throw FetchFailed::tooLarge($current, $e->limit);
+            }
 
             if ($response['status'] < 300 || $response['status'] >= 400 || $response['location'] === null) {
                 break;
@@ -55,6 +62,10 @@ class UrlFetcher
 
         if (! $this->isHtml($response['contentType'])) {
             throw FetchFailed::notHtml($current, $response['contentType']);
+        }
+
+        if (strlen($response['body']) > self::MAX_PAGE_BYTES) {
+            throw FetchFailed::tooLarge($current, self::MAX_PAGE_BYTES);
         }
 
         $html = $response['body'];
@@ -115,15 +126,15 @@ class UrlFetcher
     }
 
     /** @return array{status: int, location: ?string, contentType: string, body: string} */
-    private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel): array
+    private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, int $maxBytes): array
     {
         try {
             if ($viaKernel) {
                 return $this->inProcess->get($url, $options->actingAs, $options->guard);
             }
 
-            $response = $client->get($url, ['Accept' => 'text/html,application/xhtml+xml']);
-        } catch (FetchFailed $e) {
+            $response = $client->get($url, ['Accept' => 'text/html,application/xhtml+xml'], $maxBytes);
+        } catch (FetchFailed|ResponseTooLarge $e) {
             throw $e;
         } catch (ConnectionException $e) {
             throw FetchFailed::connection($url, $e->getMessage());
@@ -142,16 +153,17 @@ class UrlFetcher
     private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel): ?string
     {
         $viaKernel = $viaKernel && $this->isSameApp($url);
+        $maxBytes = (int) config('bfsg.fetch.max_stylesheet_bytes', 524288);
 
         if ($viaKernel) {
-            $file = $this->inProcess->publicFile((string) parse_url($url, PHP_URL_PATH));
+            $file = $this->inProcess->publicFile((string) parse_url($url, PHP_URL_PATH), $maxBytes);
 
             if ($file !== null) {
                 return $file;
             }
         }
 
-        $response = $this->request($url, $client, $options, $viaKernel);
+        $response = $this->request($url, $client, $options, $viaKernel, $maxBytes);
 
         return $response['status'] >= 200 && $response['status'] < 300 ? $response['body'] : null;
     }

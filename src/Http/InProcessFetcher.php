@@ -86,14 +86,24 @@ class InProcessFetcher
         }
     }
 
-    /** Contents of a file below public_path() for a URL path, or null (never outside the public directory). */
-    public function publicFile(string $path): ?string
+    /**
+     * Contents of a `.css` file below public_path() for a URL path, or null (other file types and anything outside
+     * the public directory are never read). The size is checked before reading.
+     *
+     * @throws ResponseTooLarge when the file is larger than $maxBytes
+     */
+    public function publicFile(string $path, ?int $maxBytes = null): ?string
     {
         $root = realpath($this->app->publicPath());
         $file = realpath($this->app->publicPath(ltrim(rawurldecode($path), '/')));
 
-        if ($root === false || $file === false || ! is_file($file) || ! str_starts_with($file, $root.DIRECTORY_SEPARATOR)) {
+        if ($root === false || $file === false || ! is_file($file) || ! str_starts_with($file, $root.DIRECTORY_SEPARATOR)
+            || strtolower(pathinfo($file, PATHINFO_EXTENSION)) !== 'css') {
             return null;
+        }
+
+        if ($maxBytes !== null && filesize($file) > $maxBytes) {
+            throw new ResponseTooLarge($path, $maxBytes);
         }
 
         $contents = file_get_contents($file);

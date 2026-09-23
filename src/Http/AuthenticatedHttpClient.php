@@ -12,6 +12,8 @@ use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Env;
 use Illuminate\Support\Facades\Http;
+use Psr\Http\Message\ResponseInterface;
+use Throwable;
 
 /**
  * HTTP client for bfsg:check, MCP and UrlFetcher: one cookie jar, one request factory (timeout, TLS verification,
@@ -44,9 +46,19 @@ class AuthenticatedHttpClient
     public function __construct(?int $timeout = null, ?bool $verifySsl = null, ?string $userAgent = null)
     {
         $this->timeout = $timeout ?? (int) config('bfsg.fetch.timeout', 30);
-        $this->verifySsl = $verifySsl ?? filter_var(config('bfsg.fetch.verify_ssl', true), FILTER_VALIDATE_BOOL);
+        $this->verifySsl = $verifySsl ?? self::verifySslSetting(config('bfsg.fetch.verify_ssl', true));
         $this->userAgent = $userAgent ?? (string) config('bfsg.fetch.user_agent', 'laravel-bfsg');
         $this->jar = new CookieJar;
+    }
+
+    /** `bfsg.fetch.verify_ssl`: only an explicit false value (false, "false", "0", "off", "no") turns verification off. */
+    private static function verifySslSetting(mixed $value): bool
+    {
+        if ($value === null || $value === '') {
+            return true;
+        }
+
+        return filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? true;
     }
 
     public function withVerifySsl(bool $verifySsl): static
@@ -74,10 +86,27 @@ class AuthenticatedHttpClient
             ->withOptions(['verify' => $this->verifySsl, 'allow_redirects' => false]);
     }
 
-    /** @param  array<string, string>  $headers */
-    public function get(string $url, array $headers = []): Response
+    /**
+     * @param  array<string, string>  $headers
+     * @param  int|null  $maxBytes  abort (ResponseTooLarge) once the body exceeds this many bytes: by Content-Length and
+     *                              download progress on a real transport, and by the received body in any case
+     *
+     * @throws ResponseTooLarge
+     */
+    public function get(string $url, array $headers = [], ?int $maxBytes = null): Response
     {
-        return $this->dispatch('GET', $url, $headers, fn (PendingRequest $request) => $request->get($url));
+        return $this->dispatch('GET', $url, $headers, fn (PendingRequest $request) => ($maxBytes === null ? $request : $request->withOptions([
+            'on_headers' => function (ResponseInterface $response) use ($url, $maxBytes) {
+                if ($response->getHeaderLine('Content-Length') !== '' && (int) $response->getHeaderLine('Content-Length') > $maxBytes) {
+                    throw new ResponseTooLarge($url, $maxBytes);
+                }
+            },
+            'progress' => function ($downloadTotal, $downloaded) use ($url, $maxBytes) {
+                if ($downloaded > $maxBytes) {
+                    throw new ResponseTooLarge($url, $maxBytes);
+                }
+            },
+        ]))->get($url), $maxBytes);
     }
 
     /**
@@ -268,7 +297,7 @@ class AuthenticatedHttpClient
     }
 
     /** @param  array<string, string>  $headers */
-    private function dispatch(string $method, string $url, array $headers, Closure $send): Response
+    private function dispatch(string $method, string $url, array $headers, Closure $send, ?int $maxBytes = null): Response
     {
         $psr = $this->jar->withCookieHeader(new PsrRequest($method, $url));
         $request = $this->request()->withHeaders($this->credentialHeaders($url))->withHeaders($headers);
@@ -278,8 +307,23 @@ class AuthenticatedHttpClient
             $request->withHeaders(['Cookie' => $cookie]);
         }
 
-        $response = $send($request);
+        try {
+            $response = $send($request);
+        } catch (Throwable $e) {
+            for ($cause = $e; $cause !== null; $cause = $cause->getPrevious()) {
+                if ($cause instanceof ResponseTooLarge) {
+                    throw $cause;
+                }
+            }
+
+            throw $e;
+        }
+
         $this->jar->extractCookies($psr, $response->toPsrResponse());
+
+        if ($maxBytes !== null && strlen($response->body()) > $maxBytes) {
+            throw new ResponseTooLarge($url, $maxBytes);
+        }
 
         return $response;
     }
