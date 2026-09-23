@@ -145,6 +145,13 @@ check quiet 1 /live/broken --format=json -q
 pure_json "$WORK/quiet.out" || fail "-q suppressed the JSON report"
 pass "bfsg:check unknown option, invalid locale and ignored combination exit 2; -q keeps the report"
 
+# 6f. --save stores the report; bfsg:history lists it with a whole-number score
+check saved 1 /live/broken --save
+grep -q 'Stored as report #' "$WORK/saved.err" || { cat "$WORK/saved.err"; fail "bfsg:check --save did not store the report"; }
+php artisan bfsg:history >"$WORK/history.out" 2>&1 || { cat "$WORK/history.out"; fail "bfsg:history"; }
+grep -E 'live/broken +\| +[0-9]+ +\| +[0-9]+% ' "$WORK/history.out" >/dev/null || { cat "$WORK/history.out"; fail "bfsg:history does not list the saved report with a whole-number score"; }
+pass "bfsg:check --save and bfsg:history"
+
 # 6e. HTML report: written to a file, localized, current version, and it passes the package's own analyzers
 check html-report 1 /live/broken --format=html
 REPORT="$(grep -o '/[^ ]*report_[0-9a-f_-]*\.html' "$WORK/html-report.err" | head -1)"

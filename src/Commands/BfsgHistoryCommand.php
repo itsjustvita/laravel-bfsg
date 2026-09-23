@@ -50,7 +50,7 @@ class BfsgHistoryCommand extends Command
             $r->id,
             Str::limit($r->url, 50),
             $r->total_violations,
-            $r->score.'%',
+            $this->score($r->score),
             $r->grade,
             $r->created_at->format('Y-m-d H:i'),
         ])->toArray();
@@ -93,7 +93,7 @@ class BfsgHistoryCommand extends Command
 
         $rows = $reports->map(fn ($r) => [
             $r->created_at->format('Y-m-d H:i'),
-            $r->score.'%',
+            $this->score($r->score),
             $r->grade,
             $r->total_violations,
         ])->toArray();
@@ -104,8 +104,8 @@ class BfsgHistoryCommand extends Command
         );
 
         if ($reports->count() >= 2) {
-            $first = $reports->first()->score;
-            $last = $reports->last()->score;
+            $first = (int) round($reports->first()->score);
+            $last = (int) round($reports->last()->score);
             $diff = $last - $first;
             $direction = $diff > 0 ? 'improved' : ($diff < 0 ? 'declined' : 'unchanged');
             $this->info('Trend: '.$direction.' by '.abs($diff).' points');
@@ -117,17 +117,22 @@ class BfsgHistoryCommand extends Command
     protected function cleanup(): int
     {
         $days = (int) $this->option('days');
-        $count = BfsgReport::where('created_at', '<', now()->subDays($days))->count();
+        $deleted = BfsgReport::query()->where('created_at', '<', now()->subDays($days))->delete();
 
-        if ($count === 0) {
+        if ($deleted === 0) {
             $this->info('No old reports to clean up.');
 
             return Command::SUCCESS;
         }
 
-        BfsgReport::where('created_at', '<', now()->subDays($days))->delete();
-        $this->info("Deleted {$count} reports older than {$days} days.");
+        $this->info("Deleted {$deleted} reports older than {$days} days.");
 
         return Command::SUCCESS;
+    }
+
+    /** Scores are whole numbers (ScoreCalculator); the decimal column may still hold v2 fractions. */
+    protected function score(float|int|string|null $score): string
+    {
+        return (int) round((float) $score).'%';
     }
 }

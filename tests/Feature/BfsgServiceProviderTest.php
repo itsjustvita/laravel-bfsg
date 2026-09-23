@@ -4,6 +4,17 @@ namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\BfsgServiceProvider;
+use ItsJustVita\LaravelBfsg\Commands\BfsgCheckCommand;
+use ItsJustVita\LaravelBfsg\Commands\BfsgHistoryCommand;
+use ItsJustVita\LaravelBfsg\Commands\McpServerCommand;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeHtml;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeUrl;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\CheckContrast;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\GenerateReport;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\GetHistory;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\GetReport;
+use ItsJustVita\LaravelBfsg\Mcp\Tools\ListAnalyzers;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class BfsgServiceProviderTest extends TestCase
@@ -67,5 +78,30 @@ class BfsgServiceProviderTest extends TestCase
         $result = \ItsJustVita\LaravelBfsg\Facades\Bfsg::analyze($html);
 
         $this->assertInstanceOf(AnalysisResult::class, $result);
+    }
+
+    public function test_the_mcp_server_command_needs_laravel_mcp(): void
+    {
+        $withoutMcp = new class($this->app) extends BfsgServiceProvider
+        {
+            protected function mcpAvailable(): bool
+            {
+                return false;
+            }
+        };
+
+        $this->assertSame([BfsgCheckCommand::class, BfsgHistoryCommand::class], $withoutMcp->commandClasses());
+        $this->assertSame([BfsgCheckCommand::class, BfsgHistoryCommand::class, McpServerCommand::class], (new BfsgServiceProvider($this->app))->commandClasses());
+        $this->assertContains('bfsg:mcp-server', array_keys(\Artisan::all()));
+    }
+
+    public function test_boost_receives_the_mcp_tools_when_installed(): void
+    {
+        require_once __DIR__.'/../Support/Stubs/BoostServiceProvider.php';
+        config()->set('boost.mcp.tools.include', ['App\\Mcp\\ExistingTool']);
+
+        (new BfsgServiceProvider($this->app))->boot();
+
+        $this->assertSame(['App\\Mcp\\ExistingTool', AnalyzeHtml::class, AnalyzeUrl::class, CheckContrast::class, ListAnalyzers::class, GetHistory::class, GetReport::class, GenerateReport::class], config('boost.mcp.tools.include'));
     }
 }

@@ -106,4 +106,34 @@ class BfsgHistoryCommandTest extends TestCase
             ->assertSuccessful()
             ->expectsOutputToContain('No old reports');
     }
+
+    public function test_scores_are_printed_as_whole_numbers(): void
+    {
+        BfsgReport::create(['url' => 'https://example.com', 'total_violations' => 3, 'score' => 82.5, 'grade' => 'B'])
+            ->forceFill(['created_at' => '2026-05-01 10:00'])->save();
+        BfsgReport::create(['url' => 'https://example.com', 'total_violations' => 1, 'score' => 90.4, 'grade' => 'A'])
+            ->forceFill(['created_at' => '2026-06-01 10:00'])->save();
+
+        $this->artisan('bfsg:history', ['--url' => 'https://example.com', '--trend' => true])
+            ->assertSuccessful()
+            ->expectsTable(['Date', 'Score', 'Grade', 'Violations'], [
+                ['2026-05-01 10:00', '83%', 'B', 3],
+                ['2026-06-01 10:00', '90%', 'A', 1],
+            ])
+            ->expectsOutputToContain('Trend: improved by 7 points');
+    }
+
+    public function test_cleanup_reports_the_number_actually_deleted(): void
+    {
+        foreach ([90, 60, 45] as $days) {
+            BfsgReport::create(['url' => 'https://example.com', 'total_violations' => 0, 'score' => 100, 'grade' => 'A+'])
+                ->forceFill(['created_at' => now()->subDays($days)])->save();
+        }
+
+        $this->artisan('bfsg:history', ['--cleanup' => true, '--days' => 50])
+            ->assertSuccessful()
+            ->expectsOutputToContain('Deleted 2 reports older than 50 days.');
+
+        $this->assertSame(1, BfsgReport::query()->count());
+    }
 }

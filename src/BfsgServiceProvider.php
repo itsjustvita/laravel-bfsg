@@ -20,6 +20,20 @@ use Laravel\Mcp\Server;
 
 class BfsgServiceProvider extends ServiceProvider
 {
+    /** @return list<class-string> bfsg:check, bfsg:history, and bfsg:mcp-server when laravel/mcp is installed */
+    public function commandClasses(): array
+    {
+        return $this->mcpAvailable()
+            ? [BfsgCheckCommand::class, BfsgHistoryCommand::class, McpServerCommand::class]
+            : [BfsgCheckCommand::class, BfsgHistoryCommand::class];
+    }
+
+    /** laravel/mcp is an optional dependency (composer suggest). */
+    protected function mcpAvailable(): bool
+    {
+        return class_exists(Server::class);
+    }
+
     /**
      * Register services.
      */
@@ -62,14 +76,7 @@ class BfsgServiceProvider extends ServiceProvider
                 __DIR__.'/../lang' => $this->app->langPath('vendor/bfsg'),
             ], 'bfsg-lang');
 
-            // Register commands
-            $commands = [BfsgCheckCommand::class, BfsgHistoryCommand::class];
-
-            if (class_exists(Server::class)) {
-                $commands[] = McpServerCommand::class;
-            }
-
-            $this->commands($commands);
+            $this->commands($this->commandClasses());
         }
 
         // Load migrations
@@ -90,7 +97,7 @@ class BfsgServiceProvider extends ServiceProvider
         ]);
 
         // Auto-register MCP tools with Laravel Boost if available
-        if (class_exists(BoostServiceProvider::class) && class_exists(Server::class)) {
+        if (class_exists(BoostServiceProvider::class) && $this->mcpAvailable()) {
             $this->app->booted(function () {
                 $tools = config('boost.mcp.tools.include', []);
                 $bfsgTools = [
