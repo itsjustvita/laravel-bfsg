@@ -2,12 +2,18 @@
 
 namespace ItsJustVita\LaravelBfsg\Browser;
 
+use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Support\Facades\Process;
 
 /**
  * Renders a page with Playwright (node) and returns the DOM as HTML; analysis stays with Bfsg. The URL, wait
  * selector, engine and ignored selectors reach the generated script only as JSON, the engine is validated,
- * and the temporary script is removed in every case.
+ * and the temporary script (mode 0600: the URL may carry tokens) is removed in every case. One deadline of
+ * `timeout` ms covers launch, navigation and the wait selector; the node process gets 15 s more for start-up
+ * and shutdown.
+ *
+ * Known limits: the caller reports the requested URL, not the URL after browser redirects, and TLS errors are
+ * not ignored (bfsg:check --insecure has no effect on the browser).
  */
 class BrowserAnalyzer
 {
@@ -42,8 +48,13 @@ class BrowserAnalyzer
         }
 
         $script = sys_get_temp_dir().'/bfsg-browser-'.bin2hex(random_bytes(8)).'.cjs';
+        $seconds = (int) ceil($timeout / 1000) + 15;
 
         try {
+            if (! touch($script) || ! chmod($script, 0600)) {
+                throw BrowserRenderFailed::process("could not create the temporary script {$script}");
+            }
+
             file_put_contents($script, $this->script([
                 'url' => $url,
                 'engine' => $options['engine'],
@@ -53,7 +64,11 @@ class BrowserAnalyzer
                 'ignoredSelectors' => array_values(array_map('strval', $options['ignoredSelectors'])),
             ]));
 
-            $result = Process::path($directory)->timeout((int) ceil($timeout / 1000) + 15)->run(['node', $script]);
+            try {
+                $result = Process::path($directory)->timeout($seconds)->run(['node', $script]);
+            } catch (ProcessTimedOutException) {
+                throw BrowserRenderFailed::timedOut($seconds);
+            }
 
             if (! $result->successful()) {
                 throw BrowserRenderFailed::process(trim($result->errorOutput()) ?: trim($result->output()));
@@ -81,14 +96,16 @@ const path = require('path');
 const { createRequire } = require('module');
 const playwright = createRequire(path.join(process.cwd(), 'package.json'))('playwright');
 const options = {$json};
+const deadline = Date.now() + options.timeout;
+const remaining = () => Math.max(1, deadline - Date.now());
 
 (async () => {
-    const browser = await playwright[options.engine].launch({ headless: options.headless });
+    const browser = await playwright[options.engine].launch({ headless: options.headless, timeout: remaining() });
 
     try {
         const page = await browser.newPage();
-        await page.goto(options.url, { waitUntil: 'networkidle', timeout: options.timeout });
-        await page.waitForSelector(options.waitFor, { timeout: options.timeout });
+        await page.goto(options.url, { waitUntil: 'networkidle', timeout: remaining() });
+        await page.waitForSelector(options.waitFor, { timeout: remaining() });
 
         for (const selector of options.ignoredSelectors) {
             await page.evaluate((sel) => {

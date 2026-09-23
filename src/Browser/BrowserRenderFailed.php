@@ -17,6 +17,11 @@ final class BrowserRenderFailed extends RuntimeException
         return new self("Unknown browser engine [{$engine}]. Use one of: ".implode(', ', BrowserAnalyzer::ENGINES).'.');
     }
 
+    public static function timedOut(int $seconds): self
+    {
+        return new self("Browser rendering timed out after {$seconds} s.");
+    }
+
     public static function process(string $detail): self
     {
         return new self('Browser rendering failed: '.($detail === '' ? 'no output' : $detail));

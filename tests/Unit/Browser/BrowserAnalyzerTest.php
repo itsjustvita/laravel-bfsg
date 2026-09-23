@@ -2,26 +2,40 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Browser;
 
+use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Process\PendingProcess;
+use Illuminate\Process\ProcessResult;
 use Illuminate\Support\Facades\Process;
 use ItsJustVita\LaravelBfsg\Browser\BrowserAnalyzer;
 use ItsJustVita\LaravelBfsg\Browser\BrowserRenderFailed;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use Symfony\Component\Process\Exception\ProcessTimedOutException as SymfonyTimeoutException;
+use Symfony\Component\Process\ExecutableFinder;
+use Symfony\Component\Process\Process as SymfonyProcess;
 
 class BrowserAnalyzerTest extends TestCase
 {
-    /** @var list<array{command: array<int, string>, path: ?string, timeout: ?int, script: ?string}> */
+    /** @var list<array{command: array<int, string>, path: ?string, timeout: ?int, script: ?string, mode: ?int}> */
     private array $runs = [];
 
-    private function fakeNode(string $html = '<html><body>rendered</body></html>', bool $playwright = true, int $exitCode = 0, string $stderr = ''): void
+    private function fakeNode(string $html = '<html><body>rendered</body></html>', bool $playwright = true, int $exitCode = 0, string $stderr = '', bool $timesOut = false): void
     {
-        Process::fake(function (PendingProcess $process) use ($html, $playwright, $exitCode, $stderr) {
+        Process::fake(function (PendingProcess $process) use ($html, $playwright, $exitCode, $stderr, $timesOut) {
             $command = (array) $process->command;
-            $script = ($command[1] ?? '') !== '-e' && is_file($command[1] ?? '') ? (string) file_get_contents($command[1]) : null;
-            $this->runs[] = ['command' => $command, 'path' => $process->path, 'timeout' => $process->timeout, 'script' => $script];
+            $isScript = ($command[1] ?? '') !== '-e' && is_file($command[1] ?? '');
+            $script = $isScript ? (string) file_get_contents($command[1]) : null;
+            $mode = $isScript ? fileperms($command[1]) & 0777 : null;
+            $this->runs[] = ['command' => $command, 'path' => $process->path, 'timeout' => $process->timeout, 'script' => $script, 'mode' => $mode];
 
             if (($command[1] ?? '') === '-e') {
                 return Process::result('', $playwright ? '' : "Error: Cannot find module 'playwright'", $playwright ? 0 : 1);
+            }
+
+            if ($timesOut) {
+                $symfony = new SymfonyProcess($command);
+                $symfony->setTimeout($process->timeout);
+
+                throw new ProcessTimedOutException(new SymfonyTimeoutException($symfony, SymfonyTimeoutException::TYPE_GENERAL), new ProcessResult($symfony));
             }
 
             return Process::result($exitCode === 0 ? $html : '', $stderr, $exitCode);
@@ -56,6 +70,53 @@ class BrowserAnalyzerTest extends TestCase
         $this->assertStringContainsString('"headless":false', $this->runs[1]['script']);
         $this->assertStringContainsString('"timeout":20000', $this->runs[1]['script']);
         $this->assertFileDoesNotExist($this->runs[1]['command'][1], 'the temporary script is removed');
+        $this->assertSame(0600, $this->runs[1]['mode'], 'the script carries the URL and is readable by its owner only');
+    }
+
+    public function test_the_generated_script_is_valid_javascript(): void
+    {
+        $node = (new ExecutableFinder)->find('node');
+
+        if ($node === null) {
+            $this->markTestSkipped('node is not installed');
+        }
+
+        $this->fakeNode();
+        (new BrowserAnalyzer('/srv/app'))->render("https://example.com/?q=');x('</script>`\${1}", ['waitFor' => "main[data-x='1']", 'ignoredSelectors' => ['#chat', '"quoted"']]);
+
+        $file = sys_get_temp_dir().'/bfsg-check-'.uniqid().'.cjs';
+        file_put_contents($file, $this->runs[1]['script']);
+
+        try {
+            $check = new SymfonyProcess([$node, '--check', $file]);
+            $check->run();
+
+            $this->assertTrue($check->isSuccessful(), $check->getErrorOutput());
+        } finally {
+            unlink($file);
+        }
+    }
+
+    public function test_one_deadline_covers_navigation_and_the_wait_selector(): void
+    {
+        $this->fakeNode();
+
+        (new BrowserAnalyzer('/srv/app'))->render('https://example.com/');
+
+        $script = $this->runs[1]['script'];
+        $this->assertStringContainsString('const deadline = Date.now() + options.timeout;', $script);
+        $this->assertStringContainsString("page.goto(options.url, { waitUntil: 'networkidle', timeout: remaining() })", $script);
+        $this->assertStringContainsString('page.waitForSelector(options.waitFor, { timeout: remaining() })', $script);
+    }
+
+    public function test_a_process_timeout_is_a_render_failure_and_removes_the_script(): void
+    {
+        $this->fakeNode(timesOut: true);
+
+        $failure = $this->failure(fn () => (new BrowserAnalyzer('/srv/app'))->render('https://example.com/', ['timeout' => 5000]));
+
+        $this->assertStringContainsString('timed out after 20 s', $failure->getMessage());
+        $this->assertFileDoesNotExist($this->runs[1]['command'][1]);
     }
 
     public function test_url_selector_and_ignored_selectors_reach_the_script_only_as_json(): void
