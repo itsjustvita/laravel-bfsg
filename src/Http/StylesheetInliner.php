@@ -34,63 +34,144 @@ final class StylesheetInliner
     {
         $warnings = [];
         $loaded = 0;
+        $out = '';
+        $copied = 0;
+        $pos = 0;
+        $length = strlen($html);
 
-        // Comments and raw-text or inert elements are matched as a whole and left alone: a <link> inside them is not applied
-        $html = preg_replace_callback('/<!--.*?-->|<(script|style|template|noscript|textarea|title)\b[^>]*>.*?<\/\1\s*>|<link\b(?:[^>"\']|"[^"]*"|\'[^\']*\')*>/is', function (array $m) use ($pageUrl, $load, &$warnings, &$loaded) {
-            if (strncasecmp($m[0], '<link', 5) !== 0) {
-                return $m[0];
+        // A linear scan instead of one big regex: comments and raw-text or inert elements are skipped up to their end
+        // (found with strpos/stripos, so a multi-megabyte inline script cannot exhaust the PCRE backtrack limit), and
+        // only <link> tags outside them are candidates.
+        while ($pos < $length && ($lt = strpos($html, '<', $pos)) !== false) {
+            $next = strtolower(substr($html, $lt + 1, 9));
+
+            if (str_starts_with($next, '!--')) {
+                $end = strpos($html, '-->', $lt + 4);
+                $pos = $end === false ? $length : $end + 3;
+
+                continue;
             }
 
-            $attributes = $this->attributes($m[0]);
-            $rel = preg_split('/\s+/', strtolower($attributes['rel'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-            $href = trim($attributes['href'] ?? '');
+            if (preg_match('/^(script|style|template|noscript|textarea|title)(?![a-z0-9-])/', $next, $name) === 1) {
+                $open = $this->match('/\G<'.$name[1].'\b(?:[^>"\']++|"[^"]*+"|\'[^\']*+\')*+>/i', $html, $lt);
 
-            if (! in_array('stylesheet', $rel, true) || in_array('alternate', $rel, true) || $href === '' || ! HtmlDocument::mediaAppliesToScreen($attributes['media'] ?? '')) {
-                return $m[0];
+                if ($open === false) {
+                    $warnings[] = 'Stylesheet inlining stopped early: '.preg_last_error_msg().'.';
+
+                    break;
+                }
+
+                $pos = $open === null ? $lt + 1 : $this->rawTextEnd($html, $name[1], $lt + strlen($open));
+
+                continue;
             }
 
-            $url = (string) UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
+            if (str_starts_with($next, 'link')) {
+                $tag = $this->match('/\G<link\b(?:[^>"\']++|"[^"]*+"|\'[^\']*+\')*+>/i', $html, $lt);
 
-            if (! $this->sameOrigin($url, $pageUrl)) {
-                return $m[0];
+                if ($tag === false) {
+                    $warnings[] = 'Stylesheet inlining stopped early: '.preg_last_error_msg().'.';
+
+                    break;
+                }
+
+                if ($tag !== null) {
+                    $out .= substr($html, $copied, $lt - $copied).$this->inlineLink($tag, $pageUrl, $load, $warnings, $loaded);
+                    $copied = $pos = $lt + strlen($tag);
+
+                    continue;
+                }
             }
 
-            if ($loaded >= $this->maxStylesheets) {
-                $warnings[] = "Stylesheet {$href} was not inlined: more than {$this->maxStylesheets} stylesheets.";
+            $pos = $lt + 1;
+        }
 
-                return $m[0];
+        return [$out.substr($html, $copied), $warnings];
+    }
+
+    /** @return string|null|false the match at $offset, null for none, false on a PCRE error */
+    private function match(string $pattern, string $subject, int $offset): string|null|false
+    {
+        $result = preg_match($pattern, $subject, $m, 0, $offset);
+
+        return $result === false ? false : ($result === 1 ? $m[0] : null);
+    }
+
+    /** Offset after the end tag of a raw-text element opened before $from, or the end of the document when it is not closed. */
+    private function rawTextEnd(string $html, string $name, int $from): int
+    {
+        $needle = '</'.$name;
+
+        while (($close = stripos($html, $needle, $from)) !== false) {
+            $after = $html[$close + strlen($needle)] ?? '>';
+
+            if ($after === '>' || $after === '/' || ctype_space($after)) {
+                $end = strpos($html, '>', $close);
+
+                return $end === false ? strlen($html) : $end + 1;
             }
 
-            $loaded++;
+            $from = $close + strlen($needle);
+        }
 
-            try {
-                $css = $load($url);
-            } catch (ResponseTooLarge) {
-                $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+        return strlen($html);
+    }
 
-                return $m[0];
-            } catch (Throwable $e) {
-                $warnings[] = "Stylesheet {$href} could not be loaded: {$e->getMessage()}";
+    /**
+     * The replacement for one <link> tag: a <style data-bfsg-inlined> for a same-origin screen stylesheet that could
+     * be loaded within the limits, else the tag itself (with a warning when loading was attempted).
+     *
+     * @param  list<string>  $warnings
+     */
+    private function inlineLink(string $tag, string $pageUrl, Closure $load, array &$warnings, int &$loaded): string
+    {
+        $attributes = $this->attributes($tag);
+        $rel = preg_split('/\s+/', strtolower($attributes['rel'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $href = trim($attributes['href'] ?? '');
 
-                return $m[0];
-            }
+        if (! in_array('stylesheet', $rel, true) || in_array('alternate', $rel, true) || $href === '' || ! HtmlDocument::mediaAppliesToScreen($attributes['media'] ?? '')) {
+            return $tag;
+        }
 
-            if ($css === null) {
-                $warnings[] = "Stylesheet {$href} could not be loaded.";
+        $url = (string) UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
 
-                return $m[0];
-            }
+        if (! $this->sameOrigin($url, $pageUrl)) {
+            return $tag;
+        }
 
-            if (strlen($css) > $this->maxBytes) {
-                $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+        if ($loaded >= $this->maxStylesheets) {
+            $warnings[] = "Stylesheet {$href} was not inlined: more than {$this->maxStylesheets} stylesheets.";
 
-                return $m[0];
-            }
+            return $tag;
+        }
 
-            return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES).'">'.str_ireplace('</style', '<\/style', $css).'</style>';
-        }, $html) ?? $html;
+        $loaded++;
 
-        return [$html, $warnings];
+        try {
+            $css = $load($url);
+        } catch (ResponseTooLarge) {
+            $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+
+            return $tag;
+        } catch (Throwable $e) {
+            $warnings[] = "Stylesheet {$href} could not be loaded: {$e->getMessage()}";
+
+            return $tag;
+        }
+
+        if ($css === null) {
+            $warnings[] = "Stylesheet {$href} could not be loaded.";
+
+            return $tag;
+        }
+
+        if (strlen($css) > $this->maxBytes) {
+            $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+
+            return $tag;
+        }
+
+        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES).'">'.str_ireplace('</style', '<\/style', $css).'</style>';
     }
 
     /** @return array<string, string> lowercased attribute name => decoded value */

@@ -411,4 +411,35 @@ class UrlFetcherTest extends TestCase
         $client->get('http://localhost/api');
         Http::assertSent(fn (Request $request) => $request->url() === 'http://localhost/api' && $request->hasHeader('Authorization', 'Bearer UNBOUND'));
     }
+
+    public function test_large_raw_text_elements_do_not_stop_inlining(): void
+    {
+        $script = '<script>'.str_repeat('if (a < b) { x = "<i>"; } ', 45000).'</script>';
+        $textarea = '<textarea>'.str_repeat("line <b>\n", 240000).'</textarea>';
+        $html = '<html><head><link rel="stylesheet" href="/a.css">'.$script.'</head><body>'.$textarea
+            .'<link rel="stylesheet" href="/b.css"><SCRIPT type="module">const s = \'<link rel="stylesheet" href="/s.css">\'</SCRIPT ></body></html>';
+        $this->assertGreaterThan(1000000, strlen($script));
+        $this->assertGreaterThan(2000000, strlen($textarea));
+        Http::fake(['https://example.com/page' => Http::response($html, 200), '*' => Http::response('p{}', 200)]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertTrue(str_contains($page->html, '<style data-bfsg-inlined="/a.css">p{}</style>'), '/a.css before the script is inlined');
+        $this->assertTrue(str_contains($page->html, '<style data-bfsg-inlined="/b.css">p{}</style>'), '/b.css after the textarea is inlined');
+        $this->assertTrue(str_contains($page->html, '\'<link rel="stylesheet" href="/s.css">\''), 'the link inside the module script stays');
+        $this->assertTrue(str_contains($page->html, $script) && str_contains($page->html, $textarea), 'raw text is unchanged');
+        $this->assertSame([], $page->warnings);
+    }
+
+    public function test_an_unclosed_raw_text_element_ends_the_scan(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response('<html><head><link rel="stylesheet" href="/a.css"><script>var x = 1; <link rel="stylesheet" href="/b.css">', 200),
+            '*' => Http::response('p{}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertStringContainsString('<style data-bfsg-inlined="/a.css">p{}</style><script>var x = 1; <link rel="stylesheet" href="/b.css">', $page->html);
+    }
 }
