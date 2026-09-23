@@ -63,6 +63,23 @@ class BfsgHistoryCommandTest extends TestCase
             ->expectsOutputToContain('trend');
     }
 
+    public function test_trend_shows_the_latest_reports_in_chronological_order(): void
+    {
+        foreach ([[20, '2026-01-01 10:00'], [45, '2026-02-01 10:00'], [60, '2026-03-01 10:00'], [80, '2026-04-01 10:00']] as [$score, $date]) {
+            BfsgReport::create(['url' => 'https://example.com', 'total_violations' => 1, 'score' => $score, 'grade' => 'C'])
+                ->forceFill(['created_at' => $date])
+                ->save();
+        }
+
+        $this->artisan('bfsg:history', ['--url' => 'https://example.com', '--trend' => true, '--limit' => 2])
+            ->assertSuccessful()
+            ->expectsTable(['Date', 'Score', 'Grade', 'Violations'], [
+                ['2026-03-01 10:00', '60%', 'C', 1],
+                ['2026-04-01 10:00', '80%', 'C', 1],
+            ])
+            ->expectsOutputToContain('Trend: improved by 20 points');
+    }
+
     public function test_trend_requires_url(): void
     {
         $this->artisan('bfsg:history', ['--trend' => true])

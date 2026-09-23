@@ -73,10 +73,14 @@ class BfsgHistoryCommand extends Command
             return Command::FAILURE;
         }
 
+        // The latest N reports, shown oldest first so the trend reads left to right.
         $reports = BfsgReport::forUrl($url)
-            ->oldest()
+            ->latest()
+            ->latest('id')
             ->limit((int) $this->option('limit'))
-            ->get();
+            ->get()
+            ->reverse()
+            ->values();
 
         if ($reports->isEmpty()) {
             $this->info("No reports found for: {$url}");
