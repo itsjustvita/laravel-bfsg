@@ -122,7 +122,8 @@ final class Roles
             'meter' => 'meter',
             'option' => 'option',
             'tr' => 'row',
-            'td' => 'cell',
+            'td' => self::insideGrid($element) ? 'gridcell' : 'cell',
+            // th stays columnheader/rowheader inside grid and treegrid tables as well.
             'th' => Element::enumAttr($element, 'scope') === 'row' ? 'rowheader' : 'columnheader',
             'textarea' => 'textbox',
             'fieldset', 'details' => 'group',
@@ -182,6 +183,18 @@ final class Roles
             'hidden' => null,
             default => 'textbox',
         };
+    }
+
+    /** Whether the closest ancestor table has the effective role grid or treegrid. */
+    private static function insideGrid(DOMElement $element): bool
+    {
+        for ($node = $element->parentNode; $node instanceof DOMElement; $node = $node->parentNode) {
+            if (Element::tag($node) === 'table') {
+                return in_array(self::effective($node), ['grid', 'treegrid'], true);
+            }
+        }
+
+        return false;
     }
 
     private static function insideSectioning(DOMElement $element): bool

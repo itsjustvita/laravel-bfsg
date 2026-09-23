@@ -105,6 +105,14 @@ class AriaAnalyzerTest extends AnalyzerTestCase
         $this->assertViolationCount($violations, 'aria.redundant_role', 1);
     }
 
+    public function test_selected_cells_of_a_native_grid_support_aria_selected(): void
+    {
+        $violations = $this->analyze('<html><body><table role="grid" aria-label="Invoices"><tr><th>Nr</th></tr><tr><td aria-selected="true">1</td></tr></table>'
+            .'<table><tr><td aria-selected="true">2</td></tr></table></body></html>');
+
+        $this->assertViolationCount($violations, 'aria.unsupported_state', 1);
+    }
+
     public function test_dangling_idrefs_one_finding_per_element(): void
     {
         $html = '<div aria-labelledby="missing">a</div>'

@@ -107,4 +107,13 @@ class RolesTest extends TestCase
         $this->assertSame('rowheader', Roles::implicit($this->el('<table><tr><th data-t scope="ROW">a</th></tr></table>')));
         $this->assertSame('meter', Roles::implicit($this->el('<meter data-t value="1"></meter>')));
     }
+
+    public function test_cells_of_native_grids_are_gridcells(): void
+    {
+        $this->assertSame('gridcell', Roles::implicit($this->el('<table role="grid"><tr><td data-t>a</td></tr></table>')));
+        $this->assertSame('gridcell', Roles::implicit($this->el('<table role="treegrid"><tbody><tr><td data-t>a</td></tr></tbody></table>')));
+        $this->assertSame('columnheader', Roles::implicit($this->el('<table role="grid"><tr><th data-t>a</th></tr></table>')));
+        $this->assertSame('rowheader', Roles::implicit($this->el('<table role="grid"><tr><th data-t scope="row">a</th></tr></table>')));
+        $this->assertSame('cell', Roles::implicit($this->el('<div role="grid"><table><tr><td data-t>a</td></tr></table></div>')), 'only the closest table counts');
+    }
 }
