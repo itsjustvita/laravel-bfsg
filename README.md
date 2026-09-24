@@ -600,7 +600,7 @@ All settings live in `config/bfsg.php` (`php artisan vendor:publish --tag=bfsg-c
 | `bfsg.reporting.database.connection` | `BFSG_DB_CONNECTION` | `null` | Connection of the report tables; `null` = default |
 | `bfsg.reporting.output_path` | | `storage/app/bfsg-reports` | Directory of `html`/`pdf` reports written without `--output` |
 | `bfsg.mcp.allowed_hosts` | | `null` | Hosts the MCP tools may fetch; `null` = any public host (see [MCP server](#mcp-server)) |
-| `bfsg.mcp.verify_ssl` | | `true` | TLS verification of the MCP tools |
+| `bfsg.mcp.verify_ssl` | | `true` | TLS verification of the MCP tools; only an explicit false turns it off |
 
 ## Analyzers
 

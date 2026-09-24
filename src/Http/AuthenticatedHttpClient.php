@@ -53,8 +53,11 @@ class AuthenticatedHttpClient
         $this->jar = new CookieJar;
     }
 
-    /** `bfsg.fetch.verify_ssl`: only an explicit false value (false, "false", "0", "off", "no") turns verification off. */
-    private static function verifySslSetting(mixed $value): bool
+    /**
+     * A TLS verification setting (`bfsg.fetch.verify_ssl`, `bfsg.mcp.verify_ssl`): only an explicit false value (false,
+     * "false", "0", "off", "no") turns verification off; null, '' and unparsable values keep it on.
+     */
+    public static function verifySslSetting(mixed $value): bool
     {
         if ($value === null || $value === '') {
             return true;

@@ -148,6 +148,24 @@ class McpToolsTest extends TestCase
         BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => '/local'])->assertHasErrors(['not in the list of allowed hosts']);
     }
 
+    public function test_only_an_explicit_false_mcp_tls_setting_turns_verification_off(): void
+    {
+        $verify = [];
+        Http::fake(function (HttpRequest $request, array $options) use (&$verify) {
+            $verify[] = $options['verify'];
+
+            return Http::response(self::BROKEN, 200);
+        });
+        config()->set('bfsg.mcp.allowed_hosts', ['docs.example.com']);
+
+        foreach ([null, '', 'yes-please', 'false', '0'] as $setting) {
+            config()->set('bfsg.mcp.verify_ssl', $setting);
+            BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://docs.example.com/'])->assertOk();
+        }
+
+        $this->assertSame([true, true, true, false, false], $verify, 'null, empty and unparsable values keep verification on, like bfsg.fetch.verify_ssl');
+    }
+
     public function test_analyze_url_reports_fetch_failures_as_tool_errors(): void
     {
         Http::fake(['https://example.com/api' => Http::response(['ok' => true], 200, ['Content-Type' => 'application/json'])]);

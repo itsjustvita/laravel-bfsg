@@ -32,7 +32,7 @@ trait ToolHelpers
         }
 
         return $fetcher->fetch($url, new FetchOptions(
-            client: new AuthenticatedHttpClient(verifySsl: filter_var(config('bfsg.mcp.verify_ssl', true), FILTER_VALIDATE_BOOL)),
+            client: new AuthenticatedHttpClient(verifySsl: AuthenticatedHttpClient::verifySslSetting(config('bfsg.mcp.verify_ssl', true))),
             allowedHosts: $hosts === [] ? null : $hosts,
             hopGuard: $guard,
         ));
