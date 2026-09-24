@@ -15,13 +15,17 @@ final class ReportRepository
 {
     private const CHUNK = 200;
 
+    /** Length of the `bfsg_reports.url` column. */
+    public const URL_LENGTH = 255;
+
     public function __construct(private ?ScoreCalculator $scores = null)
     {
         $this->scores ??= ScoreCalculator::fromConfig();
     }
 
     /**
-     * Store a report and all its findings in one transaction on the bfsg connection.
+     * Store a report and all its findings in one transaction on the bfsg connection. The URL is stored like the
+     * middleware stores it: without query string and fragment (signatures, tokens), cut to the column length.
      *
      * @param  array<string, mixed>  $metadata  merged into the report's metadata column
      */
@@ -31,7 +35,7 @@ final class ReportRepository
             $stats = $this->scores->stats($result);
 
             $report = BfsgReport::create([
-                'url' => (string) ($result->url() ?? ''),
+                'url' => self::storedUrl((string) ($result->url() ?? '')),
                 'total_violations' => $stats['total_issues'],
                 'score' => $stats['compliance_score'],
                 'grade' => $stats['grade'],
@@ -46,6 +50,12 @@ final class ReportRepository
 
             return $report;
         });
+    }
+
+    /** $url without query string and fragment, at most URL_LENGTH characters. */
+    public static function storedUrl(string $url): string
+    {
+        return mb_substr(explode('#', explode('?', $url, 2)[0], 2)[0], 0, self::URL_LENGTH);
     }
 
     /** Whether the tables exist with the v3 columns (`php artisan migrate` has run). */

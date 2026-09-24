@@ -492,6 +492,20 @@ class CommandsTest extends TestCase
         $this->assertStringContainsString("Stored as report #{$report->id}", $output->stderr());
     }
 
+    public function test_save_stores_the_url_without_query_string_and_at_most_255_characters(): void
+    {
+        $this->fakeSite(self::ERRORS);
+        $path = '/'.str_repeat('a', 300);
+
+        [$long] = $this->check(['url' => 'http://example.com'.$path.'?utm_source=x', '--save' => true]);
+        [$query, $output] = $this->check(['url' => 'http://example.com/page?signature=s3cret&email=a%40example.com#top', '--save' => true, '--format' => 'json']);
+
+        $this->assertSame(1, $long);
+        $this->assertSame(1, $query);
+        $this->assertSame('http://example.com/page?signature=s3cret&email=a%40example.com#top', json_decode($output->stdout(), true)['url'], 'the report itself keeps the URL');
+        $this->assertSame([mb_substr('http://example.com'.$path, 0, 255), 'http://example.com/page'], BfsgReport::query()->orderBy('id')->pluck('url')->all());
+    }
+
     public function test_save_without_tables_exits_2_with_the_migrate_hint(): void
     {
         $this->fakeSite();
