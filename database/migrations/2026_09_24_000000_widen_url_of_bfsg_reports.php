@@ -30,7 +30,7 @@ return new class extends Migration
             // An index on url, whatever its name (v2 used the default bfsg_reports_url_index)
             foreach (Schema::getIndexes('bfsg_reports') as $index) {
                 if ($index['columns'] === ['url'] && ! $index['primary']) {
-                    Schema::table('bfsg_reports', fn (Blueprint $table) => $table->dropIndex($index['name']));
+                    Schema::table('bfsg_reports', fn (Blueprint $table) => $index['unique'] ? $table->dropUnique($index['name']) : $table->dropIndex($index['name']));
                 }
             }
 

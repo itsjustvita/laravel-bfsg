@@ -159,7 +159,7 @@ The analyzer then runs in `bfsg:check`, the middleware, MCP and `Bfsg::analyze()
 | `--format=html` / `pdf` wrote to `storage/app/bfsg-reports` | the same by default (`bfsg.reporting.output_path`), or `--output=<file>` |
 | an unknown `--format` fell back to the CLI output; unknown options exited 1 | unknown options, formats, analyzers and invalid values exit 2 with the reason; so do option combinations that would be ignored |
 | a JSON answer or a download was analyzed as a page | non-HTML answers (JSON, downloads) exit 2 |
-| pages of any size were loaded | pages larger than 5 MiB are aborted while loading (exit 2) |
+| pages of any size were loaded | fetched pages larger than 5 MiB are aborted while loading (exit 2; `--browser` pages are not capped) |
 | `--guard` was sent as a login form field | `--guard` selects the guard for the new `--as=<user>` |
 | `--jwt` was sent as `Authorization: JWT …` | sent as `Authorization: Bearer …` |
 

@@ -97,7 +97,8 @@ class DocumentationTest extends TestCase
         $this->assertGreaterThan(10, count($blocks));
 
         foreach ($blocks as $block) {
-            $file = tempnam(sys_get_temp_dir(), 'bfsg-doc-').'.php';
+            $base = tempnam(sys_get_temp_dir(), 'bfsg-doc-');
+            $file = $base.'.php';
             file_put_contents($file, str_starts_with($block['code'], '<?php') ? $block['code'] : "<?php\n".$block['code']);
 
             try {
@@ -105,6 +106,7 @@ class DocumentationTest extends TestCase
                 $lint->run();
             } finally {
                 unlink($file);
+                unlink($base);
             }
 
             $this->assertTrue($lint->isSuccessful(), $this->where($block).': '.$lint->getOutput().$lint->getErrorOutput());
