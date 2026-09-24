@@ -15,7 +15,8 @@ use Throwable;
 
 /**
  * Analyzes full HTML pages after the response has been sent (terminate), logs the counts per severity on the
- * configured channel and stores the report when `bfsg.reporting.save_to_database` is on. With `app.debug` the
+ * configured channel and stores the report when `bfsg.reporting.save_to_database` is on. The URL is logged and
+ * stored without its query string (signatures, reset tokens and e-mail addresses stay out of logs and the database). With `app.debug` the
  * analysis runs in handle() instead so the X-BFSG-Violations header can be set. Never breaks the page.
  */
 class CheckAccessibility
@@ -104,7 +105,7 @@ class CheckAccessibility
 
     protected function analyze(Request $request, SymfonyResponse $response): AnalysisResult
     {
-        return Bfsg::analyze((string) $response->getContent(), ['url' => $request->fullUrl()]);
+        return Bfsg::analyze((string) $response->getContent(), ['url' => $request->url()]);
     }
 
     /** One line per page with findings; counts only, at warning level when the page is not accessible. */
@@ -126,7 +127,7 @@ class CheckAccessibility
     protected function failed(Request $request, Throwable $e): void
     {
         try {
-            Log::error('BFSG: accessibility analysis failed for '.$request->fullUrl(), ['exception' => $e]);
+            Log::error('BFSG: accessibility analysis failed for '.$request->url(), ['exception' => $e]);
         } catch (Throwable) {
             // logging must not break the page either
         }

@@ -170,12 +170,12 @@ class MiddlewareTest extends TestCase
 
     public function test_the_log_line_carries_counts_only_on_the_configured_channel(): void
     {
-        $this->through(Request::create('/page?x=1'), $this->html());
+        $this->through(Request::create('/page?signature=secret&email=a@example.com'), $this->html());
 
         $records = $this->logs()->getRecords();
         $this->assertCount(1, $records);
         $this->assertSame('WARNING', $records[0]->level->getName());
-        $this->assertMatchesRegularExpression('#^BFSG: \d+ violations on http://localhost/page\?x=1$#', $records[0]->message);
+        $this->assertMatchesRegularExpression('#^BFSG: \d+ violations on http://localhost/page$#', $records[0]->message);
         $this->assertSame(['errors', 'warnings', 'notices'], array_keys($records[0]->context));
         $this->assertGreaterThan(0, $records[0]->context['errors']);
     }
@@ -202,7 +202,7 @@ class MiddlewareTest extends TestCase
     {
         config()->set('bfsg.reporting.save_to_database', true);
 
-        $this->through(Request::create('/broken'), $this->html());
+        $this->through(Request::create('/broken?token=secret'), $this->html());
         $this->through(Request::create('/clean'), $this->html(self::ACCESSIBLE));
 
         $this->assertSame(['http://localhost/broken', 'http://localhost/clean'], BfsgReport::query()->orderBy('id')->pluck('url')->all());
@@ -215,10 +215,10 @@ class MiddlewareTest extends TestCase
         config()->set('bfsg.reporting.save_to_database', true);
         config()->set('bfsg.middleware.log_violations', false);
         Schema::drop('bfsg_violations');
-        Log::shouldReceive('error')->once()->withArgs(fn ($message) => str_starts_with($message, 'BFSG: accessibility analysis failed for http://localhost/page'));
+        Log::shouldReceive('error')->once()->withArgs(fn ($message) => $message === 'BFSG: accessibility analysis failed for http://localhost/page');
 
         $response = $this->html();
-        $this->assertSame($response, $this->through(Request::create('/page'), $response));
+        $this->assertSame($response, $this->through(Request::create('/page?token=secret'), $response));
     }
 
     public function test_a_failed_debug_analysis_is_not_run_again_in_terminate(): void
