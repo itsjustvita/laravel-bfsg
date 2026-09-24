@@ -95,6 +95,7 @@ Phases 1 (foundation), 2 (analyzer round) and 3 (core fixes) of v3. See UPGRADE.
 - Stylesheet inlining scans linearly (large inline scripts no longer hit the PCRE backtrack limit) and never inlines `<link>` tags inside comments, `script`, `style`, `template`, `noscript`, `textarea` or `title`; stylesheets served from `public/` must be `.css` files and are size-checked before they are read.
 - An in-process fetch restores the caller's app locale, so a page that calls `app()->setLocale()` no longer switches a long-running MCP server to its language.
 - `bfsg:check --save` and MCP `generate_report` store the URL without query string and fragment (like the middleware), cut to the 255-character `url` column; a long URL no longer fails the save after the report was written.
+- Stored URLs also drop credentials (`user:pass@`, for programmatic `ReportRepository::store()` too), and `bfsg:history --url` and MCP `get_history` compare the given URL in its stored form, so a pasted URL with query string, fragment or credentials finds its reports.
 - `bfsg:history` prints the `php artisan migrate` hint and exits 1 when the tables are missing, instead of a raw `QueryException`.
 - The middleware no longer analyzes a page a second time in `terminate()` after its debug analysis in `handle()` failed.
 

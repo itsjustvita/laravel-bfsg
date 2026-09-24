@@ -4,6 +4,7 @@ namespace ItsJustVita\LaravelBfsg\Persistence;
 
 use DateTimeInterface;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
+use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Models\BfsgViolation;
 use ItsJustVita\LaravelBfsg\Reports\ScoreCalculator;
@@ -52,10 +53,10 @@ final class ReportRepository
         });
     }
 
-    /** $url without query string and fragment, at most URL_LENGTH characters. */
+    /** $url as stored: without credentials (`user:pass@`), query string and fragment, at most URL_LENGTH characters. */
     public static function storedUrl(string $url): string
     {
-        return mb_substr(explode('#', explode('?', $url, 2)[0], 2)[0], 0, self::URL_LENGTH);
+        return mb_substr(UrlFetcher::redact(explode('#', explode('?', $url, 2)[0], 2)[0]), 0, self::URL_LENGTH);
     }
 
     /** Whether the tables exist with the v3 columns (`php artisan migrate` has run). */

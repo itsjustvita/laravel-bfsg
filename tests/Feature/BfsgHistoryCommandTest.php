@@ -63,6 +63,21 @@ class BfsgHistoryCommandTest extends TestCase
             ->expectsOutputToContain('example.com');
     }
 
+    public function test_a_pasted_url_with_query_fragment_or_credentials_matches_its_stored_form(): void
+    {
+        BfsgReport::create(['url' => 'https://example.com/page', 'total_violations' => 5, 'score' => 82, 'grade' => 'B']);
+        BfsgReport::create(['url' => 'https://other.com', 'total_violations' => 0, 'score' => 100, 'grade' => 'A+']);
+
+        $this->artisan('bfsg:history', ['--url' => 'https://deploy:s3cret@example.com/page?utm_source=x#top'])
+            ->assertSuccessful()
+            ->expectsOutputToContain('example.com/page')
+            ->doesntExpectOutputToContain('other.com');
+
+        $this->artisan('bfsg:history', ['--url' => 'https://example.com/page?utm_source=x', '--trend' => true])
+            ->assertSuccessful()
+            ->expectsOutputToContain('Grade');
+    }
+
     public function test_shows_trend(): void
     {
         $old = BfsgReport::create(['url' => 'https://example.com', 'total_violations' => 10, 'score' => 50, 'grade' => 'F']);

@@ -28,6 +28,16 @@ class ReportRepositoryTest extends TestCase
         ], ['images', 'links'], 'https://example.com/', 'de');
     }
 
+    public function test_programmatic_store_strips_credentials_query_and_fragment_from_the_url(): void
+    {
+        $result = new AnalysisResult([], ['images'], 'https://deploy:s3cret@staging.example.com/page?token=t#top', 'en');
+
+        $report = (new ReportRepository)->store($result);
+
+        $this->assertSame('https://staging.example.com/page', $report->fresh()->url);
+        $this->assertSame('https://staging.example.com/page', ReportRepository::storedUrl('https://deploy:s3cret@staging.example.com/page?token=t#top'));
+    }
+
     public function test_stores_report_and_violations_with_key_fingerprint_and_context(): void
     {
         $report = (new ReportRepository)->store($this->sampleResult(), ['source' => 'test']);

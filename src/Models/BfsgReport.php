@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use ItsJustVita\LaravelBfsg\Database\Factories\BfsgReportFactory;
+use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 
 class BfsgReport extends BfsgModel
 {
@@ -33,9 +34,10 @@ class BfsgReport extends BfsgModel
         return $this->hasMany(BfsgViolation::class, 'report_id');
     }
 
+    /** Reports of $url, compared in its stored form (ReportRepository::storedUrl()), so a pasted URL with query string, fragment or credentials matches. */
     public function scopeForUrl($query, string $url)
     {
-        return $query->where('url', $url);
+        return $query->where('url', ReportRepository::storedUrl($url));
     }
 
     public function scopeRecent($query, int $days = 30)
