@@ -271,7 +271,7 @@ The tag is `<x-bfsg-accessible-image>`. The 2.x README documented `<x-bfsg::acce
 - A missing or empty `alt` throws an `InvalidArgumentException` unless the image is decorative; 2.x rendered `alt=""` silently.
 - `decorative` must be a boolean binding: `decorative="false"` is the non-empty string `"false"`, which PHP treats as `true`, so in 2.x it made the image decorative.
 - Decorative images render `alt="" aria-hidden="true"` instead of `role="presentation"`, and cannot have a caption.
-- It renders a bare `<img>`; the `<figure class="bfsg-image">` wrapper only appears with `caption`, and the attributes you pass are no longer copied onto both elements.
+- It renders a bare `<img>`. The wrapper is a plain `<figure>` without the `bfsg-image` class and appears only with `caption`. Every attribute you pass, `class` included, goes on the `<img>` (2.x put `class` on the figure, merged with `bfsg-image`), so CSS that targets `.bfsg-image` no longer matches.
 - `loading="lazy"` is no longer added by default.
 
 Before (2.x):

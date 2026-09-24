@@ -225,7 +225,7 @@ php artisan bfsg:check https://app.example.com/dashboard --session="laravel_sess
 
 Without `--email`/`--password` in an interactive terminal, `--auth` asks for them. A failed login exits 2 with its cause (CSRF token rejected, invalid credentials, validation error, two-factor challenge, no session). A page that redirects to the login page exits 2 unless you pass `--allow-login-page`.
 
-In CI, pass credentials as `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` or `BFSG_AUTH_TOKEN` from your CI secrets rather than `--password`, `--bearer` or `--session` on the command line: command-line arguments end up in the shell history, job logs and the process list.
+In CI, pass credentials as `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` or `BFSG_AUTH_TOKEN` from your CI secrets rather than `--password` or `--bearer` on the command line (`BFSG_AUTH_TOKEN` is read with `--auth`, so use `--auth` instead of a bare `--bearer`): command-line arguments end up in the shell history, job logs and the process list. `--session` has no environment variable; pass it from a masked CI secret.
 
 Credentials are bound to one origin (scheme, host and port): tokens, API keys and session cookies are only sent to the checked site (or, for a login token, the login site), and a redirect to another host, another port or from `https` to `http` drops them.
 
@@ -494,7 +494,7 @@ The JSON report is a stable contract. For `https://example.com/pricing`, a page 
 
 ## Localization
 
-Messages, suggestions, CLI status lines and reports are available in English (`en`) and German (`de`). The locale is, in this order: `--locale` / the MCP `locale` argument / `Bfsg::analyze($html, ['locale' => 'de'])`, then `bfsg.locale` (`BFSG_LOCALE`), then `app.locale`. A configured locale without translations falls back to `app.fallback_locale`, then `en`; an explicit `--locale` or MCP `locale` without translations is an error.
+Messages, suggestions, the `bfsg:check` status lines and reports are available in English (`en`) and German (`de`); error messages and the output of `bfsg:history` are in English. The locale is, in this order: `--locale` / the MCP `locale` argument / `Bfsg::analyze($html, ['locale' => 'de'])`, then `bfsg.locale` (`BFSG_LOCALE`), then `app.locale`. A configured locale without translations falls back to `app.fallback_locale`, then `en`; an explicit `--locale` or MCP `locale` without translations is an error.
 
 To reword messages or add a language, publish the translations (`php artisan vendor:publish --tag=bfsg-lang`) and edit or copy `lang/vendor/bfsg/<locale>/violations.php` and `report.php`. A locale counts as available for `--locale` once `lang/vendor/bfsg/<locale>/report.php` exists.
 
@@ -559,7 +559,7 @@ or in `.mcp.json` in the project root:
 
 - `bfsg.mcp.allowed_hosts`: a list of hostnames. When set, the list replaces the public-host default: only the listed hosts are fetched (a public host that is not listed is refused), and every URL and every redirect hop must be on one of them. Listed hosts are trusted as they are, without the private-network check and address pinning below, so list only hosts whose DNS you control.
 - When it is `null` (the default) or empty, any public host is allowed and a private-network guard refuses every non-public address: loopback, private and link-local ranges (including the cloud metadata address `169.254.169.254`), CGNAT, reserved ranges, IPv6 unique-local and site-local, and IPv6 forms that embed such an IPv4 address. Numeric host spellings (`0x7f000001`, `127.1`) are recognised, hosts that do not resolve are refused, and each request is pinned to the addresses that were checked, so DNS rebinding cannot redirect it. Pinning needs PHP's curl extension; without it such fetches fail.
-- Pages of this application (paths, or the exact origin of `app.url`) are rendered in-process and exempt; a remote page that redirects to the application is guarded like any other hop.
+- Pages of this application (paths, or the exact origin of `app.url`) are rendered in-process and exempt from the private-network guard; a remote page that redirects to the application is guarded like any other hop. With `allowed_hosts` set, list the host of `app.url` for paths and pages of this application to work.
 - TLS verification follows `bfsg.mcp.verify_ssl` only; the assistant cannot switch it off.
 
 ## Blade component

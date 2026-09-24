@@ -24,7 +24,7 @@ git clone https://github.com/itsjustvita/laravel-bfsg.git
 cd laravel-bfsg
 composer install
 
-composer test    # PHPUnit (the suite never touches the network or spawns node)
+composer test    # PHPUnit (never touches the network; three browser tests run node when it is installed and are skipped otherwise)
 composer lint    # Pint, check only
 composer fix     # Pint
 ```
