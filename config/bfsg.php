@@ -103,7 +103,7 @@ return [
     | addresses embedding one of these (IPv4-mapped/-compatible, NAT64 64:ff9b::/96, 6to4 2002::/16) and local-use
     | NAT64 64:ff9b:1::/48. Hosts that do not resolve, and names that are not plain ASCII (letters, digits, dots,
     | hyphens; give IDNs in punycode), are refused. URLs of this application (the origin of app.url: scheme, host and port) are
-    | exempt. Each request (redirect hops and stylesheets included) is pinned to the addresses that were checked
+    | exempt while they are rendered in-process; a remote page redirecting there is guarded like any other hop. Each request (redirect hops and stylesheets included) is pinned to the addresses that were checked
     | (CURLOPT_RESOLVE), so a DNS answer that changes after the check (rebinding) is never connected to; this needs
     | the curl extension, and without it such fetches fail. TLS verification comes only from verify_ssl; MCP
     | clients cannot switch it off.
