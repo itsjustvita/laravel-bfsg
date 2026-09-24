@@ -3,15 +3,21 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Facades\Bfsg as BfsgFacade;
 use ItsJustVita\LaravelBfsg\Mcp\BfsgMcpServer;
+use ItsJustVita\LaravelBfsg\Middleware\CheckAccessibility;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Tests\Support\DocSamples;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use Monolog\Handler\TestHandler;
 use ReflectionClass;
 use ReflectionMethod;
 use Symfony\Component\Process\Process as SymfonyProcess;
@@ -196,8 +202,10 @@ class DocumentationTest extends TestCase
             }
         }
 
-        foreach (['README.md', 'SPA-TESTING.md'] as $file) {
-            preg_match_all('/\bBFSG_[A-Z_]+\b/', $this->docs()->markdown($file), $variables);
+        foreach (DocSamples::FILES as $file) {
+            // UPGRADE.md also names the variables of removed settings, on lines that say so
+            $text = implode("\n", array_filter(explode("\n", $this->docs()->markdown($file)), fn (string $line) => $file !== 'UPGRADE.md' || ! str_contains($line, 'removed')));
+            preg_match_all('/\bBFSG_[A-Z_]+\b/', $text, $variables);
 
             foreach (array_unique($variables[0]) as $variable) {
                 $this->assertStringContainsString("'{$variable}'", $source, "{$file}: {$variable} is not read by the package");
@@ -255,10 +263,12 @@ class DocumentationTest extends TestCase
             if ($block['marker'] === 'run') {
                 ob_start();
 
-                // eval() of the package's own, versioned documentation: the point of the test is to run exactly what the docs show
-
+                // eval() of the package's own, versioned documentation: the point of the test is to run exactly what the docs show.
+                // Each sample runs in its own static closure, so it cannot use a variable of an earlier sample or of this test.
                 try {
-                    eval(preg_replace('/^<\?php\s*/', '', $block['code']));
+                    (static function (string $code): void {
+                        eval($code);
+                    })((string) preg_replace('/^<\?php\s*/', '', $block['code']));
                 } finally {
                     $output .= ob_get_clean();
                 }
@@ -274,5 +284,207 @@ class DocumentationTest extends TestCase
 
         $this->assertGreaterThanOrEqual(5, $ran);
         $this->assertContains('marquee.moving_content', array_map(fn ($violation) => $violation->key, BfsgFacade::analyze('<marquee>Sale</marquee>')->all()), 'the custom analyzer example is registered and reports');
+    }
+
+    /** @return array<string, class-string> short class name => class, for every class under src/ (a top-level class wins a clash) */
+    private function packageClasses(): array
+    {
+        $src = realpath(__DIR__.'/../../src');
+        $classes = [];
+
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($src)) as $file) {
+            if ($file->isFile() && $file->getExtension() === 'php') {
+                $relative = substr($file->getPathname(), strlen($src) + 1, -4);
+                $short = basename($relative);
+
+                if (! isset($classes[$short]) || ! str_contains($relative, '/')) {
+                    $classes[$short] = 'ItsJustVita\\LaravelBfsg\\'.str_replace('/', '\\', $relative);
+                }
+            }
+        }
+
+        return $classes;
+    }
+
+    /** The package class a name in the docs refers to (FQCN, `Http\UrlFetcher`, `UrlFetcher`), '' for a package namespace that has no such class, null for other names. */
+    private function packageClass(string $name): ?string
+    {
+        $name = ltrim($name, '\\');
+
+        if (str_starts_with($name, 'ItsJustVita\\LaravelBfsg\\')) {
+            return class_exists($name) || interface_exists($name) || enum_exists($name) ? $name : '';
+        }
+
+        if (str_contains($name, '\\')) {
+            if (! is_dir(__DIR__.'/../../src/'.strstr($name, '\\', true))) {
+                return null;
+            }
+
+            return $this->packageClass('ItsJustVita\\LaravelBfsg\\'.$name);
+        }
+
+        return $this->packageClasses()[$name] ?? null;
+    }
+
+    /** A method, or an Eloquent local scope (`BfsgReport::forUrl()` is `scopeForUrl()`). */
+    private function hasMethod(string $class, string $method): bool
+    {
+        return method_exists($class, $method) || method_exists($class, 'scope'.ucfirst($method));
+    }
+
+    public function test_package_classes_and_methods_named_in_the_prose_exist(): void
+    {
+        $checked = 0;
+
+        foreach (DocSamples::FILES as $file) {
+            $prose = $this->docs()->prose($file);
+
+            foreach (explode("\n", $prose) as $line) {
+                // UPGRADE.md tables put the 2.x name in the first column: only the 3.0 columns are checked
+                if ($file === 'UPGRADE.md' && str_starts_with($line, '|')) {
+                    $line = (string) preg_replace('/^\|[^|]*\|/', '|', $line);
+                }
+
+                preg_match_all('/\\\\?ItsJustVita\\\\LaravelBfsg\\\\[A-Za-z\\\\]+[A-Za-z]/', $line, $fqcns);
+
+                foreach ($fqcns[0] as $class) {
+                    $this->assertNotSame('', $this->packageClass($class), "{$file}: {$class} does not exist");
+                }
+
+                $current = null;
+                preg_match_all('/`([^`]+)`/', $line, $spans);
+
+                foreach ($spans[1] as $span) {
+                    // `Class`, `Ns\Class`, `Class::method(…)`, `Class::CONSTANT`, `new Class(…)`
+                    if (preg_match('/^(?:new )?\\\\?([A-Z]\w*(?:\\\\[A-Z]\w*)*)(?:::(\w+)(\(.*)?|\(.*)?$/', $span, $m) === 1) {
+                        $class = $this->packageClass($m[1]);
+
+                        if ($class === null) {
+                            continue;
+                        }
+
+                        $this->assertNotSame('', $class, "{$file}: {$m[1]} (in `{$span}`) does not exist");
+                        $current = $class;
+                        $checked++;
+
+                        if (($m[2] ?? '') !== '' && str_starts_with($m[3] ?? '', '(')) {
+                            $this->assertTrue($this->hasMethod($class, $m[2]), "{$file}: {$class}::{$m[2]}() does not exist");
+                        } elseif (($m[2] ?? '') !== '' && $m[2] !== 'class') {
+                            $this->assertTrue(defined($class.'::'.$m[2]), "{$file}: {$class}::{$m[2]} does not exist");
+                        }
+
+                        continue;
+                    }
+
+                    // A bare `method()` after a package class on the same line is a method of that class (PHP functions excepted)
+                    if ($current !== null && preg_match('/^([a-z]\w*)\(/', $span, $m) === 1 && ! function_exists($m[1])) {
+                        $this->assertTrue($this->hasMethod($current, $m[1]), "{$file}: {$current}::{$m[1]}() does not exist (`{$span}`)");
+                        $checked++;
+                    }
+                }
+            }
+        }
+
+        $this->assertGreaterThan(40, $checked);
+    }
+
+    public function test_the_readme_config_table_defaults_match_the_config(): void
+    {
+        $config = require __DIR__.'/../../config/bfsg.php';
+        preg_match_all('/^\| `bfsg\.([a-z_.]+)` \|[^|]*\|([^|]*)\|/m', $this->docs()->markdown('README.md'), $rows, PREG_SET_ORDER);
+        $compared = 0;
+
+        foreach ($rows as [, $key, $default]) {
+            // Only defaults written as code values (`30`, `null`, a list of `path/*`); prose defaults such as "all `true`" are skipped
+            if (preg_match('/^`[^`]*`(?:, `[^`]*`)*$/', trim($default)) !== 1) {
+                continue;
+            }
+
+            preg_match_all('/`([^`]*)`/', $default, $values);
+            $actual = Arr::get($config, $key);
+
+            if (is_array($actual)) {
+                $this->assertSame($actual, $values[1], "README.md: default of bfsg.{$key}");
+            } else {
+                $shown = match (true) {
+                    $values[1][0] === 'null' => null,
+                    $values[1][0] === 'true' => true,
+                    $values[1][0] === 'false' => false,
+                    is_numeric($values[1][0]) => $values[1][0] + 0,
+                    default => $values[1][0],
+                };
+                // Paths are shown relative to the application root
+                $actual = is_string($actual) ? str_replace(base_path().'/', '', $actual) : $actual;
+
+                $this->assertSame($actual, $shown, "README.md: default of bfsg.{$key}");
+            }
+
+            $compared++;
+        }
+
+        $this->assertGreaterThan(12, $compared);
+    }
+
+    public function test_the_readme_mcp_table_lists_the_arguments_of_every_tool(): void
+    {
+        $readme = $this->docs()->markdown('README.md');
+
+        foreach ((new ReflectionClass(BfsgMcpServer::class))->getDefaultProperties()['tools'] as $tool) {
+            $schema = app($tool)->toArray();
+            $this->assertMatchesRegularExpression('/^\| `'.preg_quote($schema['name'], '/').'` \|([^|]*)\|/m', $readme);
+            preg_match('/^\| `'.preg_quote($schema['name'], '/').'` \|([^|]*)\|/m', $readme, $row);
+            // Argument names are the code spans outside the parenthesised notes
+            preg_match_all('/`([a-z_]+)`/', (string) preg_replace('/\([^)]*\)/', '', $row[1]), $documented);
+            $arguments = array_keys((array) ($schema['inputSchema']['properties'] ?? []));
+
+            sort($arguments);
+            $documented = $documented[1];
+            sort($documented);
+
+            $this->assertSame($arguments, $documented, "README.md: arguments of the MCP tool {$schema['name']}");
+        }
+    }
+
+    public function test_the_cli_output_and_the_log_line_samples_match_real_output(): void
+    {
+        $samples = [];
+
+        foreach ($this->docs()->blocks('README.md') as $block) {
+            if (in_array($block['marker'], ['cli-output', 'log-line'], true)) {
+                $samples[$block['marker']] = trim($block['code']);
+            }
+        }
+
+        $this->assertCount(2, $samples);
+
+        // The CLI sample: bfsg:check /contact on a page with an image without alt and a link "hier klicken"
+        Route::get('/contact', fn () => '<!DOCTYPE html><html lang="en"><head><title>Contact – Example</title></head><body>'
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Contact</h1><img src="/produkt.jpg"><p><a href="/more">hier klicken</a></p></main>'
+            .'<footer><p>Footer content</p></footer></body></html>');
+
+        $this->assertSame(1, Artisan::call('bfsg:check', ['url' => '/contact']));
+        $this->assertSame($samples['cli-output'], trim(Artisan::output()), 'README.md: the CLI output shown differs from the real output');
+
+        // The log-line sample: the middleware on https://example.com/contact with one error, two warnings and one notice
+        config()->set('bfsg.middleware.enabled', true);
+        config()->set('bfsg.middleware.ignored_paths', []);
+        config()->set('logging.channels.bfsg-docs', ['driver' => 'monolog', 'handler' => TestHandler::class]);
+        config()->set('bfsg.middleware.log_channel', 'bfsg-docs');
+        config()->set('app.debug', false);
+
+        $request = Request::create('https://example.com/contact');
+        $response = new Response('<!DOCTYPE html><html lang="en"><head><title>Contact – Example</title></head><body>'
+            .'<header><nav><a href="#main">Skip to content</a></nav></header>'
+            .'<main id="main"><h1>Contact</h1><img src="team.jpg">'
+            .'<p><a href="/hours">click here</a></p><p><a href="/directions">read more</a></p>'
+            .'<p><a href="https://partner.example/" target="_blank" rel="noopener">Partner site of our company</a></p></main>'
+            .'<footer><p>Footer content</p></footer></body></html>', 200, ['Content-Type' => 'text/html; charset=UTF-8']);
+        $middleware = new CheckAccessibility;
+        $middleware->terminate($request, $middleware->handle($request, fn () => $response));
+
+        $records = Log::channel('bfsg-docs')->getLogger()->getHandlers()[0]->getRecords();
+        $this->assertCount(1, $records);
+        $this->assertSame($samples['log-line'], $records[0]->message.' '.json_encode($records[0]->context), 'README.md: the log line shown differs from the real one');
     }
 }

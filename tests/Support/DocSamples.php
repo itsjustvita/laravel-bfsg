@@ -8,7 +8,8 @@ namespace ItsJustVita\LaravelBfsg\Tests\Support;
  *
  * Markers: an HTML comment `<!-- docs: <marker> -->` on the line before a fenced block tags it:
  * `v2` (2.x code in UPGRADE.md: only linted), `run` (executed by DocumentationTest), `output` (the expected stdout
- * of the `run` blocks before it), `json-report` (a JSON report sample compared with a real report).
+ * of the `run` blocks before it), `json-report` (a JSON report sample compared with a real report), `cli-output` and
+ * `log-line` (README samples of the bfsg:check CLI output and the middleware log line, compared with real ones).
  */
 final class DocSamples
 {
