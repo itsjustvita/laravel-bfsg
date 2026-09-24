@@ -1,0 +1,37 @@
+name: Packagist install
+
+# Post-release check, started by hand: gh workflow run packagist.yml --ref v3.0.0 -f constraint='^3.0'
+# Installs the released package from Packagist into fresh Laravel 12 and 13 apps and runs the live smoke test
+# against it (fixtures from the checked-out ref).
+on:
+  workflow_dispatch:
+    inputs:
+      constraint:
+        description: 'Composer constraint for itsjustvita/laravel-bfsg'
+        required: true
+        default: '^3.0'
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        laravel: ['^12.0', '^13.0']
+    name: Laravel ${{ matrix.laravel }} from Packagist (${{ inputs.constraint }})
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite
+          coverage: none
+      - name: Create a fresh Laravel app
+        run: composer create-project "laravel/laravel:${{ matrix.laravel }}" "$RUNNER_TEMP/live-app" --prefer-dist --no-interaction
+      - name: Install the package from Packagist and the live fixtures
+        env:
+          BFSG_REQUIRE: itsjustvita/laravel-bfsg:${{ inputs.constraint }}
+        run: tests/Live/setup.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/live-app"
+      - name: Run the live smoke test
+        run: tests/Live/smoke.sh "$RUNNER_TEMP/live-app"
