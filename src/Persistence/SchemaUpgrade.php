@@ -11,7 +11,8 @@ use Illuminate\Support\Facades\Schema;
  * upgrade_bfsg_tables safety net. Each step only adds what is missing, so it is a no-op on the v3 schema. Call them
  * from a migration's up(): the migrator makes the migration's connection the default one while it runs.
  *
- * @internal
+ * Published copies of those migrations call this class from the application, so its public methods stay stable
+ * for all of 3.x.
  */
 final class SchemaUpgrade
 {

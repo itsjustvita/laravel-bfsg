@@ -9,7 +9,7 @@ Requirements are unchanged: PHP 8.2+, Laravel 12 or 13.
 ### Checklist
 
 1. `composer require itsjustvita/laravel-bfsg:^3.0` (and `composer require laravel/mcp` if you use the MCP server).
-2. If you published the migrations in 2.x, re-publish them (`php artisan vendor:publish --tag=bfsg-migrations --force`) or delete your copy of `create_bfsg_tables.php` (section 8).
+2. If you published the migrations in 2.x, re-publish them (`php artisan vendor:publish --tag=bfsg-migrations --force`) or delete your copy of `create_bfsg_tables.php` (section 8). Re-publishing also copies the 3.0 upgrade migrations; that is harmless, they only add what is missing.
 3. `php artisan migrate`.
 4. Re-publish or merge the config if you published it (`php artisan vendor:publish --tag=bfsg-config --force`, then re-apply your changes).
 5. Delete published views and translations you did not change (`resources/views/vendor/bfsg`, `lang/vendor/bfsg`), re-publish the ones you did change and re-apply your edits.
