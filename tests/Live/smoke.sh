@@ -60,6 +60,10 @@ php artisan list --raw | grep -q '^bfsg:mcp-server' || fail "bfsg:mcp-server is 
 if php artisan list --raw | grep -q '^bfsg:analyze'; then fail "bfsg:analyze is still registered (replaced by bfsg:check --browser)"; fi
 pass "bfsg commands registered"
 
+# 1b. Every command line in README.md, UPGRADE.md and SPA-TESTING.md names a command and options the installed package has
+php "$LIVE_DIR/doc-commands.php" "$LIVE_DIR/../.." >"$WORK/doc-commands.out" 2>&1 || { cat "$WORK/doc-commands.out"; fail "the docs name commands or options the installed package does not have"; }
+pass "docs: $(tail -1 "$WORK/doc-commands.out")"
+
 # 2. Every publish tag works
 for tag in bfsg-config bfsg-lang bfsg-views bfsg-migrations; do
     php artisan vendor:publish --tag="$tag" --force >"$WORK/publish.txt" 2>&1 || { cat "$WORK/publish.txt"; fail "vendor:publish --tag=$tag"; }
