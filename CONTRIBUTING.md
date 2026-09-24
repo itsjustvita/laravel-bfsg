@@ -1,155 +1,87 @@
 # Contributing to Laravel BFSG
 
-Thank you for considering contributing to Laravel BFSG! This document outlines the guidelines for contributing to this package.
+Thank you for helping make the web more accessible. This document describes how to report problems and how to change the package.
 
-## Code of Conduct
+## Reporting bugs and false positives
 
-Please be respectful and constructive in all interactions. We aim to foster an inclusive and welcoming community.
+Open an issue on GitHub with:
 
-## How to Contribute
+- the PHP, Laravel and package versions (`composer show itsjustvita/laravel-bfsg`),
+- the smallest HTML that shows the problem, and the command or code you ran,
+- the finding's `key` (for example `links.non_descriptive`) and what you expected instead,
+- for a false positive: why the markup meets the WCAG success criterion (a link to the W3C understanding document or technique helps).
 
-### Reporting Bugs
+Please report security issues to hello@itsjustvita.com instead of the issue tracker.
 
-If you discover a bug, please create an issue on GitHub with:
-- A clear, descriptive title
-- Steps to reproduce the issue
-- Expected vs. actual behavior
-- Your environment (PHP version, Laravel version, etc.)
-- Any relevant code samples or error messages
+## Suggesting features
 
-### Suggesting Features
+Describe the use case, the WCAG success criterion or BFSG requirement behind it, and an example. Check the roadmap in the README first.
 
-We welcome feature suggestions! Please create an issue with:
-- A clear description of the feature
-- Use cases and benefits
-- Any relevant examples or mockups
-- Consideration of WCAG/BFSG compliance impact
-
-### Pull Requests
-
-1. **Fork the repository** and create a new branch from `main`
-2. **Write tests** for any new functionality
-3. **Update documentation** if needed (README.md, code comments, etc.)
-4. **Follow the coding standards** (see below)
-5. **Ensure all tests pass** before submitting
-6. **Create a pull request** with a clear description of the changes
-
-#### Pull Request Process
-
-- Ensure your code follows PSR-12 coding standards
-- Run the test suite: `vendor/bin/phpunit`
-- Run code style fixes: `vendor/bin/pint`
-- Update CHANGELOG.md with your changes
-- Reference any related issues in your PR description
-
-## Development Setup
+## Development setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/itsjustvita/laravel-bfsg.git
 cd laravel-bfsg
-
-# Install dependencies
 composer install
 
-# Run tests
-vendor/bin/phpunit
-
-# Run code style fixer
-vendor/bin/pint
+composer test    # PHPUnit (the suite never touches the network or spawns node)
+composer lint    # Pint, check only
+composer fix     # Pint
 ```
 
-## Coding Standards
+The live smoke test installs your checkout into a fresh Laravel application and runs the commands, the middleware, the MCP server and (with Playwright installed in that application) the browser mode against it. It needs network access for Composer:
 
-- Follow **PSR-12** coding standards
-- Use **type hints** for all parameters and return types
-- Write **descriptive variable and method names**
-- Add **PHPDoc blocks** for all classes and methods
-- Keep methods focused and concise
-- **Write tests** for new features and bug fixes
+```bash
+composer create-project laravel/laravel /tmp/bfsg-live-app
+tests/Live/setup.sh "$PWD" /tmp/bfsg-live-app
+tests/Live/smoke.sh /tmp/bfsg-live-app
+```
 
-### Example
+CI runs PHPUnit for PHP 8.2 to 8.4 with Laravel 12 and 13, Pint, and the live smoke test on every push and pull request.
+
+## Pull requests
+
+1. Branch from `main`.
+2. Write the test first; every bug fix comes with a test that fails without it.
+3. Keep the documentation in step: `tests/Feature/DocumentationTest.php` checks that the code samples in `README.md`, `UPGRADE.md` and `SPA-TESTING.md` still lint and run, and that every command option, config key, analyzer and MCP tool is documented.
+4. Add a line to the `Unreleased` section of `CHANGELOG.md`.
+5. Run `composer test` and `composer lint`.
+6. Use a conventional commit message (`fix(links): …`, `feat(commands): …`, `docs: …`).
+
+## Writing an analyzer check
+
+Analyzers extend `ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer` and report findings with a translation key:
 
 ```php
-<?php
-
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
-class ExampleAnalyzer
+use ItsJustVita\LaravelBfsg\Severity;
+
+class ExampleAnalyzer extends BaseAnalyzer
 {
-    /**
-     * Analyze HTML for specific accessibility issues
-     */
-    public function analyze(\DOMDocument $dom): array
+    protected string $key = 'example';
+
+    protected string $description = 'Example checks';
+
+    protected array $rules = ['1.3.1'];
+
+    protected function inspect(): void
     {
-        $issues = [];
-
-        // Analysis logic here
-
-        return [
-            'issues' => $issues,
-            'stats' => [
-                'total_issues' => count($issues),
-            ],
-        ];
+        foreach ($this->queryVisible('//table[not(.//th)]') as $table) {
+            $this->report('table_without_headers', Severity::Warning, '1.3.1', $table);
+        }
     }
 }
 ```
 
-## Testing
+Rules the analyzers follow:
 
-All contributions must include tests. We use PHPUnit for testing.
-
-### Writing Tests
-
-- Place unit tests in `tests/Unit/`
-- Place feature tests in `tests/Feature/`
-- Follow existing test patterns
-- Test both success and failure cases
-- Include edge cases
-
-### Running Tests
-
-```bash
-# Run all tests
-vendor/bin/phpunit
-
-# Run specific test file
-vendor/bin/phpunit tests/Unit/ImageAnalyzerTest.php
-
-# Run with coverage (requires Xdebug)
-vendor/bin/phpunit --coverage-html coverage
-```
-
-## Accessibility Standards
-
-This package focuses on WCAG 2.1 and BFSG compliance. When contributing:
-
-- Familiarize yourself with [WCAG 2.1 guidelines](https://www.w3.org/WAI/WCAG21/quickref/)
-- Reference specific WCAG criteria in your code and tests
-- Ensure analyzers check for real accessibility issues
-- Provide helpful, actionable suggestions in violation messages
-
-## Documentation
-
-Good documentation is crucial:
-
-- Update README.md for new features
-- Add code comments for complex logic
-- Include usage examples
-- Document configuration options
-- Keep CHANGELOG.md updated
-
-## Questions?
-
-If you have questions about contributing, feel free to:
-- Open an issue for discussion
-- Email: hello@itsjustvita.com
+- One finding per element; no counts or aggregates.
+- Exactly one primary WCAG 2.1 success criterion per finding (`related` for more); severity `error` only for definite AA failures detectable in the markup, `warning` for likely failures that need a manual check, `notice` for best practices, AAA and what cannot be verified statically.
+- Skip hidden elements (`queryVisible()`), use the accessible name (`name()`) wherever a name matters, and compare enumerated attributes case-insensitively.
+- Keep the first argument of `report()` a string literal: `TranslationCompletenessTest` requires a message and a suggestion for every key in `lang/en/violations.php` and `lang/de/violations.php`, with the same placeholders. German texts use the neutral infinitive form ("Alt-Attribut ergänzen").
+- Tests assert on keys, never on message text (`AnalyzerTestCase::assertHasViolation('example.table_without_headers')`).
 
 ## License
 
-By contributing to Laravel BFSG, you agree that your contributions will be licensed under the MIT License.
-
----
-
-**Thank you for helping make the web more accessible!**
+By contributing, you agree that your contributions are licensed under the MIT License.
