@@ -102,7 +102,10 @@ return [
     | 100.64/10, reserved, documentation and benchmarking ranges, unspecified, IPv6 unique/site-local, and IPv6
     | addresses embedding one of these (IPv4-mapped/-compatible, NAT64 64:ff9b::/96, 6to4 2002::/16). Hosts that
     | do not resolve are refused. URLs of this application (the origin of app.url: scheme, host and port) are
-    | exempt. TLS verification comes only from verify_ssl; MCP clients cannot switch it off.
+    | exempt. Each request (redirect hops and stylesheets included) is pinned to the addresses that were checked
+    | (CURLOPT_RESOLVE), so a DNS answer that changes after the check (rebinding) is never connected to; this needs
+    | the curl extension, and without it such fetches fail. TLS verification comes only from verify_ssl; MCP
+    | clients cannot switch it off.
     */
     'mcp' => [
         'allowed_hosts' => null,

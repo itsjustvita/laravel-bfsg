@@ -15,8 +15,11 @@ final class FetchOptions
      *                                           without scheme or port, compared case-insensitively; IPv6 with or without
      *                                           brackets (`::1`, `[::1]`); a trailing dot is ignored (`example.com.`)
      * @param  bool  $inProcess  false = request URLs of this application over HTTP too (needed for cookie/token logins)
-     * @param  (Closure(string): void)|null  $hopGuard  called with the URL and every redirect target before it is
-     *                                                  requested; throws FetchFailed to refuse it (see PrivateNetworkGuard)
+     * @param  (Closure(string): (list<string>|null))|null  $hopGuard  called with the URL, every redirect target and
+     *                                                                 every stylesheet on another origin before it is
+     *                                                                 requested; throws FetchFailed to refuse it (see
+     *                                                                 PrivateNetworkGuard). The addresses it returns are
+     *                                                                 pinned (CURLOPT_RESOLVE) for that request
      */
     public function __construct(
         public readonly ?AuthenticatedHttpClient $client = null,

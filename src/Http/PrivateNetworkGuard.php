@@ -10,7 +10,8 @@ use Closure;
  * resolved (A records via gethostbynamel(), which also covers /etc/hosts, and AAAA records via dns_get_record()) and
  * refused when any address is blocked. Numeric hosts in the forms libcurl accepts (hex, octal, decimal, short:
  * 0x7f000001, 0177.0.0.1, 2130706433, 127.1) are parsed like inet_aton() and classified; digits-and-dots hosts that
- * are no valid address are refused. A host that does not resolve at all is refused too (fail closed).
+ * are no valid address are refused. A host that does not resolve at all is refused too (fail closed). check()
+ * returns the vetted addresses; UrlFetcher pins the request to them (CURLOPT_RESOLVE) against DNS rebinding.
  */
 class PrivateNetworkGuard
 {

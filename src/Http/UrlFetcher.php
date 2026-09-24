@@ -39,15 +39,12 @@ class UrlFetcher
 
         while (true) {
             $this->assertAllowed($current, $options->allowedHosts);
-
-            if ($options->hopGuard !== null) {
-                ($options->hopGuard)($current);
-            }
+            $pin = $this->guard($current, $options);
 
             // In-process only while every hop so far was in-process: a remote page must not redirect into the kernel
             $viaKernel = $viaKernel && $this->isSameApp($current);
             try {
-                $response = $this->request($current, $client, $options, $viaKernel, self::MAX_PAGE_BYTES);
+                $response = $this->request($current, $client, $options, $viaKernel, self::MAX_PAGE_BYTES, $pin);
             } catch (ResponseTooLarge $e) {
                 throw FetchFailed::tooLarge($current, $e->limit);
             }
@@ -79,7 +76,7 @@ class UrlFetcher
         $warnings = [];
 
         if ($options->inlineStylesheets ?? filter_var(config('bfsg.fetch.inline_stylesheets', true), FILTER_VALIDATE_BOOL)) {
-            [$html, $warnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options, $viaKernel));
+            [$html, $warnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options, $viaKernel, $current, $pin));
         }
 
         return new FetchedPage(
@@ -139,15 +136,60 @@ class UrlFetcher
         return $url;
     }
 
-    /** @return array{status: int, location: ?string, contentType: string, body: string} */
-    private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, int $maxBytes): array
+    /**
+     * Runs the hop guard for $url and turns the addresses it vetted into a CURLOPT_RESOLVE pin, so the connection goes
+     * to exactly those addresses and a DNS answer that changes after the check (rebinding) is never used. IP
+     * literals and numeric hosts are not resolved by curl and need no pin.
+     *
+     * @return list<string> CURLOPT_RESOLVE entries (host:port:address,…), empty when nothing is pinned
+     *
+     * @throws FetchFailed when the guard refuses $url, or a pin is needed but curl is not available
+     */
+    private function guard(string $url, FetchOptions $options): array
+    {
+        $addresses = $options->hopGuard === null ? null : ($options->hopGuard)($url);
+
+        if (! is_array($addresses) || $addresses === []) {
+            return [];
+        }
+
+        $uri = new Uri($url);
+        $host = strtolower($uri->getHost());
+
+        if (filter_var(trim($host, '[]'), FILTER_VALIDATE_IP) !== false || PrivateNetworkGuard::parseNumericHost(rtrim($host, '.')) !== null) {
+            return [];
+        }
+
+        if (! $this->canPinAddresses()) {
+            throw FetchFailed::error($url, 'pinning the vetted address of '.$host.' needs the curl extension (the curl handler of Guzzle); without it the page is not fetched.');
+        }
+
+        $port = $uri->getPort() ?? (strtolower($uri->getScheme()) === 'https' ? 443 : 80);
+        $list = implode(',', array_map(fn (string $ip) => str_contains($ip, ':') ? '['.trim($ip, '[]').']' : $ip, $addresses));
+        $name = rtrim($host, '.');
+
+        // curl looks the host up as written: pin it with and without a trailing dot
+        return ["{$name}:{$port}:{$list}", "{$name}.:{$port}:{$list}"];
+    }
+
+    /** Whether Guzzle uses its curl handler, the only one that honours CURLOPT_RESOLVE. */
+    protected function canPinAddresses(): bool
+    {
+        return defined('CURLOPT_RESOLVE') && function_exists('curl_exec') && function_exists('curl_multi_exec');
+    }
+
+    /**
+     * @param  list<string>  $pin  CURLOPT_RESOLVE entries for a remote request
+     * @return array{status: int, location: ?string, contentType: string, body: string}
+     */
+    private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, int $maxBytes, array $pin = []): array
     {
         try {
             if ($viaKernel) {
                 return $this->inProcess->get($url, $options->actingAs, $options->guard);
             }
 
-            $response = $client->get($url, ['Accept' => 'text/html,application/xhtml+xml'], $maxBytes);
+            $response = $client->get($url, ['Accept' => 'text/html,application/xhtml+xml'], $maxBytes, $pin === [] ? [] : ['curl' => [CURLOPT_RESOLVE => $pin]]);
         } catch (FetchFailed|ResponseTooLarge $e) {
             throw $e;
         } catch (ConnectionException $e) {
@@ -164,8 +206,16 @@ class UrlFetcher
         ];
     }
 
-    private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel): ?string
+    /**
+     * A same-origin stylesheet of the page at $pageUrl. It goes through the allow-list and the hop guard like the page;
+     * on the page's own host and port it reuses the page's pin instead of resolving the host again.
+     *
+     * @param  list<string>  $pagePin
+     */
+    private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, string $pageUrl, array $pagePin): ?string
     {
+        $this->assertAllowed($url, $options->allowedHosts);
+        $pin = AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($pageUrl) ? $pagePin : $this->guard($url, $options);
         $viaKernel = $viaKernel && $this->isSameApp($url);
         $maxBytes = (int) config('bfsg.fetch.max_stylesheet_bytes', 524288);
 
@@ -177,7 +227,7 @@ class UrlFetcher
             }
         }
 
-        $response = $this->request($url, $client, $options, $viaKernel, $maxBytes);
+        $response = $this->request($url, $client, $options, $viaKernel, $maxBytes, $pin);
 
         return $response['status'] >= 200 && $response['status'] < 300 ? $response['body'] : null;
     }

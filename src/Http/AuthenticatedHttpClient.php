@@ -92,10 +92,11 @@ class AuthenticatedHttpClient
      * @param  array<string, string>  $headers
      * @param  int|null  $maxBytes  abort (ResponseTooLarge) once the body exceeds this many bytes: by Content-Length and
      *                              download progress on a real transport, and by the received body in any case
+     * @param  array<string, mixed>  $options  extra Guzzle request options (UrlFetcher: the CURLOPT_RESOLVE pin)
      *
      * @throws ResponseTooLarge
      */
-    public function get(string $url, array $headers = [], ?int $maxBytes = null): Response
+    public function get(string $url, array $headers = [], ?int $maxBytes = null, array $options = []): Response
     {
         return $this->dispatch('GET', $url, $headers, fn (PendingRequest $request) => ($maxBytes === null ? $request : $request->withOptions([
             'on_headers' => function (ResponseInterface $response) use ($url, $maxBytes) {
@@ -108,7 +109,7 @@ class AuthenticatedHttpClient
                     throw new ResponseTooLarge($url, $maxBytes);
                 }
             },
-        ]))->get($url), $maxBytes);
+        ]))->withOptions($options)->get($url), $maxBytes);
     }
 
     /**

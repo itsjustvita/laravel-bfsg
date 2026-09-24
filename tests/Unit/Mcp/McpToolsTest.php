@@ -8,7 +8,9 @@ use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Http\FetchFailed;
+use ItsJustVita\LaravelBfsg\Http\InProcessFetcher;
 use ItsJustVita\LaravelBfsg\Http\PrivateNetworkGuard;
+use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Mcp\BfsgMcpServer;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeHtml;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeUrl;
@@ -37,6 +39,8 @@ class McpToolsTest extends TestCase
         'internal.example' => ['10.1.2.3'],
         'dual.example' => ['93.184.215.15', 'fd12:3456::1'],
         'metadata.example' => ['169.254.169.254'],
+        'pinned.example' => ['93.184.215.20', '2606:4700::6810:1'],
+        'other.example' => ['93.184.215.21'],
     ];
 
     protected function setUp(): void
@@ -371,6 +375,52 @@ class McpToolsTest extends TestCase
                 $this->assertStringContainsString('not a valid IPv4 address', $e->getMessage());
             }
         }
+    }
+
+    public function test_every_remote_hop_and_its_stylesheets_are_pinned_to_the_vetted_addresses(): void
+    {
+        $sent = [];
+        Http::fake(function (HttpRequest $request, array $options) use (&$sent) {
+            $sent[] = [$request->url(), $options['curl'][CURLOPT_RESOLVE] ?? null];
+
+            return match ($request->url()) {
+                'https://pinned.example/start' => Http::response('', 302, ['Location' => 'http://other.example:8080/page']),
+                'http://other.example:8080/page' => Http::response('<html><head><link rel="stylesheet" href="/app.css"></head><body><p>Hi</p></body></html>', 200, ['Content-Type' => 'text/html']),
+                'http://other.example:8080/app.css' => Http::response('p { color: #000; }', 200, ['Content-Type' => 'text/css']),
+                default => Http::response(self::BROKEN, 200),
+            };
+        });
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://pinned.example/start'])->assertOk();
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'http://8.8.8.8/'])->assertOk();
+
+        $this->assertSame([
+            ['https://pinned.example/start', ['pinned.example:443:93.184.215.20,[2606:4700::6810:1]', 'pinned.example.:443:93.184.215.20,[2606:4700::6810:1]']],
+            ['http://other.example:8080/page', ['other.example:8080:93.184.215.21', 'other.example.:8080:93.184.215.21']],
+            ['http://other.example:8080/app.css', ['other.example:8080:93.184.215.21', 'other.example.:8080:93.184.215.21']],
+            // An IP literal needs no pin: nothing is resolved
+            ['http://8.8.8.8/', null],
+        ], $sent);
+    }
+
+    public function test_a_guarded_fetch_fails_closed_when_the_address_cannot_be_pinned(): void
+    {
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+        $this->app->instance(UrlFetcher::class, new class(app(InProcessFetcher::class)) extends UrlFetcher
+        {
+            protected function canPinAddresses(): bool
+            {
+                return false;
+            }
+        });
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://docs.example.com/'])->assertHasErrors(['needs the curl extension']);
+        Http::assertNothingSent();
+
+        // An allow-list does not pin, and neither does an IP literal
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'http://8.8.8.8/'])->assertOk();
+        config()->set('bfsg.mcp.allowed_hosts', ['docs.example.com']);
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://docs.example.com/'])->assertOk();
     }
 
     public function test_an_explicit_allow_list_governs_private_addresses_too(): void
