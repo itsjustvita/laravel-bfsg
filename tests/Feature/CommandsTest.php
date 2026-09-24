@@ -644,6 +644,27 @@ class CommandsTest extends TestCase
         $this->assertStringNotContainsString('s3cret', $formOutput->stdout().$formOutput->stderr().$apiKeyOutput->stdout().$apiKeyOutput->stderr());
     }
 
+    public function test_url_credentials_never_reach_a_login_or_redirect_on_another_host(): void
+    {
+        $basic = 'Basic '.base64_encode('deploy:s3cret');
+        Http::fake(fn (Request $request) => match ($request->method().' '.$request->url()) {
+            'GET https://auth.example.com/login' => Http::response('<form method="post"><input type="hidden" name="_token" value="t"><input type="password" name="password"></form>', 200, ['Set-Cookie' => 'laravel_session=guest; Path=/']),
+            'POST https://auth.example.com/login' => Http::response('', 302, ['Location' => 'https://staging.example.com/dashboard', 'Set-Cookie' => 'laravel_session=user; Path=/']),
+            'GET https://staging.example.com/dashboard' => Http::response('', 302, ['Location' => 'https://cdn.example.org/final']),
+            'GET https://cdn.example.org/final' => Http::response(self::ACCESSIBLE, 200),
+            default => Http::response('Not Found', 404),
+        });
+
+        [$exitCode, $output] = $this->check(['url' => 'https://deploy:s3cret@staging.example.com/dashboard', '--auth' => true, '--email' => 'user@example.com', '--password' => 'secret', '--login-url' => 'https://auth.example.com/login']);
+
+        $this->assertSame(0, $exitCode, $output->stderr());
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://auth.example.com/login');
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://staging.example.com/dashboard' && $request->hasHeader('Authorization', $basic));
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://cdn.example.org/final');
+        Http::assertNotSent(fn (Request $request) => $request->hasHeader('Authorization') && parse_url($request->url(), PHP_URL_HOST) !== 'staging.example.com');
+        $this->assertStringNotContainsString('s3cret', $output->stdout().$output->stderr());
+    }
+
     /** @return array<string, array{0: array<string, mixed>}> */
     public static function authorizationOptions(): array
     {
