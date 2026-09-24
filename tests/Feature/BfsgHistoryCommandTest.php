@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Schema;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
@@ -20,6 +21,18 @@ class BfsgHistoryCommandTest extends TestCase
         $this->artisan('list')
             ->assertSuccessful()
             ->expectsOutputToContain('bfsg:history');
+    }
+
+    public function test_missing_tables_print_the_migrate_hint_and_exit_non_zero(): void
+    {
+        Schema::drop('bfsg_violations');
+        Schema::drop('bfsg_reports');
+
+        foreach ([[], ['--trend' => true, '--url' => 'https://example.com'], ['--cleanup' => true]] as $options) {
+            $this->artisan('bfsg:history', $options)
+                ->expectsOutputToContain('php artisan migrate')
+                ->assertExitCode(1);
+        }
     }
 
     public function test_shows_empty_message(): void

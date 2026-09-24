@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
+use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 
 class BfsgHistoryCommand extends Command
 {
@@ -17,8 +18,14 @@ class BfsgHistoryCommand extends Command
 
     protected $description = 'View accessibility check history and trends';
 
-    public function handle(): int
+    public function handle(ReportRepository $repository): int
     {
+        if (! $repository->isMigrated()) {
+            $this->error('The bfsg tables with the v3 columns are missing: run php artisan migrate');
+
+            return Command::FAILURE;
+        }
+
         if ($this->option('cleanup')) {
             return $this->cleanup();
         }
