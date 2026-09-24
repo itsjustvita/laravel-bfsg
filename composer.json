@@ -1,13 +1,17 @@
 {
   "name": "itsjustvita/laravel-bfsg",
-  "description": "Laravel Package für BFSG/WCAG Barrierefreiheit Compliance",
+  "description": "BFSG and WCAG 2.1 accessibility checks for Laravel: a CI-ready check command, middleware, reports, English and German messages, and an MCP server",
   "keywords": [
     "laravel",
     "accessibility",
-    "bfsg",
+    "a11y",
     "wcag",
-    "a11y"
+    "bfsg",
+    "barrierefreiheit",
+    "european-accessibility-act",
+    "mcp"
   ],
+  "homepage": "https://github.com/itsjustvita/laravel-bfsg",
   "license": "MIT",
   "authors": [
     {
@@ -15,6 +19,10 @@
       "email": "hello@itsjustvita.com"
     }
   ],
+  "support": {
+    "issues": "https://github.com/itsjustvita/laravel-bfsg/issues",
+    "source": "https://github.com/itsjustvita/laravel-bfsg"
+  },
   "require": {
     "php": "^8.2",
     "ext-dom": "*",
@@ -41,8 +49,7 @@
   },
   "suggest": {
     "laravel/mcp": "Required for the MCP server and the bfsg:mcp-server command (^0.6.4 || ^1.0)",
-    "barryvdh/laravel-dompdf": "Required for PDF report generation (^3.0)",
-    "pestphp/pest-plugin-browser": "Required for browser-based accessibility testing of SPAs (^0.1)"
+    "barryvdh/laravel-dompdf": "Required for PDF report generation (^3.0)"
   },
   "autoload": {
     "psr-4": {
@@ -56,6 +63,9 @@
     }
   },
   "extra": {
+    "branch-alias": {
+      "dev-main": "3.x-dev"
+    },
     "laravel": {
       "providers": [
         "ItsJustVita\\LaravelBfsg\\BfsgServiceProvider"

@@ -1,13 +1,15 @@
 # Changelog
 
-Alle bemerkenswerten Änderungen an diesem Projekt werden in dieser Datei dokumentiert.
+All notable changes to this project are documented in this file.
 
-Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.0.0/),
-und dieses Projekt verwendet [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 3.0.0 (branch v3)
+## [Unreleased]
 
-Phases 1 (foundation), 2 (analyzer round) and 3 (core fixes) of v3. See UPGRADE.md (written in Phase 4) for the migration guide.
+## [3.0.0] - 2026-09-24
+
+A rewrite of the package's core with breaking changes: typed results (`AnalysisResult`, `Violation`) instead of nested arrays, one analyzer registry for every entry point, English and German messages, all 16 analyzers reworked against WCAG 2.1, and a `bfsg:check` command with exit codes for CI. Read [UPGRADE.md](UPGRADE.md) before upgrading from 2.x.
 
 ### Changed (breaking)
 - `Bfsg::analyze()` returns an `AnalysisResult`; violations are `Violation` value objects with a stable translation `key`, a single primary `rule` (`1.1.1`), `related` criteria, `tags`, `element`, `selector`, `snippet`, `params` and `meta`. `->toArray()` yields the JSON shape.
