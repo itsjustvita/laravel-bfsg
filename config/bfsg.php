@@ -129,6 +129,9 @@ return [
             'livewire/*',
             'telescope/*',
             'horizon/*',
+            // Laravel's password reset links carry the token in the path; the query string is never stored
+            'reset-password/*',
+            'password/reset/*',
         ],
     ],
 

@@ -111,6 +111,22 @@ class MiddlewareTest extends TestCase
         $this->assertSame(0, BfsgReport::query()->count());
     }
 
+    public function test_the_default_ignored_paths_keep_password_reset_tokens_in_the_path_out_of_logs_and_the_database(): void
+    {
+        config()->set('bfsg.middleware.ignored_paths', (require __DIR__.'/../../config/bfsg.php')['middleware']['ignored_paths']);
+        config()->set('bfsg.reporting.save_to_database', true);
+
+        foreach (['/reset-password/tok3n-secret', '/password/reset/tok3n-secret'] as $uri) {
+            $this->through(Request::create($uri.'?email=a%40example.com'), $this->html());
+        }
+
+        $this->assertSame([], $this->logs()->getRecords());
+        $this->assertSame(0, BfsgReport::query()->count());
+
+        $this->through(Request::create('/reset-password'), $this->html());
+        $this->assertCount(1, $this->logs()->getRecords(), 'the form without a token is still checked');
+    }
+
     public function test_disabled_or_missing_config_skips(): void
     {
         config()->set('app.debug', true);

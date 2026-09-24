@@ -16,8 +16,10 @@ use Throwable;
 /**
  * Analyzes full HTML pages after the response has been sent (terminate), logs the counts per severity on the
  * configured channel and stores the report when `bfsg.reporting.save_to_database` is on. The URL is logged and
- * stored without its query string (signatures, reset tokens and e-mail addresses stay out of logs and the database). With `app.debug` the
- * analysis runs in handle() instead so the X-BFSG-Violations header can be set. Never breaks the page.
+ * stored without its query string (signatures, tokens and e-mail addresses in the query stay out of logs and the
+ * database); tokens in the path are kept out by ignored paths (the defaults cover Laravel's `reset-password/*` and
+ * `password/reset/*`). With `app.debug` the analysis runs in handle() instead so the X-BFSG-Violations header can be
+ * set. Never breaks the page.
  */
 class CheckAccessibility
 {
