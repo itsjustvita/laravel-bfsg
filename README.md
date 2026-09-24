@@ -81,6 +81,7 @@ php artisan bfsg:check https://example.com --format=json > bfsg.json
 
 The CLI output lists the findings per analyzer and ends with a summary line:
 
+<!-- docs: cli-output -->
 ```text
 Checking http://localhost/contact
 images (1)
@@ -138,7 +139,7 @@ Fetching:
 
 | Option | Description |
 |---|---|
-| `--insecure` | Do not verify TLS certificates (self-signed staging hosts) |
+| `--insecure` | Do not verify TLS certificates. Only for hosts you control with self-signed certificates: with `--insecure`, credentials and tokens are sent without verifying the server |
 | `--no-inline-css` | Do not inline same-origin stylesheets (also with `--browser`) |
 | `--allow-login-page` | Analyze the page even when the URL redirected to the login page (otherwise exit 2) |
 | `--login-url=` | Login page, absolute or relative to the checked site. Default: `bfsg.authentication.default_login_url` |
@@ -224,6 +225,8 @@ php artisan bfsg:check https://app.example.com/dashboard --session="laravel_sess
 
 Without `--email`/`--password` in an interactive terminal, `--auth` asks for them. A failed login exits 2 with its cause (CSRF token rejected, invalid credentials, validation error, two-factor challenge, no session). A page that redirects to the login page exits 2 unless you pass `--allow-login-page`.
 
+In CI, pass credentials as `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` or `BFSG_AUTH_TOKEN` from your CI secrets rather than `--password`, `--bearer` or `--session` on the command line: command-line arguments end up in the shell history, job logs and the process list.
+
 Credentials are bound to one origin (scheme, host and port): tokens, API keys and session cookies are only sent to the checked site (or, for a login token, the login site), and a redirect to another host, another port or from `https` to `http` drops them.
 
 **HTTP basic auth** (a protected staging site): put the credentials in the URL. They become an `Authorization: Basic` header for that origin, also for the login requests of `--auth`/`--sanctum`, and are removed from every status line, report and stored URL.
@@ -306,6 +309,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
 It analyzes successful `GET` responses with an HTML body and skips XHR, Livewire and Inertia requests, redirects, downloads, streamed responses, the paths in `bfsg.middleware.ignored_paths`, and the in-process requests of `bfsg:check` and the MCP server. For each page with findings it logs one line with the counts per severity (`warning`, or `info` when there are only notices) on `bfsg.middleware.log_channel`:
 
+<!-- docs: log-line -->
 ```text
 BFSG: 4 violations on https://example.com/contact {"errors":1,"warnings":2,"notices":1}
 ```
@@ -553,7 +557,7 @@ or in `.mcp.json` in the project root:
 
 **Network access.** `analyze_url` and `generate_report` fetch what the assistant asks for, so they are restricted:
 
-- `bfsg.mcp.allowed_hosts`: a list of hostnames. When set, every URL and every redirect hop must be on one of them.
+- `bfsg.mcp.allowed_hosts`: a list of hostnames. When set, the list replaces the public-host default: only the listed hosts are fetched (a public host that is not listed is refused), and every URL and every redirect hop must be on one of them. Listed hosts are trusted as they are, without the private-network check and address pinning below, so list only hosts whose DNS you control.
 - When it is `null` (the default) or empty, any public host is allowed and a private-network guard refuses every non-public address: loopback, private and link-local ranges (including the cloud metadata address `169.254.169.254`), CGNAT, reserved ranges, IPv6 unique-local and site-local, and IPv6 forms that embed such an IPv4 address. Numeric host spellings (`0x7f000001`, `127.1`) are recognised, hosts that do not resolve are refused, and each request is pinned to the addresses that were checked, so DNS rebinding cannot redirect it. Pinning needs PHP's curl extension; without it such fetches fail.
 - Pages of this application (paths, or the exact origin of `app.url`) are rendered in-process and exempt; a remote page that redirects to the application is guarded like any other hop.
 - TLS verification follows `bfsg.mcp.verify_ssl` only; the assistant cannot switch it off.

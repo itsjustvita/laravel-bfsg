@@ -12,10 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A rewrite of the package's core with breaking changes: typed results (`AnalysisResult`, `Violation`) instead of nested arrays, one analyzer registry for every entry point, English and German messages, all 16 analyzers reworked against WCAG 2.1, and a `bfsg:check` command with exit codes for CI. Read [UPGRADE.md](UPGRADE.md) before upgrading from 2.x.
 
 ### Changed (breaking)
-- `Bfsg::analyze()` returns an `AnalysisResult`; violations are `Violation` value objects with a stable translation `key`, a single primary `rule` (`1.1.1`), `related` criteria, `tags`, `element`, `selector`, `snippet`, `params` and `meta`. `->toArray()` yields the JSON shape.
+- `Bfsg::analyze()` returns an `AnalysisResult`; violations are `Violation` value objects with a stable translation `key`, a single primary `rule` (`1.1.1`), `related` criteria, `tags`, `element`, `selector`, `snippet`, `params` and `meta`. `->toArray()` returns analyzers, summary counts and violations; `ReportGenerator::toArray()`/`toJson()` is the JSON report.
 - Every analyzer implements `Contracts\Analyzer` (via `BaseAnalyzer`). Custom analyzers register through `Bfsg::register()`.
 - All violation messages are translation keys with English and German texts (`lang/en`, `lang/de`, publish tag `bfsg-lang`).
-- Aggregated `count` findings, `stats` arrays and the `severity`/`critical` keys are gone; every finding points at one element.
+- The violation key `type` is renamed to `severity`; the `critical` value is gone (counted as `error`); aggregated `count` findings and `stats` arrays are gone; every finding points at one element.
 - `Services\` namespace removed (`Dom\HtmlDocument`, `Css\CssParser`, `Css\Color`).
 - `Services\AuthenticatedHttpClient` moved to `Http\AuthenticatedHttpClient`.
 - Config: `auto_fix`, `reporting.enabled`, `reporting.email`, `authentication.sanctum_enabled`, `authentication.timeout` removed; `locale` and `scoring.weights` added.
@@ -45,6 +45,7 @@ A rewrite of the package's core with breaking changes: typed results (`AnalysisR
 - `links.non_descriptive` skips language switchers (`hreflang`/`lang`); page-number links inside navigation are judged in context (notice).
 - `input_purpose.missing_autocomplete` ignores search fields and `name` fields of things (`product_name`, `category[name]`, …).
 - `isAccessible()` ignores notices.
+- `Bfsg::getViolations()` is removed; use the returned `AnalysisResult`.
 - Analyzer round (spec Appendix A): every check re-keyed, re-rated and re-scoped. Findings on hidden subtrees (`hidden`, `aria-hidden`, inline `display:none`/`visibility:hidden`, `<template>`) are skipped; stylesheet-based hiding is honoured by `contrast` and `aria.hidden_focusable` only; document-level checks are skipped for fragments; enumerated attributes are compared case-insensitively.
 - `contrast.insufficient` is a warning (not an error) when the measurement is approximate (unresolved `var()`, gradients, images, a truncated rule index); definite failures stay errors.
 - `aria.redundant_role` no longer flags `role="list"` on `ul`/`ol`/`menu` or `role="listitem"` on `li` (Safari/VoiceOver list-style workaround).
@@ -78,7 +79,7 @@ A rewrite of the package's core with breaking changes: typed results (`AnalysisR
 - Fixture corpus (`tests/Fixtures`) with expected keys for Bootstrap, Tailwind v4, TYPO3, a Laravel form, an ARIA data grid and a card pattern.
 
 ### Fixed
-- Installs in a fresh Laravel 13 app without downgrading Guzzle: Guzzle is required as `guzzlehttp/guzzle ^7.8.2 || ^8.0` and `guzzlehttp/psr7 ^2.6.2 || ^3.0` (was `guzzlehttp/guzzle ^7.8`; the package uses Guzzle's cookie jar and PSR-7 classes directly). Install the branch as `itsjustvita/laravel-bfsg:3.x-dev` (Composer normalises branch `v3` to `3.x-dev`; `dev-v3` does not resolve).
+- Installs in a fresh Laravel 13 app without downgrading Guzzle: Guzzle is required as `guzzlehttp/guzzle ^7.8.2 || ^8.0` and `guzzlehttp/psr7 ^2.6.2 || ^3.0` (was `guzzlehttp/guzzle ^7.8`; the package uses Guzzle's cookie jar and PSR-7 classes directly).
 - `bfsg:mcp-server` works with laravel/mcp 1.x (it crashed with a `StdioTransport` TypeError): the command starts the server through laravel/mcp's `Registrar` (handle `bfsg`), which builds the stdio transport for the installed version. Supported: `laravel/mcp ^0.6.4 || ^1.0`.
 - MCP tools carry the documented snake_case names (`analyze_html`, `analyze_url`, `check_contrast`, `list_analyzers`, `get_history`, `get_report`, `generate_report`); they were exposed as kebab-case (`analyze-html`, …) before.
 - `bfsg:history --trend --limit=N` shows the latest N reports in chronological order (it showed the oldest N).

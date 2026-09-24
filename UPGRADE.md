@@ -152,12 +152,14 @@ The analyzer then runs in `bfsg:check`, the middleware, MCP and `Bfsg::analyze()
 |---|---|
 | `bfsg:analyze <url> --browser` | `bfsg:check <url> --browser` |
 | `bfsg:analyze <url>` | `bfsg:check <url>` |
-| `--verify-ssl=false` (the default: certificates were **not** verified) | certificates are verified; `--insecure` turns it off for one run |
+| `--verify-ssl=false` (the default: certificates were **not** verified) | certificates are verified; `--insecure` turns it off for one run (only for hosts you control) |
 | exit 1 on any finding (notices included) and on every error | `0` threshold met, `1` threshold exceeded, `2` operational error |
 | no threshold options | `--fail-on=error` (default), `warning`, `notice`, `none`; `--min-score=` |
 | `--format=json` mixed status lines into stdout | stdout carries only the report for `json` and `markdown`; status lines go to stderr |
 | `--format=html` / `pdf` wrote to `storage/app/bfsg-reports` | the same by default (`bfsg.reporting.output_path`), or `--output=<file>` |
 | an unknown `--format` fell back to the CLI output; unknown options exited 1 | unknown options, formats, analyzers and invalid values exit 2 with the reason; so do option combinations that would be ignored |
+| a JSON answer or a download was analyzed as a page | non-HTML answers (JSON, downloads) exit 2 |
+| pages of any size were loaded | pages larger than 5 MiB are aborted while loading (exit 2) |
 | `--guard` was sent as a login form field | `--guard` selects the guard for the new `--as=<user>` |
 | `--jwt` was sent as `Authorization: JWT …` | sent as `Authorization: Bearer …` |
 
@@ -175,6 +177,8 @@ After (3.0):
 php artisan bfsg:check https://staging.example.com --browser
 php artisan bfsg:check https://staging.example.com --insecure --format=json --fail-on=none > report.json
 ```
+
+Use `--insecure` only for hosts you control with self-signed certificates: with it, credentials and tokens are sent without verifying the server.
 
 Paths are rendered in-process now (`php artisan bfsg:check /pricing`), so CI jobs that started a web server only for the check can drop it. The `.test`/`server.php` detour of 2.x is gone.
 
@@ -220,7 +224,7 @@ return [
 
 `laravel/mcp` is no longer installed with the package. Install it (`composer require laravel/mcp`; `^0.6.4` and `^1.0` are supported); without it, `bfsg:mcp-server` is not registered.
 
-The tools are named `analyze_html`, `analyze_url`, `check_contrast`, `list_analyzers`, `get_history`, `get_report` and `generate_report` (2.x exposed them as `analyze-html`, …). Update tool allow-lists in your MCP client. Further changes: `analyze_url` and `generate_report` only fetch public hosts unless `bfsg.mcp.allowed_hosts` lists them (so an internal staging host must be listed), the `verify_ssl` tool argument is gone (`bfsg.mcp.verify_ssl`), `generate_report` returns `summary` instead of `stats`, and `list_analyzers` returns `rules` as an array (was `wcag_rules`, a string).
+The tools are named `analyze_html`, `analyze_url`, `check_contrast`, `list_analyzers`, `get_history`, `get_report` and `generate_report` (2.x exposed them as `analyze-html`, …). Update tool allow-lists in your MCP client. Further changes: `analyze_url` and `generate_report` fetch any public host while `bfsg.mcp.allowed_hosts` is empty; a list replaces that default, so only the listed hosts are fetched (an internal staging host must be listed, and so must every public host the tools should still reach). Listed hosts are trusted as they are, without the private-network check and address pinning, so list only hosts whose DNS you control. An invalid or untranslated `locale` argument is a tool error before anything is fetched. The `verify_ssl` tool argument is gone (`bfsg.mcp.verify_ssl`), `generate_report` returns `summary` instead of `stats`, and `list_analyzers` returns `rules` as an array (was `wcag_rules`, a string).
 
 ### 7. Messages are localized and reworded
 
@@ -293,6 +297,8 @@ If you published the component view (`resources/views/vendor/bfsg/components/acc
 | `new ReportGenerator($url, $violations)`, `setFormat()`, `generate()`, `saveToFile()`, `getStats()` | `new ReportGenerator($result, $locale)`, `format()`, `render()`, `saveTo($path)`, `summary()`, `score()`, `grade()` |
 | analyzers: `analyze(DOMDocument $dom): array` | `analyze(HtmlDocument $document): array` returning `list<Violation>` |
 
+`Http\AuthenticatedHttpClient` binds credentials to one origin: `withSessionCookie()` sets a host-only cookie of its origin that is no longer in the Guzzle cookie jar or `cookies()`, and `withBearer()`, `withJwt()`, `withApiKey()` and `withHeaders()` take an optional `$origin` (default: the requested URL). A redirect to another host, another port or from `https` to `http` drops them.
+
 Before (2.x):
 
 <!-- docs: v2 -->
@@ -354,7 +360,7 @@ The middleware stays inactive until `BFSG_MIDDLEWARE_ENABLED=true`. If your log 
 ### 13. Things that are easy to miss
 
 - **In-process checks and `auth.basic`.** Pages of your application are rendered in-process; credentials in the URL are not passed to them. A route behind `auth.basic` answers 401 (exit 2): check it with `--as=<user>` instead of `https://user:pass@…`.
-- **Credentials in the URL** of a remote page become a `Basic` header for that origin, also for the login of `--auth`/`--sanctum`. They cannot be combined with `--bearer`, `--jwt` or a login that returns a bearer token (exit 2).
+- **Credentials in the URL** of a remote page become a `Basic` header for that origin, also for the login of `--auth`/`--sanctum`. They cannot be combined with `--bearer`, `--jwt`, `--api-key-header=Authorization` or a login that returns a bearer token (exit 2).
 - **`--browser`** cannot be combined with authentication options, `--insecure`, `--allow-login-page` or `--login-url` (exit 2): the browser does not share them.
 - **Published translations** from 2.x contain the old flat messages; delete `lang/vendor/bfsg` or re-publish it (`--tag=bfsg-lang --force`).
-- **Installing a development version** of 3.x needs the constraint `3.x-dev` (Composer names branch `v3` like that); `dev-v3` does not resolve.
+- **Installing a development version** of 3.x needs the constraint `3.x-dev` (the `main` branch).
