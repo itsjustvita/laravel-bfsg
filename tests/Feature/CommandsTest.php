@@ -540,6 +540,22 @@ class CommandsTest extends TestCase
         $this->assertSame(2, $headless);
     }
 
+    public function test_fetch_options_the_browser_would_ignore_are_rejected_with_browser(): void
+    {
+        Process::fake();
+
+        foreach (['--insecure' => true, '--no-inline-css' => true, '--allow-login-page' => true, '--login-url' => '/signin'] as $option => $value) {
+            [$exitCode, $output] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, $option => $value]);
+
+            $this->assertSame(2, $exitCode, $option);
+            $this->assertStringContainsString("--browser cannot be combined with {$option}", $output->stderr());
+            $this->assertSame('', $output->stdout(), $option);
+        }
+
+        Process::assertNothingRan();
+        Http::assertNothingSent();
+    }
+
     public function test_pending_command_output_still_contains_the_status_lines(): void
     {
         $this->fakeSite(self::ERRORS);

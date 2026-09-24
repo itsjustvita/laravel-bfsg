@@ -47,6 +47,9 @@ class BfsgCheckCommand extends Command
     /** Options only --browser reads (they have defaults, so "given" means present on the command line). */
     private const BROWSER_OPTIONS = ['headless', 'timeout', 'wait-for', 'engine'];
 
+    /** Options only the plain fetch (without --browser) reads. */
+    private const FETCH_OPTIONS = ['insecure', 'no-inline-css', 'allow-login-page', 'login-url'];
+
     /** Options only a login (--auth, --sanctum) reads. --login-url is exempt: it also names the login page to detect. */
     private const LOGIN_OPTIONS = ['email', 'password', 'username-field', 'password-field'];
 
@@ -198,6 +201,12 @@ class BfsgCheckCommand extends Command
 
             if ($login !== []) {
                 throw new InvalidArgumentException("--browser cannot be combined with --{$login[0]}: the browser does not share the login.");
+            }
+
+            foreach (self::FETCH_OPTIONS as $option) {
+                if ($given($option)) {
+                    throw new InvalidArgumentException("--browser cannot be combined with --{$option}: the browser does not use the options of the plain fetch.");
+                }
             }
         } else {
             foreach (self::BROWSER_OPTIONS as $option) {
