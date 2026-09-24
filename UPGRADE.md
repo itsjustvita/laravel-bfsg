@@ -9,10 +9,11 @@ Requirements are unchanged: PHP 8.2+, Laravel 12 or 13.
 ### Checklist
 
 1. `composer require itsjustvita/laravel-bfsg:^3.0` (and `composer require laravel/mcp` if you use the MCP server).
-2. `php artisan migrate`.
-3. Re-publish or merge the config if you published it (`php artisan vendor:publish --tag=bfsg-config --force`, then re-apply your changes).
-4. Delete published views and translations you did not change (`resources/views/vendor/bfsg`, `lang/vendor/bfsg`), re-publish the ones you did change and re-apply your edits.
-5. Update code that reads analysis results (section 1), CI scripts (section 4) and Blade usage of the image component (section 9).
+2. If you published the migrations in 2.x, re-publish them (`php artisan vendor:publish --tag=bfsg-migrations --force`) or delete your copy of `create_bfsg_tables.php` (section 8).
+3. `php artisan migrate`.
+4. Re-publish or merge the config if you published it (`php artisan vendor:publish --tag=bfsg-config --force`, then re-apply your changes).
+5. Delete published views and translations you did not change (`resources/views/vendor/bfsg`, `lang/vendor/bfsg`), re-publish the ones you did change and re-apply your edits.
+6. Update code that reads analysis results (section 1), CI scripts (section 4) and Blade usage of the image component (section 9).
 
 ### 1. `Bfsg::analyze()` returns an `AnalysisResult`
 
@@ -257,7 +258,11 @@ Two migrations upgrade the 2.x tables in place and keep your data:
 - `bfsg_violations` gets `key`, `fingerprint` and `context` (selector, snippet, params, meta, related criteria, tags).
 - `bfsg_reports.url` becomes a text column (URLs up to 2048 characters) with an indexed `url_hash`; existing rows get their hash.
 
-Published copies of the package migrations keep their file names, so the published and the package copy never run twice. Rows written by 2.x keep a `null` key and fingerprint, and their `critical` severities stay as they were. Scores are computed differently (section 12), so 2.x and 3.0 scores of the same page are not comparable. `bfsg:check --save` and `bfsg:history` exit with the `migrate` hint until the migrations have run.
+Published copies of the package migrations keep their file names, so the published and the package copy never run twice.
+
+If you published the migrations in 2.x, re-publish them with `php artisan vendor:publish --tag=bfsg-migrations --force`, or delete your copy of `create_bfsg_tables.php`. Your 2.x copy has the same name as the package copy and takes its place, so every fresh database (CI, `RefreshDatabase` tests, a new machine) gets the 2.x tables from it, after both upgrade migrations have already run and found no table. 3.0 ships an undated `upgrade_bfsg_tables` migration that sorts after `create_bfsg_tables` and adds whatever is still missing, so such databases end up with the 3.0 schema anyway, but your repository should not keep the 2.x schema. Re-publishing is safe on existing databases: `create_bfsg_tables` is already recorded there and does not run again.
+
+Rows written by 2.x keep a `null` key and fingerprint, and their `critical` severities stay as they were. Scores are computed differently (section 12), so 2.x and 3.0 scores of the same page are not comparable. `bfsg:check --save` and `bfsg:history` exit with the `migrate` hint until the migrations have run.
 
 ### 9. Blade component: `<x-bfsg-accessible-image>`, boolean `decorative`
 
