@@ -7,6 +7,7 @@ use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Http\FetchFailed;
 use ItsJustVita\LaravelBfsg\Http\PrivateNetworkGuard;
 use ItsJustVita\LaravelBfsg\Mcp\BfsgMcpServer;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\AnalyzeHtml;
@@ -48,7 +49,7 @@ class McpToolsTest extends TestCase
             TestResponse::macro('text', fn () => (string) ($this->content()[0] ?? ''));
         }
 
-        $this->app->instance(PrivateNetworkGuard::class, new PrivateNetworkGuard(fn (string $host) => self::DNS[$host] ?? ['203.0.113.10']));
+        $this->app->instance(PrivateNetworkGuard::class, new PrivateNetworkGuard(fn (string $host) => self::DNS[$host] ?? ($host === 'nowhere.example' ? [] : ['203.0.113.10'])));
     }
 
     public function test_tools_have_snake_case_names_and_annotations(): void
@@ -262,6 +263,14 @@ class McpToolsTest extends TestCase
             'IPv4-mapped loopback' => ['http://[::ffff:127.0.0.1]/'],
             'name resolving to 10/8' => ['https://internal.example/'],
             'name with a private AAAA record' => ['https://dual.example/'],
+            'hex loopback' => ['http://0x7f000001/'],
+            'dotted hex loopback' => ['http://0x7f.0x0.0x0.0x1/'],
+            'octal loopback' => ['http://017700000001/'],
+            'decimal loopback' => ['http://2130706433/'],
+            'hex metadata address' => ['http://0xa9fea9fe/latest/meta-data/'],
+            'short loopback' => ['http://127.1/'],
+            'octal dotted loopback' => ['http://0177.0.0.1/'],
+            'mixed-radix private' => ['http://0xa.012.0.1/'],
         ];
     }
 
@@ -306,6 +315,40 @@ class McpToolsTest extends TestCase
 
         Http::assertSentCount(2);
         Http::assertNotSent(fn (HttpRequest $request) => in_array(parse_url($request->url(), PHP_URL_HOST), ['169.254.169.254', 'metadata.example'], true));
+    }
+
+    public function test_a_host_that_does_not_resolve_is_refused(): void
+    {
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://nowhere.example/'])->assertHasErrors(['nowhere.example does not resolve']);
+
+        Http::assertNothingSent();
+    }
+
+    public function test_numeric_host_forms_are_parsed_like_inet_aton(): void
+    {
+        $guard = new PrivateNetworkGuard(fn () => $this->fail('numeric hosts must not be resolved'));
+
+        foreach (['0x7f000001' => '127.0.0.1', '0x7f.0x0.0x0.0x1' => '127.0.0.1', '017700000001' => '127.0.0.1', '2130706433' => '127.0.0.1', '0xa9fea9fe' => '169.254.169.254', '127.1' => '127.0.0.1', '10.1' => '10.0.0.1', '0x08080808' => '8.8.8.8', '8.8.2056' => '8.8.8.8', '0x' => '0.0.0.0'] as $host => $ip) {
+            $this->assertSame($ip, PrivateNetworkGuard::parseNumericHost($host), $host);
+        }
+
+        foreach (['cafe.de', 'example.com', '1.2.3.4.5', '08.1.1.1', '256.1.1.1', '1.2.65536', '4294967296', '0x1ffffffff', 'dead.beef'] as $host) {
+            $this->assertNull(PrivateNetworkGuard::parseNumericHost($host), $host);
+        }
+
+        $this->assertSame(['8.8.8.8'], $guard->check('http://0x08080808/'));
+
+        // Only digits, hex and dots but not a valid address: refused rather than handed to a resolver
+        foreach (['http://08.1.1.1/', 'http://1.2.3.4.5/', 'http://0x1ffffffff/'] as $url) {
+            try {
+                $guard->check($url);
+                $this->fail("{$url} was not refused");
+            } catch (FetchFailed $e) {
+                $this->assertStringContainsString('not a valid IPv4 address', $e->getMessage());
+            }
+        }
     }
 
     public function test_an_explicit_allow_list_governs_private_addresses_too(): void

@@ -27,6 +27,16 @@ final class FetchFailed extends RuntimeException
         return new self("The host {$host} resolves to {$address}, a loopback, private, link-local or unspecified address. List it in bfsg.mcp.allowed_hosts to allow it.", $url);
     }
 
+    public static function malformedAddress(string $url, string $host): self
+    {
+        return new self("The host {$host} looks like a numeric address but is not a valid IPv4 address.", $url);
+    }
+
+    public static function unresolvable(string $url, string $host): self
+    {
+        return new self("The host {$host} does not resolve to any address.", $url);
+    }
+
     public static function status(string $url, int $status): self
     {
         return new self("Fetching {$url} failed with HTTP {$status}.", $url, $status);
