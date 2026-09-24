@@ -17,8 +17,9 @@ trait ToolHelpers
     /**
      * Fetch through UrlFetcher, TLS verified per `bfsg.mcp.verify_ssl`. With `bfsg.mcp.allowed_hosts` the list governs
      * every hop; without one (null or []), hosts that resolve to non-public addresses (loopback, private, link-local,
-     * reserved, see PrivateNetworkGuard) are refused on every hop, except URLs of this application (the origin of
-     * app.url: scheme, host and port, so another port or scheme on the same host is checked like any other URL).
+     * reserved, see PrivateNetworkGuard) are refused on every hop that goes over the network. URLs of this application
+     * (the origin of app.url: scheme, host and port) are exempt only while UrlFetcher renders them in-process; once a
+     * remote page redirects there, that hop goes over HTTP and is guarded (and pinned) like any other.
      */
     protected function fetchPage(string $url): FetchedPage
     {
@@ -27,8 +28,7 @@ trait ToolHelpers
         $guard = null;
 
         if ($hosts === []) {
-            $network = app(PrivateNetworkGuard::class);
-            $guard = fn (string $hop) => $fetcher->isSameApp($hop) ? null : $network->check($hop);
+            $guard = app(PrivateNetworkGuard::class)->check(...);
         }
 
         return $fetcher->fetch($url, new FetchOptions(

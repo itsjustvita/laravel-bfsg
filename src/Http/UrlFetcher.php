@@ -51,10 +51,10 @@ class UrlFetcher
 
         while (true) {
             $this->assertAllowed($current, $options->allowedHosts);
-            $pin = $this->guard($current, $options);
-
             // In-process only while every hop so far was in-process: a remote page must not redirect into the kernel
             $viaKernel = $viaKernel && $this->isSameApp($current);
+            // The hop guard covers every hop that goes over the network, the app origin included; only in-process hops skip it
+            $pin = $viaKernel ? [] : $this->guard($current, $options);
             try {
                 $response = $this->request($current, $client, $options, $viaKernel, self::MAX_PAGE_BYTES, $pin);
             } catch (ResponseTooLarge $e) {
@@ -230,16 +230,21 @@ class UrlFetcher
     }
 
     /**
-     * A same-origin stylesheet of the page at $pageUrl. It goes through the allow-list and the hop guard like the page;
-     * on the page's own host and port it reuses the page's pin instead of resolving the host again.
+     * A same-origin stylesheet of the page at $pageUrl. It goes through the allow-list and (unless it is read in-process)
+     * the hop guard like the page; on the page's own host and port it reuses the page's pin instead of resolving the host
+     * again.
      *
      * @param  list<string>  $pagePin
      */
     private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, string $pageUrl, array $pagePin): ?string
     {
         $this->assertAllowed($url, $options->allowedHosts);
-        $pin = AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($pageUrl) ? $pagePin : $this->guard($url, $options);
         $viaKernel = $viaKernel && $this->isSameApp($url);
+        $pin = match (true) {
+            $viaKernel => [],
+            AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($pageUrl) => $pagePin,
+            default => $this->guard($url, $options),
+        };
         $maxBytes = (int) config('bfsg.fetch.max_stylesheet_bytes', 524288);
 
         if ($viaKernel) {

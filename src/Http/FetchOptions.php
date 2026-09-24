@@ -17,7 +17,9 @@ final class FetchOptions
      * @param  bool  $inProcess  false = request URLs of this application over HTTP too (needed for cookie/token logins)
      * @param  (Closure(string): (list<string>|null))|null  $hopGuard  called with the URL, every redirect target and
      *                                                                 every stylesheet on another origin before it is
-     *                                                                 requested; throws FetchFailed to refuse it (see
+     *                                                                 requested over the network (hops rendered in-process
+     *                                                                 by the kernel are not network requests and skip it);
+     *                                                                 throws FetchFailed to refuse it (see
      *                                                                 PrivateNetworkGuard). The addresses it returns are
      *                                                                 pinned (CURLOPT_RESOLVE) for that request
      */

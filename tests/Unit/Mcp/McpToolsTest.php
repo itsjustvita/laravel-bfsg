@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Http\FetchFailed;
+use ItsJustVita\LaravelBfsg\Http\FetchOptions;
 use ItsJustVita\LaravelBfsg\Http\InProcessFetcher;
 use ItsJustVita\LaravelBfsg\Http\PrivateNetworkGuard;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
@@ -358,6 +359,32 @@ class McpToolsTest extends TestCase
 
         Http::assertSentCount(2);
         Http::assertNotSent(fn (HttpRequest $request) => in_array(parse_url($request->url(), PHP_URL_HOST), ['169.254.169.254', 'metadata.example'], true));
+    }
+
+    public function test_a_remote_page_redirecting_to_the_app_origin_is_guarded_because_that_hop_goes_over_http(): void
+    {
+        config()->set('app.url', 'http://localhost');
+        $this->app['router']->get('/internal-status', fn () => response(self::BROKEN));
+        Http::fake([
+            'https://public.example/*' => Http::response('', 302, ['Location' => 'http://localhost/internal-status']),
+            '*' => Http::response(self::BROKEN, 200),
+        ]);
+
+        $response = BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://public.example/away']);
+
+        $response->assertHasErrors(['The host localhost resolves to 127.0.0.1, a non-public address']);
+        Http::assertSentCount(1);
+        Http::assertNotSent(fn (HttpRequest $request) => parse_url($request->url(), PHP_URL_HOST) === 'localhost');
+
+        try {
+            app(UrlFetcher::class)->fetch('https://public.example/away', new FetchOptions(hopGuard: app(PrivateNetworkGuard::class)->check(...)));
+            $this->fail('The redirect into the app origin over HTTP was not guarded.');
+        } catch (FetchFailed $e) {
+            $this->assertStringContainsString('a non-public address', $e->getMessage());
+        }
+
+        // In-process hops of this application stay exempt from the same guard
+        $this->assertTrue(app(UrlFetcher::class)->fetch('/internal-status', new FetchOptions(hopGuard: app(PrivateNetworkGuard::class)->check(...)))->inProcess);
     }
 
     public function test_a_host_that_does_not_resolve_is_refused(): void
