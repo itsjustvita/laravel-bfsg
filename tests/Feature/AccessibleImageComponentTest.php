@@ -46,6 +46,29 @@ class AccessibleImageComponentTest extends TestCase
         $this->assertStringNotContainsString('role=', $html);
     }
 
+    public function test_decorative_images_drop_the_callers_aria_hidden_and_role_instead_of_duplicating_them(): void
+    {
+        $html = $this->render('<x-bfsg-accessible-image src="/divider.svg" :decorative="true" aria-hidden="false" role="presentation" class="rule" />');
+
+        $this->assertSame('<img src="/divider.svg" alt="" aria-hidden="true" class="rule">', $html);
+    }
+
+    public function test_a_decorative_image_with_a_caption_is_an_error(): void
+    {
+        $blade = '<x-bfsg-accessible-image src="/team.jpg" :decorative="true" caption="The team in 2026" />';
+
+        try {
+            Blade::render($blade);
+            $this->fail("$blade rendered a caption for a hidden image");
+        } catch (Throwable $e) {
+            $this->assertInstanceOf(InvalidArgumentException::class, $e->getPrevious() ?? $e);
+            $this->assertStringContainsString('cannot be decorative and have a caption', $e->getMessage());
+        }
+
+        $this->expectException(InvalidArgumentException::class);
+        new AccessibleImage(src: '/a.jpg', caption: 'A caption', decorative: true);
+    }
+
     public function test_a_missing_alt_text_is_an_error_not_a_silent_empty_alt(): void
     {
         foreach (['<x-bfsg-accessible-image src="/a.jpg" />', '<x-bfsg-accessible-image src="/a.jpg" alt="  " />'] as $blade) {

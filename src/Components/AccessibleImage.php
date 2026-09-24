@@ -7,7 +7,8 @@ use InvalidArgumentException;
 
 /**
  * <x-bfsg-accessible-image src="…" alt="…" /> renders a bare <img> (a <figure> only with a caption). A missing
- * alt text is an error, never a silent alt="": pass :decorative="true" for purely decorative images.
+ * alt text is an error, never a silent alt="": pass :decorative="true" for purely decorative images (rendered with
+ * alt="" aria-hidden="true"; a caller's own aria-hidden or role is dropped, and a caption is an error).
  */
 class AccessibleImage extends Component
 {
@@ -20,6 +21,10 @@ class AccessibleImage extends Component
     ) {
         if (! $decorative && trim($alt) === '') {
             throw new InvalidArgumentException('<x-bfsg-accessible-image> needs a non-empty alt text describing the image, or :decorative="true" for a purely decorative image.');
+        }
+
+        if ($decorative && $this->hasCaption()) {
+            throw new InvalidArgumentException('<x-bfsg-accessible-image> cannot be decorative and have a caption: a captioned image carries meaning, so give it an alt text instead of :decorative="true".');
         }
     }
 
