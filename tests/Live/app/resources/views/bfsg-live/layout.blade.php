@@ -10,6 +10,7 @@
         .skip-link { position: absolute; left: -9999px; }
         .skip-link:focus { left: 1rem; top: 1rem; }
     </style>
+    @yield('head')
 </head>
 <body>
     <a href="#main" class="skip-link">Skip to main content</a>

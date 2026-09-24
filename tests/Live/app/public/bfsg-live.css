@@ -1,0 +1,3 @@
+/* Served to tests/Live/app/resources/views/bfsg-live/spa.blade.php: only a browser that runs the page's JavaScript
+   and inlines this sheet sees the low-contrast paragraph. */
+.faint { color: #bbbbbb; }

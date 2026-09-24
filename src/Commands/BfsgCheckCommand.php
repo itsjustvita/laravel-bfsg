@@ -48,7 +48,7 @@ class BfsgCheckCommand extends Command
     private const BROWSER_OPTIONS = ['headless', 'timeout', 'wait-for', 'engine'];
 
     /** Options only the plain fetch (without --browser) reads. */
-    private const FETCH_OPTIONS = ['insecure', 'no-inline-css', 'allow-login-page', 'login-url'];
+    private const FETCH_OPTIONS = ['insecure', 'allow-login-page', 'login-url'];
 
     /** Options only a login (--auth, --sanctum) reads. --login-url is exempt: it also names the login page to detect. */
     private const LOGIN_OPTIONS = ['email', 'password', 'username-field', 'password-field'];
@@ -69,7 +69,7 @@ class BfsgCheckCommand extends Command
         {--detailed : Show element, selector and snippet of every finding}
         {--save : Store the report in the database}
         {--insecure : Do not verify TLS certificates}
-        {--no-inline-css : Do not inline same-origin stylesheets}
+        {--no-inline-css : Do not inline same-origin stylesheets (plain fetch and --browser)}
         {--allow-login-page : Analyze the page even when the URL redirected to the login page}
         {--auth : Log in first (--email/--password, or BFSG_AUTH_EMAIL/BFSG_AUTH_PASSWORD, or BFSG_AUTH_TOKEN as bearer token)}
         {--email= : User for --auth}
@@ -311,12 +311,19 @@ class BfsgCheckCommand extends Command
 
         $this->status($this->trans('cli.rendering', ['url' => UrlFetcher::redact($url), 'engine' => $this->option('engine')]));
 
-        return [$browser->render($url, [
+        $html = $browser->render($url, [
             'headless' => $headless,
             'timeout' => (int) $timeout,
             'waitFor' => (string) $this->option('wait-for'),
             'engine' => (string) $this->option('engine'),
-        ]), UrlFetcher::redact($url)];
+            'inlineStylesheets' => $this->option('no-inline-css') ? false : null,
+        ]);
+
+        foreach ($browser->warnings() as $warning) {
+            $this->status($this->trans('cli.warning', ['message' => $warning]));
+        }
+
+        return [$html, UrlFetcher::redact($url)];
     }
 
     private function actingAs(UrlFetcher $fetcher, string $url): ?Authenticatable

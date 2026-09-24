@@ -183,6 +183,119 @@ class BrowserAnalyzerTest extends TestCase
         $this->assertStringContainsString('no output', $this->failure(fn () => (new BrowserAnalyzer('/srv/app'))->render('https://example.com/'))->getMessage());
     }
 
+    public function test_stylesheet_inlining_follows_the_fetch_config_unless_the_option_is_given(): void
+    {
+        $this->fakeNode();
+
+        (new BrowserAnalyzer('/srv/app'))->render('https://example.com/');
+        config()->set('bfsg.fetch.inline_stylesheets', 'false');
+        config()->set('bfsg.fetch.max_stylesheets', 2);
+        config()->set('bfsg.fetch.max_stylesheet_bytes', 1000);
+        (new BrowserAnalyzer('/srv/app'))->render('https://example.com/');
+        (new BrowserAnalyzer('/srv/app'))->render('https://example.com/', ['inlineStylesheets' => true]);
+
+        $this->assertStringContainsString('"inlineStylesheets":true,"maxStylesheets":5,"maxStylesheetBytes":524288', $this->runs[1]['script']);
+        $this->assertStringContainsString('"inlineStylesheets":false,"maxStylesheets":2,"maxStylesheetBytes":1000', $this->runs[3]['script']);
+        $this->assertStringContainsString('"inlineStylesheets":true,"maxStylesheets":2,"maxStylesheetBytes":1000', $this->runs[5]['script']);
+        $this->assertStringContainsString('const inlineStylesheets = '.BrowserAnalyzer::INLINE_STYLESHEETS_JS.';', $this->runs[1]['script']);
+        $this->assertStringContainsString('if (options.inlineStylesheets) {', $this->runs[1]['script']);
+    }
+
+    public function test_warnings_of_the_script_are_collected_per_render(): void
+    {
+        $this->fakeNode(stderr: "bfsg-warning: Stylesheet /a.css could not be read.\n(node:1) ExperimentalWarning: something\nbfsg-warning: Stylesheet /b.css was not inlined: more than 5 stylesheets.\n");
+        $browser = new BrowserAnalyzer('/srv/app');
+
+        $browser->render('https://example.com/');
+
+        $this->assertSame(['Stylesheet /a.css could not be read.', 'Stylesheet /b.css was not inlined: more than 5 stylesheets.'], $browser->warnings());
+
+        $this->runs = [];
+        $this->fakeNode();
+        $browser->render('https://example.com/');
+
+        $this->assertSame([], $browser->warnings());
+    }
+
+    public function test_the_in_page_inliner_replaces_same_origin_sheets_within_the_limits(): void
+    {
+        $node = (new ExecutableFinder)->find('node');
+
+        if ($node === null) {
+            $this->markTestSkipped('node is not installed');
+        }
+
+        $harness = 'const inline = '.BrowserAnalyzer::INLINE_STYLESHEETS_JS.";\n".<<<'JS'
+class FakeStyle {
+    constructor() { this.attrs = {}; this.textContent = ''; this.sheet = null; }
+    setAttribute(name, value) { this.attrs[name] = String(value); }
+    hasAttribute(name) { return name in this.attrs; }
+}
+const rules = (...texts) => ({ cssRules: texts.map((cssText) => ({ cssText })) });
+const unreadable = { get cssRules() { throw new Error('SecurityError'); } };
+const link = (href, sheet, media) => ({
+    attrs: media ? { href, media } : { href },
+    sheet,
+    href: new URL(href, 'https://spa.example.com/app/').href,
+    replacedWith: null,
+    getAttribute(name) { return this.attrs[name] ?? null; },
+    replaceWith(node) { this.replacedWith = node; },
+});
+const links = [
+    link('/css/app.css', rules('.faint { color: rgb(187, 187, 187); }', 'a::after { content: "</style>"; }'), 'screen'),
+    link('https://cdn.example.net/x.css', rules('.x { color: red; }')),
+    link('/css/locked.css', unreadable),
+    link('/css/alternate.css', Object.assign(rules('.o { color: red; }'), { disabled: true })),
+    link('/css/big.css', rules('.b { color: red; }'.repeat(10))),
+    link('/css/second.css', rules('.s { color: blue; }')),
+    link('/css/third.css', rules('.t { color: green; }')),
+    link('/favicon.ico', null),
+];
+const cssInJs = new FakeStyle();
+cssInJs.sheet = rules('.emotion-1 { color: rgb(170, 170, 170); }');
+const authored = new FakeStyle();
+authored.textContent = 'body { color: #111; }';
+authored.sheet = rules('body { color: rgb(17, 17, 17); }');
+global.location = { origin: 'https://spa.example.com' };
+global.document = {
+    baseURI: 'https://spa.example.com/app/',
+    querySelectorAll: (selector) => (selector === 'link' ? links : [cssInJs, authored]),
+    createElement: () => new FakeStyle(),
+};
+const warnings = inline({ maxStylesheets: 4, maxBytes: 100 });
+process.stdout.write(JSON.stringify({
+    warnings,
+    replaced: links.map((l) => (l.replacedWith ? { attrs: l.replacedWith.attrs, text: l.replacedWith.textContent } : null)),
+    cssInJs: cssInJs.textContent,
+    authored: authored.textContent,
+}));
+JS;
+        $file = sys_get_temp_dir().'/bfsg-inline-'.uniqid().'.cjs';
+        file_put_contents($file, $harness);
+
+        try {
+            $run = new SymfonyProcess([$node, $file]);
+            $run->run();
+            $this->assertTrue($run->isSuccessful(), $run->getErrorOutput());
+            $result = json_decode($run->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        } finally {
+            unlink($file);
+        }
+
+        $this->assertSame(['data-bfsg-inlined' => '/css/app.css', 'media' => 'screen'], $result['replaced'][0]['attrs']);
+        $this->assertSame(".faint { color: rgb(187, 187, 187); }\na::after { content: \"<\\/style>\"; }", $result['replaced'][0]['text']);
+        $this->assertSame(['attrs' => ['data-bfsg-inlined' => '/css/second.css'], 'text' => '.s { color: blue; }'], $result['replaced'][5]);
+        $this->assertSame([null, null, null, null, null], [$result['replaced'][1], $result['replaced'][2], $result['replaced'][3], $result['replaced'][4], $result['replaced'][6]], 'cross-origin, unreadable, disabled, too large and over the limit stay links');
+        $this->assertNull($result['replaced'][7], 'not a stylesheet');
+        $this->assertSame([
+            'Stylesheet /css/locked.css could not be read.',
+            'Stylesheet /css/big.css was not inlined: larger than 100 bytes.',
+            'Stylesheet /css/third.css was not inlined: more than 4 stylesheets.',
+        ], $result['warnings']);
+        $this->assertSame('.emotion-1 { color: rgb(170, 170, 170); }', $result['cssInJs'], 'CSS-in-JS rules become text');
+        $this->assertSame('body { color: #111; }', $result['authored'], 'authored style text is kept');
+    }
+
     public function test_the_working_directory_defaults_to_the_application(): void
     {
         $this->fakeNode();

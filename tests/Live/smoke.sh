@@ -259,6 +259,21 @@ PHP
 php "$WORK/mcp-check.php" "$WORK/mcp.out" || { cat "$WORK/mcp.out"; fail "MCP over stdio"; }
 pass "MCP over stdio: tools with annotations, analyze_url /live/broken in-process, check_contrast, private address and bad locale refused"
 
+# 9. --browser renders the page's JavaScript and inlines its same-origin stylesheets from the CSSOM. Needs Playwright in
+#    the app (CI installs it and sets BFSG_LIVE_BROWSER=required; a local run without it skips this step).
+if node -e "require.resolve('playwright')" >/dev/null 2>&1; then
+    check spa-plain 0 /live/spa --only=contrast --format=json
+    check spa-browser 1 "$BASE/live/spa" --browser --only=contrast --format=json
+    php "$LIVE_DIR/violation-keys.php" <"$WORK/spa-browser.out" >"$WORK/spa-browser.keys" || fail "bfsg:check --browser --format=json"
+    grep -q ' contrast.insufficient$' "$WORK/spa-browser.keys" || { cat "$WORK/spa-browser.keys" "$WORK/spa-browser.err"; fail "--browser did not measure the JavaScript paragraph against the inlined stylesheet"; }
+    check spa-browser-no-css 0 "$BASE/live/spa" --browser --no-inline-css --only=contrast --format=json
+    pass "bfsg:check --browser: JavaScript content, stylesheet inlined (contrast found), --no-inline-css honoured"
+elif [ "${BFSG_LIVE_BROWSER:-}" = required ]; then
+    fail "Playwright is not installed in $APP_DIR (BFSG_LIVE_BROWSER=required)"
+else
+    echo "skip --browser (Playwright is not installed in $APP_DIR)"
+fi
+
 # Only lines written during this run count.
 if [ -f "$LOG" ] && tail -c +"$((LOG_OFFSET + 1))" "$LOG" | grep -q '\.ERROR:'; then
     tail -c +"$((LOG_OFFSET + 1))" "$LOG" | grep '\.ERROR:'

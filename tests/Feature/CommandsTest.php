@@ -536,6 +536,29 @@ class CommandsTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_browser_mode_inlines_stylesheets_unless_no_inline_css(): void
+    {
+        $scripts = [];
+        Process::fake(function (PendingProcess $process) use (&$scripts) {
+            if (($process->command[1] ?? '') === '-e') {
+                return Process::result('');
+            }
+
+            $scripts[] = (string) file_get_contents($process->command[1]);
+
+            return Process::result(self::ACCESSIBLE, "bfsg-warning: Stylesheet /late.css was not inlined: more than 5 stylesheets.\n");
+        });
+
+        [$inlined, $inlinedOutput] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true]);
+        [$plain, $plainOutput] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, '--no-inline-css' => true]);
+
+        $this->assertSame(0, $inlined, $inlinedOutput->stderr());
+        $this->assertSame(0, $plain, $plainOutput->stderr());
+        $this->assertStringContainsString('"inlineStylesheets":true', $scripts[0]);
+        $this->assertStringContainsString('"inlineStylesheets":false', $scripts[1]);
+        $this->assertStringContainsString('Stylesheet /late.css was not inlined', $inlinedOutput->stderr());
+    }
+
     public function test_browser_mode_errors_exit_2(): void
     {
         Process::fake(fn () => Process::result('', "Cannot find module 'playwright'", 1));
@@ -558,7 +581,7 @@ class CommandsTest extends TestCase
     {
         Process::fake();
 
-        foreach (['--insecure' => true, '--no-inline-css' => true, '--allow-login-page' => true, '--login-url' => '/signin'] as $option => $value) {
+        foreach (['--insecure' => true, '--allow-login-page' => true, '--login-url' => '/signin'] as $option => $value) {
             [$exitCode, $output] = $this->check(['url' => 'https://spa.example.com/', '--browser' => true, $option => $value]);
 
             $this->assertSame(2, $exitCode, $option);

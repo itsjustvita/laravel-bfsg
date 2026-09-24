@@ -72,5 +72,12 @@ jobs:
         run: composer create-project laravel/laravel "$RUNNER_TEMP/live-app" --prefer-dist --no-interaction
       - name: Install the package and the live fixtures
         run: tests/Live/setup.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/live-app"
+      - name: Install Playwright (Chromium) into the app
+        working-directory: ${{ runner.temp }}/live-app
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1
+          npx playwright install --with-deps chromium
       - name: Run the live smoke test
+        env:
+          BFSG_LIVE_BROWSER: required
         run: tests/Live/smoke.sh "$RUNNER_TEMP/live-app"
