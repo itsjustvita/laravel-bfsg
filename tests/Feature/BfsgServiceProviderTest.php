@@ -16,6 +16,7 @@ use ItsJustVita\LaravelBfsg\Mcp\Tools\GetHistory;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\GetReport;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\ListAnalyzers;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 class BfsgServiceProviderTest extends TestCase
 {
@@ -95,6 +96,8 @@ class BfsgServiceProviderTest extends TestCase
         $this->assertContains('bfsg:mcp-server', array_keys(\Artisan::all()));
     }
 
+    /** The Boost stub class would otherwise stay defined for every later test of the process. */
+    #[RunInSeparateProcess]
     public function test_boost_receives_the_mcp_tools_when_installed(): void
     {
         require_once __DIR__.'/../Support/Stubs/BoostServiceProvider.php';
