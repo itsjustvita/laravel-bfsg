@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
+use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class TranslationCompletenessTest extends TestCase
@@ -112,14 +113,57 @@ class TranslationCompletenessTest extends TestCase
         }
     }
 
-    public function test_report_labels_exist_in_every_locale(): void
+    /**
+     * @return array<string, string> dotted key => text, nested arrays flattened
+     */
+    private function flatten(array $lang, string $prefix = ''): array
     {
-        $en = $this->lang('en', 'report');
+        $flat = [];
+
+        foreach ($lang as $key => $value) {
+            if (is_array($value)) {
+                $flat += $this->flatten($value, $prefix.$key.'.');
+            } else {
+                $flat[$prefix.$key] = (string) $value;
+            }
+        }
+
+        return $flat;
+    }
+
+    public function test_report_labels_exist_in_every_locale_with_matching_placeholders(): void
+    {
+        $en = $this->flatten($this->lang('en', 'report'));
 
         foreach (self::LOCALES as $locale) {
-            $lang = $this->lang($locale, 'report');
-            $this->assertSame(array_keys($en), array_keys($lang), "[$locale] report.php keys differ");
-            $this->assertSame(array_keys($en['severity']), array_keys($lang['severity']));
+            $lang = $this->flatten($this->lang($locale, 'report'));
+            $this->assertSame(array_keys($en), array_keys($lang), "[$locale] report.php keys differ from en");
+
+            foreach ($en as $key => $text) {
+                $this->assertNotSame('', trim($lang[$key]), "[$locale] report.$key is empty");
+                $this->assertSame($this->placeholders($text), $this->placeholders($lang[$key]), "[$locale] report.$key placeholders differ from en");
+            }
+        }
+    }
+
+    /** Every report label is looked up somewhere: $t('key') in the views, trans('key') in the command, or bfsg::report.key. */
+    public function test_no_unused_report_labels(): void
+    {
+        $sources = '';
+
+        foreach ([...glob(__DIR__.'/../../src/{,*/,*/*/,*/*/*/}*.php', GLOB_BRACE), ...glob(__DIR__.'/../../resources/views/{,*/,*/*/}*.php', GLOB_BRACE)] as $file) {
+            $sources .= file_get_contents($file);
+        }
+
+        foreach (array_keys($this->flatten($this->lang('en', 'report'))) as $key) {
+            if (str_starts_with($key, 'severity.')) {
+                $this->assertContains(substr($key, 9), array_column(Severity::cases(), 'value'), "report.$key is not a severity");
+
+                continue;
+            }
+
+            $quoted = preg_quote($key, '/');
+            $this->assertSame(1, preg_match("/(?:\\\$t|trans)\\(\\s*'{$quoted}'|bfsg::report\\.{$quoted}'/", $sources), "report.$key is defined but never used");
         }
     }
 }
