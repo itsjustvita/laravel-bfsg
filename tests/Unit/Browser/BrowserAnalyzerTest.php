@@ -199,6 +199,62 @@ class BrowserAnalyzerTest extends TestCase
         $this->assertStringContainsString('"inlineStylesheets":true,"maxStylesheets":2,"maxStylesheetBytes":1000', $this->runs[5]['script']);
         $this->assertStringContainsString('const inlineStylesheets = '.BrowserAnalyzer::INLINE_STYLESHEETS_JS.';', $this->runs[1]['script']);
         $this->assertStringContainsString('if (options.inlineStylesheets) {', $this->runs[1]['script']);
+        $this->assertStringContainsString('const reportWarnings = '.BrowserAnalyzer::REPORT_WARNINGS_JS.';', $this->runs[1]['script']);
+        $this->assertStringContainsString('reportWarnings(await page.evaluate(inlineStylesheets', $this->runs[1]['script']);
+    }
+
+    public function test_warnings_from_the_page_become_at_most_50_single_lines_without_control_characters(): void
+    {
+        $node = (new ExecutableFinder)->find('node');
+
+        if ($node === null) {
+            $this->markTestSkipped('node is not installed');
+        }
+
+        $harness = 'const report = '.BrowserAnalyzer::REPORT_WARNINGS_JS.";\n".<<<'JS'
+const many = Array.from({ length: 60 }, (_, i) => `w${i}`);
+process.stdout.write(JSON.stringify({
+    notArray: report({ length: 2, 0: 'a', 1: 'b' }),
+    nullish: report(null),
+    lines: report(['one\ntwo\r\nthree', '\u001b[31mred\u001b[0m', 'c1\u0085\u009bx', 'tab\there', 42, { toString() { return 'object'; } }, '  \u0007  ', 'x'.repeat(1000)]),
+    many: report(many),
+}));
+JS;
+        $result = $this->runNode($node, $harness);
+
+        $this->assertSame([], $result['notArray']);
+        $this->assertSame([], $result['nullish']);
+        $this->assertSame(['one two three', '[31mred [0m', 'c1 x', 'tab here', '42', 'object', str_repeat('x', 300)], $result['lines']);
+        $this->assertCount(50, $result['many']);
+        $this->assertSame('w49', $result['many'][49]);
+    }
+
+    public function test_warnings_are_capped_on_the_php_side_too(): void
+    {
+        $this->fakeNode(stderr: str_repeat('bfsg-warning: '.str_repeat('y', 400)."\n", 60));
+        $browser = new BrowserAnalyzer('/srv/app');
+
+        $browser->render('https://example.com/');
+
+        $this->assertCount(50, $browser->warnings());
+        $this->assertSame(str_repeat('y', 300), $browser->warnings()[0]);
+    }
+
+    /** @return array<string, mixed> the JSON the node script wrote to stdout */
+    private function runNode(string $node, string $script): array
+    {
+        $file = sys_get_temp_dir().'/bfsg-node-'.uniqid().'.cjs';
+        file_put_contents($file, $script);
+
+        try {
+            $run = new SymfonyProcess([$node, $file]);
+            $run->run();
+            $this->assertTrue($run->isSuccessful(), $run->getErrorOutput());
+
+            return json_decode($run->getOutput(), true, flags: JSON_THROW_ON_ERROR);
+        } finally {
+            unlink($file);
+        }
     }
 
     public function test_warnings_of_the_script_are_collected_per_render(): void
@@ -250,16 +306,21 @@ const links = [
     link('/css/second.css', rules('.s { color: blue; }')),
     link('/css/third.css', rules('.t { color: green; }')),
     link('/favicon.ico', null),
+    link('/css/print.css', rules('.p { color: red; }'.repeat(10)), 'print'),
+    link('/css/not-screen.css', rules('.n { color: red; }'), 'not screen'),
+    link('/css/wide.css', rules('.w { color: red; }'), 'only screen and (min-width: 1200px)'),
 ];
 const cssInJs = new FakeStyle();
 cssInJs.sheet = rules('.emotion-1 { color: rgb(170, 170, 170); }');
+const bigCssInJs = new FakeStyle();
+bigCssInJs.sheet = rules('.emotion-2 { color: red; }'.repeat(10));
 const authored = new FakeStyle();
 authored.textContent = 'body { color: #111; }';
 authored.sheet = rules('body { color: rgb(17, 17, 17); }');
 global.location = { origin: 'https://spa.example.com' };
 global.document = {
     baseURI: 'https://spa.example.com/app/',
-    querySelectorAll: (selector) => (selector === 'link' ? links : [cssInJs, authored]),
+    querySelectorAll: (selector) => (selector === 'link' ? links : [cssInJs, bigCssInJs, authored]),
     createElement: () => new FakeStyle(),
 };
 const warnings = inline({ maxStylesheets: 4, maxBytes: 100 });
@@ -267,6 +328,7 @@ process.stdout.write(JSON.stringify({
     warnings,
     replaced: links.map((l) => (l.replacedWith ? { attrs: l.replacedWith.attrs, text: l.replacedWith.textContent } : null)),
     cssInJs: cssInJs.textContent,
+    bigCssInJs: bigCssInJs.textContent,
     authored: authored.textContent,
 }));
 JS;
@@ -287,12 +349,16 @@ JS;
         $this->assertSame(['attrs' => ['data-bfsg-inlined' => '/css/second.css'], 'text' => '.s { color: blue; }'], $result['replaced'][5]);
         $this->assertSame([null, null, null, null, null], [$result['replaced'][1], $result['replaced'][2], $result['replaced'][3], $result['replaced'][4], $result['replaced'][6]], 'cross-origin, unreadable, disabled, too large and over the limit stay links');
         $this->assertNull($result['replaced'][7], 'not a stylesheet');
+        $this->assertSame([null, null, null], [$result['replaced'][8], $result['replaced'][9], $result['replaced'][10]], 'print sheets stay links, screen sheets over the limit too');
         $this->assertSame([
             'Stylesheet /css/locked.css could not be read.',
             'Stylesheet /css/big.css was not inlined: larger than 100 bytes.',
             'Stylesheet /css/third.css was not inlined: more than 4 stylesheets.',
-        ], $result['warnings']);
+            'Stylesheet /css/wide.css was not inlined: more than 4 stylesheets.',
+            'A <style> element filled by JavaScript was not inlined: larger than 100 bytes.',
+        ], $result['warnings'], 'sheets that do not apply to screen are skipped before they count, without a warning');
         $this->assertSame('.emotion-1 { color: rgb(170, 170, 170); }', $result['cssInJs'], 'CSS-in-JS rules become text');
+        $this->assertSame('', $result['bigCssInJs'], 'too large CSS-in-JS rules are left out');
         $this->assertSame('body { color: #111; }', $result['authored'], 'authored style text is kept');
     }
 

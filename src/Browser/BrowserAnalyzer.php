@@ -28,6 +28,11 @@ class BrowserAnalyzer
     /** Prefix of the stderr lines the script uses for non-fatal problems (stylesheets it could not inline). */
     public const WARNING_PREFIX = 'bfsg-warning: ';
 
+    /** At most this many warnings per render, each at most MAX_WARNING_LENGTH characters (the page controls their text). */
+    public const MAX_WARNINGS = 50;
+
+    public const MAX_WARNING_LENGTH = 300;
+
     /**
      * Runs inside the page (Playwright serializes it for page.evaluate()), so it must not reference anything outside
      * itself. Returns the warnings.
@@ -42,6 +47,28 @@ class BrowserAnalyzer
         } catch (error) {
             return null;
         }
+    };
+    // Same rule as HtmlDocument::mediaAppliesToScreen(): no media, or a query for all/screen (not negated)
+    const appliesToScreen = (media) => {
+        const queries = String(media || '').trim().toLowerCase();
+        if (queries === '') {
+            return true;
+        }
+        return queries.split(',').some((part) => {
+            let query = part.trim();
+            let negated = false;
+            if (query === '') {
+                return false;
+            }
+            if (query.startsWith('only ')) {
+                query = query.slice(5).trimStart();
+            } else if (query.startsWith('not ')) {
+                negated = true;
+                query = query.slice(4).trimStart();
+            }
+            const type = query.startsWith('(') ? 'all' : query.split(/[\s(]/)[0];
+            return (type === 'all' || type === 'screen') !== negated;
+        });
     };
     const styleWith = (css, href, media) => {
         const style = document.createElement('style');
@@ -59,6 +86,10 @@ class BrowserAnalyzer
         const href = link.getAttribute('href') || '';
 
         if (!sheet || sheet.disabled || href === '' || !link.href || new URL(link.href, document.baseURI).origin !== location.origin) {
+            continue;
+        }
+
+        if (!appliesToScreen(link.getAttribute('media'))) {
             continue;
         }
 
@@ -90,13 +121,32 @@ class BrowserAnalyzer
 
         const css = rulesOf(style.sheet);
 
-        if (css !== null && css !== '' && bytes(css) <= limits.maxBytes) {
-            style.textContent = css.replace(/<\/style/gi, '<\\/style');
+        if (css === null || css === '') {
+            continue;
         }
+
+        if (bytes(css) > limits.maxBytes) {
+            warnings.push(`A <style> element filled by JavaScript was not inlined: larger than ${limits.maxBytes} bytes.`);
+            continue;
+        }
+
+        style.textContent = css.replace(/<\/style/gi, '<\\/style');
     }
 
     return warnings;
 }
+JS;
+
+    /**
+     * Runs in node on the result of INLINE_STYLESHEETS_JS. The page runs its own scripts and could replace the DOM API,
+     * so the result is untrusted: only an array counts, every entry becomes a string on one line without control
+     * characters (no terminal escape sequences on stderr), at most 50 entries of at most 300 characters.
+     */
+    public const REPORT_WARNINGS_JS = <<<'JS'
+(warnings) => (Array.isArray(warnings) ? warnings : [])
+    .slice(0, 50)
+    .map((warning) => String(warning).replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, ' ').trim().slice(0, 300))
+    .filter((warning) => warning !== '')
 JS;
 
     /** @var list<string> */
@@ -170,8 +220,13 @@ JS;
             }
 
             foreach (preg_split('/\R/', $result->errorOutput()) ?: [] as $line) {
+                if (count($this->warnings) >= self::MAX_WARNINGS) {
+                    break;
+                }
+
                 if (str_starts_with($line, self::WARNING_PREFIX)) {
-                    $this->warnings[] = substr($line, strlen(self::WARNING_PREFIX));
+                    $warning = trim((string) preg_replace('/[\x00-\x1F\x7F]+/', ' ', substr($line, strlen(self::WARNING_PREFIX))));
+                    $this->warnings[] = mb_substr($warning, 0, self::MAX_WARNING_LENGTH);
                 }
             }
 
@@ -194,6 +249,7 @@ JS;
     {
         $json = json_encode($options, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
         $inline = self::INLINE_STYLESHEETS_JS;
+        $report = self::REPORT_WARNINGS_JS;
         $prefix = json_encode(self::WARNING_PREFIX, JSON_THROW_ON_ERROR);
 
         return <<<JS
@@ -204,6 +260,7 @@ const options = {$json};
 const deadline = Date.now() + options.timeout;
 const remaining = () => Math.max(1, deadline - Date.now());
 const inlineStylesheets = {$inline};
+const reportWarnings = {$report};
 
 (async () => {
     const browser = await playwright[options.engine].launch({ headless: options.headless, timeout: remaining() });
@@ -220,9 +277,8 @@ const inlineStylesheets = {$inline};
         }
 
         if (options.inlineStylesheets) {
-            const warnings = await page.evaluate(inlineStylesheets, { maxStylesheets: options.maxStylesheets, maxBytes: options.maxStylesheetBytes });
-            // The page runs its own scripts and could replace the DOM API: accept only strings, one line each
-            (Array.isArray(warnings) ? warnings : []).forEach((warning) => process.stderr.write({$prefix} + String(warning).replace(/\s+/g, ' ') + '\\n'));
+            reportWarnings(await page.evaluate(inlineStylesheets, { maxStylesheets: options.maxStylesheets, maxBytes: options.maxStylesheetBytes }))
+                .forEach((warning) => process.stderr.write({$prefix} + warning + '\\n'));
         }
 
         process.stdout.write(await page.content());

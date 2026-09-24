@@ -39,7 +39,7 @@ php artisan bfsg:check https://app.example.com/reports --browser --engine=firefo
 
 ## Stylesheets
 
-The contrast analyzer needs the CSS. As with a plain fetch, same-origin stylesheets of the rendered page are inlined as `<style data-bfsg-inlined="…">`, taken from the stylesheets the browser has already loaded (at most `bfsg.fetch.max_stylesheets`, each at most `bfsg.fetch.max_stylesheet_bytes`). `<style>` elements that CSS-in-JS libraries fill through the CSSOM (`insertRule`, as styled-components and Emotion do in production) get their rules as text, so their colours are measured too. Stylesheets from other origins stay links. Sheets that could not be inlined are reported as `Warning: …` lines on stderr. `--no-inline-css` or `BFSG_INLINE_CSS=false` switch inlining off.
+The contrast analyzer needs the CSS. As with a plain fetch, same-origin stylesheets of the rendered page whose `media` applies to screen are inlined as `<style data-bfsg-inlined="…">`, taken from the stylesheets the browser has already loaded (at most `bfsg.fetch.max_stylesheets`, each at most `bfsg.fetch.max_stylesheet_bytes`). `<style>` elements that CSS-in-JS libraries fill through the CSSOM (`insertRule`, as styled-components and Emotion do in production) get their rules as text, so their colours are measured too. Stylesheets from other origins stay links. Sheets that could not be inlined are reported as `Warning: …` lines on stderr (at most 50 per page). `--no-inline-css` or `BFSG_INLINE_CSS=false` switch inlining off.
 
 ## What `--browser` does not do
 
