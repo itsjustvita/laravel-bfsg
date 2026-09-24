@@ -19,7 +19,7 @@ A rewrite of the package's core with breaking changes: typed results (`AnalysisR
 - `Services\` namespace removed (`Dom\HtmlDocument`, `Css\CssParser`, `Css\Color`).
 - `Services\AuthenticatedHttpClient` moved to `Http\AuthenticatedHttpClient`.
 - Config: `auto_fix`, `reporting.enabled`, `reporting.email`, `authentication.sanctum_enabled`, `authentication.timeout` removed; `locale` and `scoring.weights` added.
-- `laravel/mcp` is optional (`suggest`); the MCP server registers only when it is installed.
+- `laravel/mcp` is optional (`suggest`); the MCP server registers only when it is installed. Versions below 0.6.4 conflict (`composer.json` `conflict`), so an older copy pulled in by another package (Laravel Boost) cannot be combined with 3.0.
 - The MCP `list_analyzers` payload now carries `name`, `class`, `description`, `rules` (array of criteria such as `1.1.1`) and `enabled` per analyzer, instead of the previous `wcag_rules` string.
 - Score: configurable weights, rounding instead of truncation, grade capped at B with any error and at D with five or more errors.
 - The retired `critical` severity is counted as `error` (weight 5 instead of 10); historical scores in `bfsg_reports` are not comparable with v3 scores.

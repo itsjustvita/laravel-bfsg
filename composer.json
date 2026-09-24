@@ -51,6 +51,9 @@
     "laravel/mcp": "Required for the MCP server and the bfsg:mcp-server command (^0.6.4 || ^1.0)",
     "barryvdh/laravel-dompdf": "Required for PDF report generation (^3.0)"
   },
+  "conflict": {
+    "laravel/mcp": "<0.6.4"
+  },
   "autoload": {
     "psr-4": {
       "ItsJustVita\\LaravelBfsg\\": "src/",
