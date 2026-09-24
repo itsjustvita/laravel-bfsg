@@ -31,11 +31,11 @@ class McpToolsTest extends TestCase
 
     private const BROKEN = '<!DOCTYPE html><html><body><img src="hero.jpg"></body></html>';
 
-    /** Fake DNS for the private-network guard (no real lookups in tests); unknown hosts get a documentation address. */
+    /** Fake DNS for the private-network guard (no real lookups in tests); unknown hosts get a public address. */
     private const DNS = [
         'localhost' => ['127.0.0.1'],
         'internal.example' => ['10.1.2.3'],
-        'dual.example' => ['203.0.113.5', 'fd12:3456::1'],
+        'dual.example' => ['93.184.215.15', 'fd12:3456::1'],
         'metadata.example' => ['169.254.169.254'],
     ];
 
@@ -49,7 +49,7 @@ class McpToolsTest extends TestCase
             TestResponse::macro('text', fn () => (string) ($this->content()[0] ?? ''));
         }
 
-        $this->app->instance(PrivateNetworkGuard::class, new PrivateNetworkGuard(fn (string $host) => self::DNS[$host] ?? ($host === 'nowhere.example' ? [] : ['203.0.113.10'])));
+        $this->app->instance(PrivateNetworkGuard::class, new PrivateNetworkGuard(fn (string $host) => self::DNS[$host] ?? ($host === 'nowhere.example' ? [] : ['93.184.215.14'])));
     }
 
     public function test_tools_have_snake_case_names_and_annotations(): void
@@ -271,6 +271,16 @@ class McpToolsTest extends TestCase
             'short loopback' => ['http://127.1/'],
             'octal dotted loopback' => ['http://0177.0.0.1/'],
             'mixed-radix private' => ['http://0xa.012.0.1/'],
+            'CGNAT (Alibaba Cloud metadata)' => ['http://100.100.100.200/latest/meta-data/'],
+            'benchmarking 198.18/15' => ['http://198.18.0.1/'],
+            'reserved 240/4' => ['http://240.0.0.1/'],
+            'IETF protocol assignments 192.0.0/24' => ['http://192.0.0.8/'],
+            'documentation 203.0.113/24' => ['http://203.0.113.10/'],
+            'NAT64 of the metadata address' => ['http://[64:ff9b::a9fe:a9fe]/'],
+            '6to4 of the metadata address' => ['http://[2002:a9fe:a9fe::1]/'],
+            'IPv4-compatible loopback' => ['http://[::127.0.0.1]/'],
+            'IPv6 site-local' => ['http://[fec0::1]/'],
+            'IPv6 documentation' => ['http://[2001:db8::1]/'],
         ];
     }
 
@@ -279,11 +289,11 @@ class McpToolsTest extends TestCase
     {
         Http::fake(fn () => Http::response(self::BROKEN, 200));
 
-        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => $url])->assertHasErrors(['loopback, private, link-local or unspecified']);
-        BfsgMcpServer::tool(GenerateReport::class, ['url' => $url])->assertHasErrors(['loopback, private, link-local or unspecified']);
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => $url])->assertHasErrors(['a non-public address']);
+        BfsgMcpServer::tool(GenerateReport::class, ['url' => $url])->assertHasErrors(['a non-public address']);
 
         config()->set('bfsg.mcp.allowed_hosts', []);
-        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => $url])->assertHasErrors(['loopback, private, link-local or unspecified']);
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => $url])->assertHasErrors(['a non-public address']);
 
         Http::assertNothingSent();
     }
@@ -375,11 +385,11 @@ class McpToolsTest extends TestCase
 
     public function test_the_guard_classifies_addresses(): void
     {
-        foreach (['127.0.0.1', '10.255.255.255', '172.16.0.0', '192.168.0.1', '169.254.169.254', '0.0.0.0', '::1', '::', 'fc00::', 'fdff:ffff::1', 'fe80::1', 'febf::1', '::ffff:10.0.0.1', '[::1]'] as $blocked) {
+        foreach (['127.0.0.1', '10.255.255.255', '172.16.0.0', '192.168.0.1', '169.254.169.254', '0.0.0.0', '::1', '::', 'fc00::', 'fdff:ffff::1', 'fe80::1', 'febf::1', '::ffff:10.0.0.1', '[::1]', '100.64.0.1', '100.100.100.200', '198.18.0.1', '198.19.255.255', '240.0.0.1', '255.255.255.255', '192.0.0.8', '192.0.2.1', '203.0.113.10', 'fec0::1', '2001:db8::1', '64:ff9b::a9fe:a9fe', '64:ff9b::7f00:1', '2002:a9fe:a9fe::1', '2002:7f00:1::', '::127.0.0.1', '::10.0.0.1'] as $blocked) {
             $this->assertTrue(PrivateNetworkGuard::isBlocked($blocked), $blocked);
         }
 
-        foreach (['8.8.8.8', '172.15.255.255', '172.32.0.0', '192.169.0.1', '169.255.0.1', '1.0.0.0', '2001:db8::1', 'fec0::1', '::ffff:8.8.8.8', 'not-an-ip'] as $public) {
+        foreach (['8.8.8.8', '172.15.255.255', '172.32.0.0', '192.169.0.1', '169.255.0.1', '1.0.0.0', '100.63.255.255', '100.128.0.0', '93.184.215.14', '2606:4700::1111', '2a00:1450:4001::200e', '64:ff9b::808:808', '::ffff:8.8.8.8', 'not-an-ip'] as $public) {
             $this->assertFalse(PrivateNetworkGuard::isBlocked($public), $public);
         }
     }

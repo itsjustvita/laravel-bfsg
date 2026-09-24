@@ -16,9 +16,9 @@ trait ToolHelpers
 {
     /**
      * Fetch through UrlFetcher, TLS verified per `bfsg.mcp.verify_ssl`. With `bfsg.mcp.allowed_hosts` the list governs
-     * every hop; without one (null or []), hosts that resolve to loopback, private, link-local or unspecified
-     * addresses are refused on every hop, except URLs of this application (the origin of app.url: scheme, host and
-     * port, so another port or scheme on the same host is checked like any other URL).
+     * every hop; without one (null or []), hosts that resolve to non-public addresses (loopback, private, link-local,
+     * reserved, see PrivateNetworkGuard) are refused on every hop, except URLs of this application (the origin of
+     * app.url: scheme, host and port, so another port or scheme on the same host is checked like any other URL).
      */
     protected function fetchPage(string $url): FetchedPage
     {

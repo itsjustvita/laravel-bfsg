@@ -24,7 +24,7 @@ final class FetchFailed extends RuntimeException
 
     public static function privateAddress(string $url, string $host, string $address): self
     {
-        return new self("The host {$host} resolves to {$address}, a loopback, private, link-local or unspecified address. List it in bfsg.mcp.allowed_hosts to allow it.", $url);
+        return new self("The host {$host} resolves to {$address}, a non-public address (loopback, private, link-local, reserved or unspecified). List it in bfsg.mcp.allowed_hosts to allow it.", $url);
     }
 
     public static function malformedAddress(string $url, string $host): self

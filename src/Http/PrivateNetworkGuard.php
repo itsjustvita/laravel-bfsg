@@ -5,7 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Http;
 use Closure;
 
 /**
- * Refuses URLs whose host is, or resolves to, a loopback, private, link-local or unspecified address: the SSRF
+ * Refuses URLs whose host is, or resolves to, a non-public (loopback, private, link-local, reserved, …) address: the SSRF
  * guard of the MCP URL tools when no allow-list is configured. IP literals are classified directly; hostnames are
  * resolved (A records via gethostbynamel(), which also covers /etc/hosts, and AAAA records via dns_get_record()) and
  * refused when any address is blocked. Numeric hosts in the forms libcurl accepts (hex, octal, decimal, short:
@@ -14,11 +14,11 @@ use Closure;
  */
 class PrivateNetworkGuard
 {
-    /** IPv4 ranges: unspecified/this network, private, loopback, link-local (incl. 169.254.169.254), private. */
-    private const BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'];
+    /** IPv4 ranges on top of FILTER_FLAG_GLOBAL_RANGE: this network, private, loopback, link-local, CGNAT, reserved. */
+    private const BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '198.18.0.0/15', '240.0.0.0/4'];
 
-    /** IPv6 ranges: unspecified, loopback, unique local, link-local. IPv4-mapped addresses are checked as IPv4. */
-    private const BLOCKED_V6 = ['::/128', '::1/128', 'fc00::/7', 'fe80::/10'];
+    /** IPv6 ranges on top of FILTER_FLAG_GLOBAL_RANGE: unspecified, loopback, unique local, link-local, site-local. */
+    private const BLOCKED_V6 = ['::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'fec0::/10'];
 
     /** @var Closure(string): list<string> */
     private Closure $resolver;
@@ -126,6 +126,12 @@ class PrivateNetworkGuard
         return preg_match('/^(?:0x[0-9a-f]*|[0-9]+)(?:\.(?:0x[0-9a-f]*|[0-9]+))*$/i', $host) === 1;
     }
 
+    /**
+     * Whether $ip is not a public address: anything PHP's FILTER_FLAG_GLOBAL_RANGE rejects (RFC 6890 non-global ranges:
+     * private, loopback, link-local, CGNAT 100.64/10, 192.0.0/24, documentation, benchmarking 198.18/15, reserved
+     * 240/4, 2001::/23, 2002::/16, …), the blocked lists below, and IPv6 addresses whose embedded IPv4 address
+     * (IPv4-mapped ::ffff:0:0/96, IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16) is not public.
+     */
     public static function isBlocked(string $ip): bool
     {
         $ip = trim($ip, '[]');
@@ -135,8 +141,22 @@ class PrivateNetworkGuard
             return false;
         }
 
-        if (strlen($packed) === 16 && str_starts_with($packed, str_repeat("\0", 10)."\xff\xff")) {
-            $packed = substr($packed, 12); // ::ffff:a.b.c.d is a.b.c.d
+        if (strlen($packed) === 16) {
+            $embedded = self::embeddedIpv4($packed);
+
+            if ($embedded !== null) {
+                if (self::isBlocked((string) inet_ntop($embedded))) {
+                    return true;
+                }
+
+                if (str_starts_with($packed, str_repeat("\0", 10)."\xff\xff")) {
+                    return false; // ::ffff:a.b.c.d is a.b.c.d, which is public
+                }
+            }
+        }
+
+        if (filter_var((string) inet_ntop($packed), FILTER_VALIDATE_IP, FILTER_FLAG_GLOBAL_RANGE) === false) {
+            return true;
         }
 
         foreach (strlen($packed) === 4 ? self::BLOCKED_V4 : self::BLOCKED_V6 as $cidr) {
@@ -148,6 +168,24 @@ class PrivateNetworkGuard
         }
 
         return false;
+    }
+
+    /** The IPv4 address (4 bytes) embedded in an IPv4-mapped, IPv4-compatible, NAT64 or 6to4 IPv6 address, else null. */
+    private static function embeddedIpv4(string $packed): ?string
+    {
+        if (str_starts_with($packed, str_repeat("\0", 10)."\xff\xff") || str_starts_with($packed, str_repeat("\0", 12))) {
+            return substr($packed, 12);
+        }
+
+        if (str_starts_with($packed, substr((string) inet_pton('64:ff9b::'), 0, 12))) {
+            return substr($packed, 12);
+        }
+
+        if (str_starts_with($packed, "\x20\x02")) {
+            return substr($packed, 2, 4);
+        }
+
+        return null;
     }
 
     private static function inRange(string $address, string $network, int $bits): bool

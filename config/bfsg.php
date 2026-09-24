@@ -97,10 +97,12 @@ return [
     |--------------------------------------------------------------------------
     | allowed_hosts: a list of hostnames governs every URL and every redirect hop (paths of this application are
     | checked against the host of app.url). null or [] = any public host: the host of every hop is resolved (A and
-    | AAAA records) and loopback (127.0.0.0/8, ::1), private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local
-    | (169.254/16 incl. the cloud metadata address 169.254.169.254, fe80::/10) and unspecified (0.0.0.0/8, ::)
-    | addresses are refused, except URLs of this application (origin of app.url: scheme, host and port). TLS comes only from
-    | verify_ssl; MCP clients cannot switch it off.
+    | AAAA records; numeric forms like 0x7f000001 or 127.1 are parsed, not resolved) and every non-public address
+    | is refused: loopback, private, link-local (incl. the cloud metadata address 169.254.169.254), CGNAT
+    | 100.64/10, reserved, documentation and benchmarking ranges, unspecified, IPv6 unique/site-local, and IPv6
+    | addresses embedding one of these (IPv4-mapped/-compatible, NAT64 64:ff9b::/96, 6to4 2002::/16). Hosts that
+    | do not resolve are refused. URLs of this application (the origin of app.url: scheme, host and port) are
+    | exempt. TLS verification comes only from verify_ssl; MCP clients cannot switch it off.
     */
     'mcp' => [
         'allowed_hosts' => null,
