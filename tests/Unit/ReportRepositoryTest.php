@@ -179,6 +179,44 @@ class ReportRepositoryTest extends TestCase
         $this->assertSame(2, DB::table('bfsg_reports')->whereNotNull('url_hash')->count(), 'every row got its hash');
     }
 
+    public function test_a_rerun_of_the_url_migration_finishes_an_interrupted_backfill(): void
+    {
+        $migration = require __DIR__.'/../../database/migrations/2026_09_24_000000_widen_url_of_bfsg_reports.php';
+        // The column exists, but the backfill stopped before these rows (MySQL cannot roll back the DDL)
+        DB::table('bfsg_reports')->insert([
+            ['url' => 'https://example.com/a', 'url_hash' => null, 'created_at' => now(), 'updated_at' => now()],
+            ['url' => 'https://example.com/b', 'url_hash' => null, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $migration->up();
+
+        $this->assertSame(0, DB::table('bfsg_reports')->whereNull('url_hash')->count());
+        $this->assertSame(1, BfsgReport::forUrl('https://example.com/a')->count());
+        $this->assertSame('text', Schema::getColumnType('bfsg_reports', 'url'));
+    }
+
+    public function test_the_url_migration_drops_an_index_on_url_whatever_its_name(): void
+    {
+        $migration = require __DIR__.'/../../database/migrations/2026_09_24_000000_widen_url_of_bfsg_reports.php';
+        $migration->down();
+        Schema::table('bfsg_reports', fn (Blueprint $table) => $table->dropIndex(['url']));
+        Schema::table('bfsg_reports', fn (Blueprint $table) => $table->index('url', 'reports_by_url'));
+
+        $migration->up();
+
+        $this->assertFalse(Schema::hasIndex('bfsg_reports', ['url']));
+        $this->assertTrue(Schema::hasColumn('bfsg_reports', 'url_hash'));
+    }
+
+    public function test_the_url_hash_cannot_be_mass_assigned_and_follows_the_url(): void
+    {
+        $report = new BfsgReport(['url' => 'https://example.com/', 'url_hash' => 'forged']);
+        $this->assertNull($report->url_hash);
+
+        $report->save();
+        $this->assertSame(hash('sha256', 'https://example.com/'), $report->fresh()->url_hash);
+    }
+
     public function test_container_resolution_honours_configured_weights(): void
     {
         config()->set('bfsg.scoring.weights', ['error' => 50, 'warning' => 2, 'notice' => 0.5]);

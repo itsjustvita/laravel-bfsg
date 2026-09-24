@@ -16,7 +16,6 @@ class BfsgReport extends BfsgModel
 
     protected $fillable = [
         'url',
-        'url_hash',
         'total_violations',
         'score',
         'grade',
@@ -30,7 +29,11 @@ class BfsgReport extends BfsgModel
         'created_at' => 'datetime',
     ];
 
-    /** `url_hash` (the indexed lookup key of the text column `url`) always follows `url`. */
+    /**
+     * `url_hash` (the indexed lookup key of the text column `url`) follows `url` on every Eloquent save; it cannot be
+     * mass assigned. Query builder updates (`BfsgReport::query()->update(['url' => …])`) bypass the model and must
+     * set `url_hash` themselves (BfsgReport::urlHash()).
+     */
     protected static function booted(): void
     {
         static::saving(function (BfsgReport $report) {

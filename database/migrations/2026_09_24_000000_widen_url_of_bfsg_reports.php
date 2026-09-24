@@ -10,7 +10,8 @@ use Illuminate\Support\Facades\Schema;
  * ReportRepository::URL_LENGTH characters) and the lookup moves to an indexed `url_hash` (sha256 of the stored URL),
  * because a text column cannot carry a plain index on every database. Existing rows get their hash. Migrations run
  * in file name order, so on a fresh install this file runs before the undated create_bfsg_tables (which already
- * creates both columns) and does nothing; it also does nothing when `url_hash` exists.
+ * creates both columns) and does nothing. When `url_hash` exists, only rows without a hash are hashed, so a rerun
+ * finishes a backfill that was interrupted (MySQL cannot roll back the schema change of a failed run).
  */
 return new class extends Migration
 {
@@ -21,20 +22,25 @@ return new class extends Migration
 
     public function up(): void
     {
-        if (! Schema::hasTable('bfsg_reports') || Schema::hasColumn('bfsg_reports', 'url_hash')) {
+        if (! Schema::hasTable('bfsg_reports')) {
             return;
         }
 
-        if (Schema::hasIndex('bfsg_reports', ['url'])) {
-            Schema::table('bfsg_reports', fn (Blueprint $table) => $table->dropIndex(['url']));
+        if (! Schema::hasColumn('bfsg_reports', 'url_hash')) {
+            // An index on url, whatever its name (v2 used the default bfsg_reports_url_index)
+            foreach (Schema::getIndexes('bfsg_reports') as $index) {
+                if ($index['columns'] === ['url'] && ! $index['primary']) {
+                    Schema::table('bfsg_reports', fn (Blueprint $table) => $table->dropIndex($index['name']));
+                }
+            }
+
+            Schema::table('bfsg_reports', function (Blueprint $table) {
+                $table->text('url')->change();
+                $table->string('url_hash', 64)->nullable()->after('url')->index();
+            });
         }
 
-        Schema::table('bfsg_reports', function (Blueprint $table) {
-            $table->text('url')->change();
-            $table->string('url_hash', 64)->nullable()->after('url')->index();
-        });
-
-        DB::table('bfsg_reports')->select(['id', 'url'])->orderBy('id')->chunkById(500, function ($reports) {
+        DB::table('bfsg_reports')->whereNull('url_hash')->select(['id', 'url'])->chunkById(500, function ($reports) {
             foreach ($reports as $report) {
                 DB::table('bfsg_reports')->where('id', $report->id)->update(['url_hash' => hash('sha256', (string) $report->url)]);
             }
