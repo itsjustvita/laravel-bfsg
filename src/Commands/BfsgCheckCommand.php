@@ -124,6 +124,7 @@ class BfsgCheckCommand extends Command
             $url = $fetcher->absolute($this->argument('url') ?? '/');
             // Credentials in the URL are for the request only (UrlFetcher turns them into a Basic header)
             $userInfo = (string) parse_url($url, PHP_URL_USER).(parse_url($url, PHP_URL_PASS) === null ? '' : ':'.parse_url($url, PHP_URL_PASS));
+            $this->assertSanctumLoginOrigin($url);
             $this->status($this->trans('cli.checking', ['url' => UrlFetcher::redact($url)]));
             [$html, $url] = $this->option('browser') ? $this->render($browser, $url) : $this->fetch($fetcher, $url);
 
@@ -446,6 +447,21 @@ class BfsgCheckCommand extends Command
             (bool) $this->option('json-auth') => $client->loginWithJson($loginUrl, $email, $password, [], $fieldNames),
             default => $client->loginWithForm($loginUrl, $email, $password, [], $fieldNames),
         };
+    }
+
+    /** --sanctum only uses the path of the login URL; one on another origin would be silently ignored, so it is an error. */
+    private function assertSanctumLoginOrigin(string $url): void
+    {
+        if (! $this->option('sanctum')) {
+            return;
+        }
+
+        $origin = $this->origin($url);
+        $loginUrl = $this->loginUrl($origin);
+
+        if (AuthenticatedHttpClient::origin($loginUrl) !== AuthenticatedHttpClient::origin($origin)) {
+            throw new InvalidArgumentException("--sanctum logs in on the origin of the checked page ({$origin}), but the login URL ".UrlFetcher::redact($loginUrl).' is on another origin. Pass a path or a URL on that origin as --login-url.');
+        }
     }
 
     private function loginUrl(string $origin): string

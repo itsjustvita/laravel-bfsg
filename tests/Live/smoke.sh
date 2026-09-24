@@ -151,9 +151,11 @@ check unknown-option 2 /live/broken --failon=warning
 grep -q 'does not exist' "$WORK/unknown-option.err" || { cat "$WORK/unknown-option.out" "$WORK/unknown-option.err"; fail "the unknown option was not named on stderr"; }
 check bad-locale 2 /live/broken --locale=../../../tmp/x
 check engine-without-browser 2 /live/broken --engine=firefox
+check sanctum-foreign-login 2 /live/broken --sanctum --email=live@example.com --password=secret --login-url=https://login.invalid/api/login
+grep -q 'on another origin' "$WORK/sanctum-foreign-login.err" || { cat "$WORK/sanctum-foreign-login.err"; fail "--sanctum with a login URL on another origin was not refused"; }
 check quiet 1 /live/broken --format=json -q
 pure_json "$WORK/quiet.out" || fail "-q suppressed the JSON report"
-pass "bfsg:check unknown option, invalid locale and ignored combination exit 2; -q keeps the report"
+pass "bfsg:check unknown option, invalid locale and ignored combinations exit 2; -q keeps the report"
 
 # 6f. --save stores the report; bfsg:history lists it with a whole-number score
 check saved 1 /live/broken --save

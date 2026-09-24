@@ -142,7 +142,7 @@ Fetching:
 | `--insecure` | Do not verify TLS certificates. Only for hosts you control with self-signed certificates: with `--insecure`, credentials and tokens are sent without verifying the server |
 | `--no-inline-css` | Do not inline same-origin stylesheets (also with `--browser`) |
 | `--allow-login-page` | Analyze the page even when the URL redirected to the login page (otherwise exit 2) |
-| `--login-url=` | Login page, absolute or relative to the checked site. Default: `bfsg.authentication.default_login_url` |
+| `--login-url=` | Login page, absolute or relative to the checked site; with `--sanctum` it must be on the origin of the checked page. Default: `bfsg.authentication.default_login_url` |
 
 Authentication (see [Checking pages behind a login](#checking-pages-behind-a-login)):
 
@@ -169,7 +169,7 @@ Browser (see [Browser mode](#browser-mode-for-single-page-apps)):
 | `--timeout=` | `30000` | One deadline in milliseconds for launch, navigation and `--wait-for` |
 | `--wait-for=` | `body` | CSS selector to wait for before the DOM is taken |
 
-Options that would be silently ignored in a combination are an error (exit 2) instead: browser options without `--browser`, `--browser` with any login option, `--insecure`, `--allow-login-page` or `--login-url`, `--as` with a remote authentication option, `--guard` without `--as`, `--email`/`--password`/`--username-field`/`--password-field` without `--auth` or `--sanctum`, `--json-auth` without `--auth`, and `--api-key-header` without `--api-key`.
+Options that would be silently ignored in a combination are an error (exit 2) instead: browser options without `--browser`, `--browser` with any login option, `--insecure`, `--allow-login-page` or `--login-url`, `--as` with a remote authentication option, `--guard` without `--as`, `--email`/`--password`/`--username-field`/`--password-field` without `--auth` or `--sanctum`, `--json-auth` without `--auth`, `--api-key-header` without `--api-key`, and `--sanctum` with a login URL on another origin than the checked page (Sanctum logs in on the checked site).
 
 ### Examples
 

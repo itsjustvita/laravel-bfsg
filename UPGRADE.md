@@ -366,6 +366,7 @@ The middleware stays inactive until `BFSG_MIDDLEWARE_ENABLED=true`. If your log 
 
 - **In-process checks and `auth.basic`.** Pages of your application are rendered in-process; credentials in the URL are not passed to them. A route behind `auth.basic` answers 401 (exit 2): check it with `--as=<user>` instead of `https://user:pass@…`.
 - **Credentials in the URL** of a remote page become a `Basic` header for that origin, also for the login of `--auth`/`--sanctum`. They cannot be combined with `--bearer`, `--jwt`, `--api-key-header=Authorization` or a login that returns a bearer token (exit 2).
+- **`--sanctum` with an absolute `--login-url`** on another origin than the checked page exits 2: Sanctum logs in on the checked site and uses only the path of the login URL.
 - **`--browser`** cannot be combined with authentication options, `--insecure`, `--allow-login-page` or `--login-url` (exit 2): the browser does not share them.
 - **Published translations** from 2.x contain the old flat messages; delete `lang/vendor/bfsg` or re-publish it (`--tag=bfsg-lang --force`).
 - **Installing a development version** of 3.x needs the constraint `3.x-dev` (the `main` branch).

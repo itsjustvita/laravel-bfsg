@@ -451,6 +451,28 @@ class CommandsTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://app.example.com/login' && $request->hasHeader('X-XSRF-TOKEN', 'csrf'));
     }
 
+    public function test_sanctum_refuses_a_login_url_on_another_origin_before_fetching(): void
+    {
+        Http::fake([
+            'https://app.example.com/sanctum/csrf-cookie' => Http::response('', 204, ['Set-Cookie' => ['XSRF-TOKEN=csrf; Path=/', 'laravel_session=abc; Path=/']]),
+            'https://app.example.com/api/login' => Http::response(['message' => 'ok'], 200, ['Set-Cookie' => 'laravel_session=regenerated; Path=/']),
+            'https://app.example.com/dashboard' => Http::response(self::ACCESSIBLE, 200),
+            '*' => Http::response('Not Found', 404),
+        ]);
+        $options = ['url' => 'https://app.example.com/dashboard', '--sanctum' => true, '--email' => 'user@example.com', '--password' => 'secret'];
+
+        [$exitCode, $output] = $this->check([...$options, '--login-url' => 'https://auth.example.com/api/login']);
+
+        $this->assertSame(2, $exitCode);
+        $this->assertStringContainsString('--sanctum logs in on the origin of the checked page', $output->stderr());
+        Http::assertNothingSent();
+
+        [$sameOrigin] = $this->check([...$options, '--login-url' => 'HTTPS://app.example.com:443/api/login']);
+
+        $this->assertSame(0, $sameOrigin, 'an absolute login URL on the same origin is fine');
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://app.example.com/api/login');
+    }
+
     public function test_token_api_key_and_session_options(): void
     {
         $this->fakeSite();
