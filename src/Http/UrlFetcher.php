@@ -35,13 +35,12 @@ class UrlFetcher
         $options ??= new FetchOptions;
         $client = $options->client ?? new AuthenticatedHttpClient;
         $requested = $this->absolute($url);
-        $userInfo = (new Uri($requested))->getUserInfo();
+        $basic = self::basicAuthorization($requested);
         $requested = self::redact($requested);
         $current = $requested;
 
-        if ($userInfo !== '' && ! $this->hasAuthorization($client)) {
-            [$user, $password] = array_pad(explode(':', $userInfo, 2), 2, '');
-            $client->withHeaders(['Authorization' => 'Basic '.base64_encode(rawurldecode($user).':'.rawurldecode($password))], $requested);
+        if ($basic !== null && ! $this->hasAuthorization($client)) {
+            $client->withHeaders(['Authorization' => $basic], $requested);
         }
 
         // Credentials given without an origin belong to the page asked for, never to a host it redirects to
@@ -120,6 +119,24 @@ class UrlFetcher
     public static function redact(string $url): string
     {
         return (string) preg_replace('~^((?:[a-z][a-z0-9+.\-]*:)?//)[^/?#]*@~i', '$1', $url);
+    }
+
+    /** The `Authorization: Basic …` value for the credentials in $url (`https://user:pass@host/`), null when it has none. */
+    public static function basicAuthorization(string $url): ?string
+    {
+        try {
+            $userInfo = (new Uri($url))->getUserInfo();
+        } catch (Throwable) {
+            return null;
+        }
+
+        if ($userInfo === '') {
+            return null;
+        }
+
+        [$user, $password] = array_pad(explode(':', $userInfo, 2), 2, '');
+
+        return 'Basic '.base64_encode(rawurldecode($user).':'.rawurldecode($password));
     }
 
     private function hasAuthorization(AuthenticatedHttpClient $client): bool

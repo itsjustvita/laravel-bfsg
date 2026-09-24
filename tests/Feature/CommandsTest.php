@@ -593,6 +593,81 @@ class CommandsTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->url() === 'https://other.example.net/page' && ! $request->hasHeader('Authorization') && ! $request->hasHeader('X-API-Key'));
     }
 
+    public function test_url_credentials_are_sent_with_the_login_to_a_basic_auth_protected_site(): void
+    {
+        $basic = 'Basic '.base64_encode('deploy:s3cret');
+        Http::fake(function (Request $request) use ($basic) {
+            if (! $request->hasHeader('Authorization', $basic)) {
+                return Http::response('Unauthorized', 401, ['WWW-Authenticate' => 'Basic realm="staging"']);
+            }
+
+            return match ($request->method().' '.$request->url()) {
+                'GET https://staging.example.com/login' => Http::response('<form method="post"><input type="hidden" name="_token" value="t"><input type="password" name="password"></form>', 200, ['Set-Cookie' => 'laravel_session=guest; Path=/']),
+                'POST https://staging.example.com/login' => Http::response('', 302, ['Location' => 'https://staging.example.com/dashboard', 'Set-Cookie' => 'laravel_session=user; Path=/']),
+                'GET https://staging.example.com/dashboard' => Http::response(self::ACCESSIBLE, 200),
+                default => Http::response('Not Found', 404),
+            };
+        });
+
+        [$form, $formOutput] = $this->check(['url' => 'https://deploy:s3cret@staging.example.com/dashboard', '--auth' => true, '--email' => 'user@example.com', '--password' => 'secret']);
+        [$apiKey, $apiKeyOutput] = $this->check(['url' => 'https://deploy:s3cret@staging.example.com/dashboard', '--api-key' => 'k-1']);
+
+        $this->assertSame(0, $form, $formOutput->stderr());
+        $this->assertSame(0, $apiKey, $apiKeyOutput->stderr());
+        Http::assertSent(fn (Request $request) => $request->method() === 'POST' && $request->url() === 'https://staging.example.com/login' && $request->hasHeader('Authorization', $basic) && $request['_token'] === 't');
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://staging.example.com/dashboard' && $request->hasHeader('Authorization', $basic) && $request->hasHeader('X-API-Key', 'k-1'));
+        Http::assertNotSent(fn (Request $request) => ! $request->hasHeader('Authorization', $basic));
+        $this->assertStringNotContainsString('s3cret', $formOutput->stdout().$formOutput->stderr().$apiKeyOutput->stdout().$apiKeyOutput->stderr());
+    }
+
+    /** @return array<string, array{0: array<string, mixed>}> */
+    public static function authorizationOptions(): array
+    {
+        return [
+            '--bearer' => [['--bearer' => 'b-1']],
+            '--jwt' => [['--jwt' => 'j-1']],
+            '--api-key-header=Authorization' => [['--api-key' => 'k-1', '--api-key-header' => 'authorization']],
+        ];
+    }
+
+    #[DataProvider('authorizationOptions')]
+    public function test_url_credentials_with_another_authorization_header_exit_2(array $options): void
+    {
+        $this->fakeSite();
+
+        [$exitCode, $output] = $this->check(['url' => 'http://deploy:s3cret@example.com/page', ...$options]);
+
+        $this->assertSame(2, $exitCode);
+        $this->assertStringContainsString('both use the Authorization header', $output->stderr());
+        $this->assertStringNotContainsString('s3cret', $output->stderr());
+        $this->assertSame('', $output->stdout());
+        Http::assertNothingSent();
+    }
+
+    public function test_a_bearer_token_from_the_authentication_cannot_replace_url_credentials(): void
+    {
+        Http::fake([
+            'https://staging.example.com/login' => Http::response(['token' => 'api-token'], 200),
+            '*' => Http::response(self::ACCESSIBLE, 200),
+        ]);
+
+        [$json, $jsonOutput] = $this->check(['url' => 'https://deploy:s3cret@staging.example.com/dashboard', '--auth' => true, '--json-auth' => true, '--email' => 'user@example.com', '--password' => 'secret']);
+
+        putenv('BFSG_AUTH_TOKEN=env-token');
+
+        try {
+            [$env, $envOutput] = $this->check(['url' => 'https://deploy:s3cret@staging.example.com/dashboard', '--auth' => true]);
+        } finally {
+            putenv('BFSG_AUTH_TOKEN');
+        }
+
+        $this->assertSame(2, $json);
+        $this->assertSame(2, $env);
+        $this->assertStringContainsString('bearer token', $jsonOutput->stderr());
+        $this->assertStringContainsString('bearer token', $envOutput->stderr());
+        Http::assertNotSent(fn (Request $request) => $request->url() === 'https://staging.example.com/dashboard');
+    }
+
     public function test_url_credentials_become_a_basic_header_for_that_origin_and_appear_nowhere_else(): void
     {
         Http::fake([

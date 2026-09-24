@@ -152,6 +152,16 @@ php artisan bfsg:history >"$WORK/history.out" 2>&1 || { cat "$WORK/history.out";
 grep -E 'live/broken +\| +[0-9]+ +\| +[0-9]+% ' "$WORK/history.out" >/dev/null || { cat "$WORK/history.out"; fail "bfsg:history does not list the saved report with a whole-number score"; }
 pass "bfsg:check --save and bfsg:history"
 
+# 6g. Credentials in the URL (HTTP basic auth) go with the form login too; a second Authorization header is an error
+BASIC="http://deploy:s3cret@127.0.0.1:$PORT"
+check basic-login 0 "$BASIC/live/basic/dashboard" --auth --email=live@example.com --password=secret --login-url=/live/basic/login
+grep -q "Checking $BASE/live/basic/dashboard" "$WORK/basic-login.err" || { cat "$WORK/basic-login.err"; fail "status line of the basic-auth check"; }
+if grep -q 's3cret' "$WORK/basic-login.out" "$WORK/basic-login.err"; then fail "the URL password appears in the output"; fi
+check basic-missing 2 "$BASE/live/basic/dashboard" --auth --email=live@example.com --password=secret --login-url=/live/basic/login
+check basic-bearer 2 "$BASIC/live/basic/dashboard" --bearer=token
+grep -q 'both use the Authorization header' "$WORK/basic-bearer.err" || { cat "$WORK/basic-bearer.err"; fail "URL credentials with --bearer were not rejected with the reason"; }
+pass "bfsg:check with URL credentials: form login behind basic auth, missing credentials exit 2, --bearer conflict exit 2"
+
 # 6e. HTML report: written to a file, localized, current version, and it passes the package's own analyzers
 check html-report 1 /live/broken --format=html
 REPORT="$(grep -o '/[^ ]*report_[0-9a-f_-]*\.html' "$WORK/html-report.err" | head -1)"

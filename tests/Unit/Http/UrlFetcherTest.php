@@ -220,6 +220,14 @@ class UrlFetcherTest extends TestCase
         $this->assertCount(1, $page->warnings);
     }
 
+    public function test_basic_authorization_decodes_the_credentials_of_a_url(): void
+    {
+        $this->assertSame('Basic '.base64_encode('deploy:s3cr@t'), UrlFetcher::basicAuthorization('https://deploy:s3cr%40t@staging.example.com/page'));
+        $this->assertSame('Basic '.base64_encode('token:'), UrlFetcher::basicAuthorization('https://token@staging.example.com/'));
+        $this->assertNull(UrlFetcher::basicAuthorization('https://staging.example.com/page?user=a@b'));
+        $this->assertNull(UrlFetcher::basicAuthorization('http://'));
+    }
+
     public function test_credentials_are_not_sent_to_another_origin_on_redirects(): void
     {
         Http::fake([

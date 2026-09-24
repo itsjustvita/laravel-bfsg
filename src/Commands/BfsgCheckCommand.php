@@ -348,11 +348,21 @@ class BfsgCheckCommand extends Command
         return $user;
     }
 
-    /** A client carrying the requested authentication (tokens, cookies, or a login performed now). */
+    /**
+     * A client carrying the requested authentication (tokens, cookies, or a login performed now). Credentials in the URL
+     * become the Basic header of the page's origin before the login, so a login behind HTTP basic auth (a protected
+     * staging site) sends them too. There is only one Authorization header: an option that needs it as well is an error.
+     */
     private function authenticatedClient(string $url): AuthenticatedHttpClient
     {
         $client = new AuthenticatedHttpClient(verifySsl: $this->option('insecure') ? false : null);
         $origin = $this->origin($url);
+        $basic = UrlFetcher::basicAuthorization($url);
+
+        if ($basic !== null) {
+            $this->assertNoAuthorizationOption();
+            $client->withHeaders(['Authorization' => $basic], $origin);
+        }
 
         if ($token = $this->option('jwt')) {
             $client->withJwt($token, $origin);
@@ -379,7 +389,25 @@ class BfsgCheckCommand extends Command
             $this->login($client, $origin);
         }
 
+        if ($basic !== null && ($client->headers()['Authorization'] ?? null) !== $basic) {
+            throw new InvalidArgumentException('The authentication produced a bearer token (the answer of a JSON or Sanctum login, or BFSG_AUTH_TOKEN), which would replace the credentials in the URL: both use the Authorization header. Use a form login (--auth) or --session with credentials in the URL.');
+        }
+
         return $client;
+    }
+
+    /** Credentials in the URL are the Authorization header; --bearer, --jwt and --api-key-header=Authorization would be too. */
+    private function assertNoAuthorizationOption(): void
+    {
+        foreach (['bearer', 'jwt'] as $option) {
+            if ($this->option($option)) {
+                throw new InvalidArgumentException("Credentials in the URL cannot be combined with --{$option}: both use the Authorization header.");
+            }
+        }
+
+        if ($this->option('api-key') && strcasecmp(trim((string) $this->option('api-key-header')), 'Authorization') === 0) {
+            throw new InvalidArgumentException('Credentials in the URL cannot be combined with --api-key-header=Authorization: both use the Authorization header.');
+        }
     }
 
     private function login(AuthenticatedHttpClient $client, string $origin): void
