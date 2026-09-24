@@ -92,7 +92,7 @@ class InputPurposeAnalyzer extends BaseAnalyzer
             return true;
         }
 
-        if (($tokens[0] ?? '') !== '' && str_starts_with($tokens[0], 'section-') && strlen($tokens[0]) > 8) {
+        if (($tokens[0] ?? '') !== '' && str_starts_with($tokens[0], 'section-') && strlen($tokens[0]) > strlen('section-')) {
             array_shift($tokens);
         }
 

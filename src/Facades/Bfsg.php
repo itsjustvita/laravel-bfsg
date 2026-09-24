@@ -11,6 +11,7 @@ use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
  * @method static \ItsJustVita\LaravelBfsg\Bfsg forget(string $key)
  * @method static \ItsJustVita\LaravelBfsg\Bfsg only(array $keys)
  * @method static \ItsJustVita\LaravelBfsg\Bfsg except(array $keys)
+ * @method static list<string> keys()
  * @method static array analyzers()
  * @method static AnalysisResult analyze(string $html, array $options = [])
  * @method static AnalysisResult analyzeDocument(HtmlDocument $document, array $options = [])

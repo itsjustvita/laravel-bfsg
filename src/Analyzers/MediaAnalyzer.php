@@ -109,6 +109,7 @@ class MediaAnalyzer extends BaseAnalyzer
         }
 
         return $video->parentNode !== null
+            // Substring match on purpose (spec A.10 `[class*=controls]`): player skins use "vjs-controls", "plyr__controls".
             && $this->query('./*[contains(@class, "controls") and not(self::video)]', $video->parentNode) !== [];
     }
 
