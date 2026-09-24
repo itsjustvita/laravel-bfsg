@@ -17,20 +17,21 @@ trait ToolHelpers
     /**
      * Fetch through UrlFetcher, TLS verified per `bfsg.mcp.verify_ssl`. With `bfsg.mcp.allowed_hosts` the list governs
      * every hop; without one (null or []), hosts that resolve to loopback, private, link-local or unspecified
-     * addresses are refused on every hop, except the host of app.url.
+     * addresses are refused on every hop, except URLs of this application (the origin of app.url: scheme, host and
+     * port, so another port or scheme on the same host is checked like any other URL).
      */
     protected function fetchPage(string $url): FetchedPage
     {
         $hosts = array_values(array_map('strval', (array) config('bfsg.mcp.allowed_hosts')));
+        $fetcher = app(UrlFetcher::class);
         $guard = null;
 
         if ($hosts === []) {
-            $appHost = (string) parse_url((string) config('app.url'), PHP_URL_HOST);
-            $network = app(PrivateNetworkGuard::class)->exempting($appHost === '' ? [] : [$appHost]);
-            $guard = fn (string $hop) => $network->check($hop);
+            $network = app(PrivateNetworkGuard::class);
+            $guard = fn (string $hop) => $fetcher->isSameApp($hop) ? null : $network->check($hop);
         }
 
-        return app(UrlFetcher::class)->fetch($url, new FetchOptions(
+        return $fetcher->fetch($url, new FetchOptions(
             client: new AuthenticatedHttpClient(verifySsl: filter_var(config('bfsg.mcp.verify_ssl', true), FILTER_VALIDATE_BOOL)),
             allowedHosts: $hosts === [] ? null : $hosts,
             hopGuard: $guard,

@@ -302,6 +302,18 @@ class McpToolsTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_only_the_origin_of_app_url_is_exempt_not_other_ports_or_schemes_of_its_host(): void
+    {
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+        config()->set('app.url', 'http://localhost');
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'http://localhost:6379/'])->assertHasErrors(['localhost resolves to 127.0.0.1']);
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://localhost:8443/'])->assertHasErrors(['localhost resolves to 127.0.0.1']);
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://localhost/'])->assertHasErrors(['localhost resolves to 127.0.0.1']);
+
+        Http::assertNothingSent();
+    }
+
     public function test_a_redirect_to_a_private_address_is_refused_without_an_allow_list(): void
     {
         Http::fake([

@@ -23,23 +23,14 @@ class PrivateNetworkGuard
     /** @var Closure(string): list<string> */
     private Closure $resolver;
 
-    /**
-     * @param  (Closure(string): list<string>)|null  $resolver  host => its IP addresses (default: DNS)
-     * @param  list<string>  $exemptHosts  hosts that are never refused (the host of app.url)
-     */
-    public function __construct(?Closure $resolver = null, private array $exemptHosts = [])
+    /** @param  (Closure(string): list<string>)|null  $resolver  host => its IP addresses (default: DNS) */
+    public function __construct(?Closure $resolver = null)
     {
         $this->resolver = $resolver ?? self::resolve(...);
     }
 
-    /** @param  list<string>  $hosts */
-    public function exempting(array $hosts): static
-    {
-        return new static($this->resolver, array_values(array_unique([...$this->exemptHosts, ...$hosts])));
-    }
-
     /**
-     * @return list<string> the vetted addresses of the URL's host (empty for an exempt host)
+     * @return list<string> the vetted addresses of the URL's host
      *
      * @throws FetchFailed when the URL's host is (or resolves to) a blocked address, is a malformed numeric address,
      *                     or does not resolve at all
@@ -48,8 +39,8 @@ class PrivateNetworkGuard
     {
         $host = self::normalize((string) parse_url($url, PHP_URL_HOST));
 
-        if ($host === '' || in_array($host, array_map(self::normalize(...), $this->exemptHosts), true)) {
-            return [];
+        if ($host === '') {
+            throw FetchFailed::invalidUrl($url);
         }
 
         if (filter_var($host, FILTER_VALIDATE_IP) !== false) {

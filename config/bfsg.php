@@ -99,7 +99,7 @@ return [
     | checked against the host of app.url). null or [] = any public host: the host of every hop is resolved (A and
     | AAAA records) and loopback (127.0.0.0/8, ::1), private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local
     | (169.254/16 incl. the cloud metadata address 169.254.169.254, fe80::/10) and unspecified (0.0.0.0/8, ::)
-    | addresses are refused, except the host of app.url (this application). TLS verification comes only from
+    | addresses are refused, except URLs of this application (origin of app.url: scheme, host and port). TLS comes only from
     | verify_ssl; MCP clients cannot switch it off.
     */
     'mcp' => [
