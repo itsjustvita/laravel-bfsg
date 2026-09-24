@@ -90,6 +90,7 @@ pass "bfsg_violations has key, fingerprint and context"
 php artisan db:table bfsg_reports --json >"$WORK/reports-table.json" 2>&1 || { cat "$WORK/reports-table.json"; fail "db:table bfsg_reports"; }
 grep -q '"url_hash"' "$WORK/reports-table.json" || { cat "$WORK/reports-table.json"; fail "bfsg_reports has no url_hash column"; }
 [ "$(php artisan migrate:status | grep -c 'widen_url_of_bfsg_reports')" = "1" ] || fail "the url migration is not listed exactly once"
+[ "$(php artisan migrate:status | grep -c 'upgrade_bfsg_tables')" = "1" ] || fail "the undated upgrade migration is not listed exactly once"
 pass "bfsg_reports has url_hash"
 
 # 4. Web server

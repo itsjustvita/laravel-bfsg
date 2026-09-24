@@ -268,9 +268,9 @@ class ReportRepositoryTest extends TestCase
         $this->assertTrue($schema->hasColumn('bfsg_reports', 'url_hash'));
         $this->assertSame('text', $schema->getColumnType('bfsg_reports', 'url'));
         $this->assertSame(
-            ['2026_09_18_000000_add_context_and_fingerprint_to_bfsg_violations', '2026_09_24_000000_widen_url_of_bfsg_reports', 'create_bfsg_tables'],
+            ['2026_09_18_000000_add_context_and_fingerprint_to_bfsg_violations', '2026_09_24_000000_widen_url_of_bfsg_reports', 'create_bfsg_tables', 'upgrade_bfsg_tables'],
             DB::connection('bfsg_fresh')->table('migrations')->orderBy('id')->pluck('migration')->all(),
-            'the dated upgrades sort first and are no-ops on a fresh install',
+            'the dated upgrades sort first, and they and the undated safety net are no-ops on a fresh install',
         );
 
         $report = (new ReportRepository)->store($this->sampleResult());
@@ -329,5 +329,53 @@ class ReportRepositoryTest extends TestCase
         $this->assertFalse($schema->hasColumn('bfsg_reports', 'url_hash'));
         $this->assertSame('https://v2.example.com/', $db->table('bfsg_reports')->value('url'));
         $this->assertSame('v2 message', $db->table('bfsg_violations')->value('message'));
+    }
+
+    public function test_a_fresh_database_gets_the_v3_schema_even_when_the_app_published_the_v2_migrations(): void
+    {
+        $this->migrateOn('bfsg_published');
+        // The app path comes after the package path, so its 2.x copy of create_bfsg_tables shadows the package copy
+        $paths = [realpath(__DIR__.'/../../database/migrations'), realpath(__DIR__.'/../Fixtures/published-v2-migrations')];
+
+        $this->artisan('migrate', ['--database' => 'bfsg_published', '--path' => $paths, '--realpath' => true])->assertSuccessful();
+
+        $schema = Schema::connection('bfsg_published');
+        $this->assertSame(
+            ['2026_09_18_000000_add_context_and_fingerprint_to_bfsg_violations', '2026_09_24_000000_widen_url_of_bfsg_reports', 'create_bfsg_tables', 'upgrade_bfsg_tables'],
+            DB::connection('bfsg_published')->table('migrations')->orderBy('id')->pluck('migration')->all(),
+            'the undated upgrade runs after the published 2.x create_bfsg_tables',
+        );
+        $this->assertTrue($schema->hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $this->assertSame('text', $schema->getColumnType('bfsg_reports', 'url'));
+        $this->assertFalse($schema->hasIndex('bfsg_reports', ['url']));
+        $this->assertTrue($schema->hasIndex('bfsg_reports', ['url_hash']));
+        $this->assertTrue((new ReportRepository)->isMigrated());
+
+        $report = (new ReportRepository)->store($this->sampleResult());
+        $this->assertSame([$report->id], BfsgReport::forUrl('https://example.com/')->pluck('id')->all());
+
+        $this->artisan('migrate:rollback', ['--database' => 'bfsg_published', '--path' => $paths, '--realpath' => true])->assertSuccessful();
+        $this->assertFalse($schema->hasTable('bfsg_reports'));
+    }
+
+    public function test_the_undated_upgrade_migration_is_a_no_op_on_the_v3_schema_and_fills_in_what_is_missing(): void
+    {
+        $migration = require __DIR__.'/../../database/migrations/upgrade_bfsg_tables.php';
+
+        $migration->up(); // fresh v3 install
+        $this->assertTrue(Schema::hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $this->assertTrue(Schema::hasColumn('bfsg_reports', 'url_hash'));
+
+        // A partial schema: one of the violation columns is missing, and a row still lacks its hash
+        Schema::table('bfsg_violations', fn (Blueprint $table) => $table->dropColumn('context'));
+        DB::table('bfsg_reports')->insert(['url' => 'https://example.com/a', 'created_at' => now(), 'updated_at' => now()]);
+
+        $migration->up();
+
+        $this->assertTrue(Schema::hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $this->assertSame(1, BfsgReport::forUrl('https://example.com/a')->count());
+
+        $migration->down(); // the create and dated migrations own the schema
+        $this->assertTrue(Schema::hasColumn('bfsg_violations', 'fingerprint'));
     }
 }
