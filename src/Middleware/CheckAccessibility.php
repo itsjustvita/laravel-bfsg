@@ -32,8 +32,6 @@ class CheckAccessibility
 
         try {
             if ($this->shouldCheck($request, $response)) {
-                $request->attributes->set(self::PENDING, true);
-
                 if (config('app.debug')) {
                     $result = $this->analyze($request, $response);
                     $request->attributes->set(self::RESULT, $result);
@@ -42,6 +40,9 @@ class CheckAccessibility
                         $response->headers->set('X-BFSG-Violations', (string) $result->count());
                     }
                 }
+
+                // Only now: a debug analysis that failed was logged above and must not run again in terminate()
+                $request->attributes->set(self::PENDING, true);
             }
         } catch (Throwable $e) {
             $this->failed($request, $e);

@@ -221,6 +221,16 @@ class MiddlewareTest extends TestCase
         $this->assertSame($response, $this->through(Request::create('/page'), $response));
     }
 
+    public function test_a_failed_debug_analysis_is_not_run_again_in_terminate(): void
+    {
+        config()->set('app.debug', true);
+        Bfsg::shouldReceive('analyze')->once()->andThrow(new RuntimeException('analyzer exploded'));
+        Log::shouldReceive('error')->once()->withArgs(fn ($message) => str_contains($message, 'BFSG'));
+
+        $response = $this->html();
+        $this->assertSame($response, $this->through(Request::create('/page'), $response));
+    }
+
     public function test_an_exploding_analyzer_never_breaks_the_response(): void
     {
         config()->set('app.debug', true);
