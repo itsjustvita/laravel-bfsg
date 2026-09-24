@@ -478,4 +478,27 @@ class UrlFetcherTest extends TestCase
         $this->assertStringContainsString('GUEST', $this->fetcher()->fetch('/who')->html);
         $this->assertSame('http://localhost/x', url('/x'));
     }
+
+    public function test_a_locale_set_by_the_fetched_page_does_not_leak_into_the_caller(): void
+    {
+        $this->app['router']->get('/german', function () {
+            app()->setLocale('de');
+
+            return response('<html><body>'.app()->getLocale().'</body></html>');
+        });
+        $this->app['router']->get('/german-broken', function () {
+            app()->setLocale('de');
+
+            throw new \RuntimeException('boom');
+        });
+        app()->setLocale('en');
+
+        $this->assertStringContainsString('<body>de</body>', $this->fetcher()->fetch('/german')->html);
+        $this->assertSame('en', app()->getLocale());
+        $this->assertSame('en', app('translator')->getLocale());
+
+        $this->failure('/german-broken');
+        $this->assertSame('en', app()->getLocale());
+        $this->assertSame('en', app('translator')->getLocale());
+    }
 }

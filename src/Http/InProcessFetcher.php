@@ -21,8 +21,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  *
  * Every fetch is isolated: it runs with no resolved guards and a fresh session store, and afterwards the caller's
  * state is put back exactly: its resolved guards (with their users), its session store, the session manager's
- * drivers, its default guard and its request instance. No user, session data or request leaks from one fetch into
- * the next, and the calling process (a long-lived MCP server, a multi-page run, or a web request) keeps its own.
+ * drivers, its default guard, its request instance and its locale. No user, session data, request or locale leaks
+ * from one fetch into the next, and the calling process (a long-lived MCP server, a multi-page run, or a web request) keeps its own.
  */
 class InProcessFetcher
 {
@@ -47,6 +47,7 @@ class InProcessFetcher
         $auth = $this->app->make('auth');
         $previousRequest = $this->app->bound('request') ? $this->app->make('request') : null;
         $previousGuard = $auth->getDefaultDriver();
+        $previousLocale = $this->app->getLocale();
         $previous = $this->snapshot();
         $rebindings = $this->requestRebindings();
         $this->reset();
@@ -73,6 +74,10 @@ class InProcessFetcher
             $auth->shouldUse($previousGuard);
             $this->restore($previous);
             $this->trimRequestRebindings($rebindings);
+
+            if ($this->app->getLocale() !== $previousLocale) {
+                $this->app->setLocale($previousLocale);
+            }
 
             if ($previousRequest !== null) {
                 $this->app->instance('request', $previousRequest);
