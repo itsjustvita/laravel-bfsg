@@ -15,6 +15,10 @@ use Throwable;
  * once a hop has gone over HTTP, later hops into this application go over HTTP too, without `actingAs`. Non-2xx
  * and non-HTML answers and every other error are FetchFailed, and same-origin stylesheets are inlined so the
  * contrast analyzer sees them.
+ *
+ * Credentials in the URL (`https://user:pass@host/`) are used for the request only: they become an
+ * `Authorization: Basic` header bound to that URL's origin (unless the client already carries an Authorization
+ * header) and are removed from every URL the fetch hands back or puts into an exception message.
  */
 class UrlFetcher
 {
@@ -31,7 +35,15 @@ class UrlFetcher
         $options ??= new FetchOptions;
         $client = $options->client ?? new AuthenticatedHttpClient;
         $requested = $this->absolute($url);
+        $userInfo = (new Uri($requested))->getUserInfo();
+        $requested = self::redact($requested);
         $current = $requested;
+
+        if ($userInfo !== '' && ! $this->hasAuthorization($client)) {
+            [$user, $password] = array_pad(explode(':', $userInfo, 2), 2, '');
+            $client->withHeaders(['Authorization' => 'Basic '.base64_encode(rawurldecode($user).':'.rawurldecode($password))], $requested);
+        }
+
         // Credentials given without an origin belong to the page asked for, never to a host it redirects to
         $client->bindUnboundHeadersTo($requested);
         $redirects = 0;
@@ -57,7 +69,7 @@ class UrlFetcher
                 throw FetchFailed::tooManyRedirects($requested);
             }
 
-            $current = $this->validated($this->resolve($current, $response['location']));
+            $current = self::redact($this->validated($this->resolve($current, $response['location'])));
         }
 
         if ($response['status'] < 200 || $response['status'] >= 300) {
@@ -102,6 +114,17 @@ class UrlFetcher
         }
 
         return $this->validated($url);
+    }
+
+    /** $url without the user information of its authority (`https://user:pass@host/` becomes `https://host/`). */
+    public static function redact(string $url): string
+    {
+        return (string) preg_replace('~^((?:[a-z][a-z0-9+.\-]*:)?//)[^/?#]*@~i', '$1', $url);
+    }
+
+    private function hasAuthorization(AuthenticatedHttpClient $client): bool
+    {
+        return in_array('authorization', array_map('strtolower', array_keys($client->headers())), true);
     }
 
     /** Same application: scheme, host and (effective) port equal those of `app.url`. */

@@ -562,4 +562,49 @@ class CommandsTest extends TestCase
         Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/moved' && $request->hasHeader('Authorization', 'Bearer b-1'));
         Http::assertSent(fn (Request $request) => $request->url() === 'https://other.example.net/page' && ! $request->hasHeader('Authorization') && ! $request->hasHeader('X-API-Key'));
     }
+
+    public function test_url_credentials_become_a_basic_header_for_that_origin_and_appear_nowhere_else(): void
+    {
+        Http::fake([
+            'https://staging.example.com/moved' => Http::response('', 302, ['Location' => 'https://staging.example.com/page']),
+            'https://staging.example.com/page' => Http::response(self::ERRORS, 200, ['Content-Type' => 'text/html']),
+            'https://staging.example.com/gone' => Http::response('', 302, ['Location' => 'https://other.example.net/missing']),
+            'https://other.example.net/missing' => Http::response('', 404),
+        ]);
+        $path = sys_get_temp_dir().'/bfsg-userinfo-'.uniqid().'.md';
+
+        try {
+            [$json, $jsonOutput] = $this->check(['url' => 'https://deploy:s3cr%40t@staging.example.com/moved', '--format' => 'json', '--save' => true]);
+            [$markdown, $markdownOutput] = $this->check(['url' => 'https://deploy:s3cr%40t@staging.example.com/page', '--format' => 'markdown', '--output' => $path]);
+            [$failed, $failedOutput] = $this->check(['url' => 'https://deploy:s3cr%40t@staging.example.com/gone']);
+            [$invalid, $invalidOutput] = $this->check(['url' => 'ftp://deploy:s3cr%40t@staging.example.com/']);
+
+            $this->assertSame(1, $json, $jsonOutput->stderr());
+            $this->assertSame(1, $markdown, $markdownOutput->stderr());
+            $this->assertSame(2, $failed);
+            $this->assertSame(2, $invalid);
+            $this->assertSame('https://staging.example.com/page', json_decode($jsonOutput->stdout(), true)['url']);
+            $this->assertStringContainsString('Checking https://staging.example.com/moved', $jsonOutput->stderr());
+            $this->assertStringContainsString('HTTP 404', $failedOutput->stderr());
+
+            $everything = implode("\n", [
+                $jsonOutput->stdout(), $jsonOutput->stderr(), $markdownOutput->stdout(), $markdownOutput->stderr(),
+                $failedOutput->stdout(), $failedOutput->stderr(), $invalidOutput->stdout(), $invalidOutput->stderr(),
+                (string) file_get_contents($path), json_encode(DB::table('bfsg_reports')->get()), json_encode(DB::table('bfsg_violations')->get()),
+            ]);
+
+            foreach (['s3cr', 'deploy:', 'deploy@'] as $secret) {
+                $this->assertStringNotContainsString($secret, $everything);
+            }
+
+            $this->assertSame('https://staging.example.com/page', BfsgReport::query()->sole()->url);
+            $basic = 'Basic '.base64_encode('deploy:s3cr@t');
+            Http::assertSent(fn (Request $request) => $request->url() === 'https://staging.example.com/moved' && $request->hasHeader('Authorization', $basic));
+            Http::assertSent(fn (Request $request) => $request->url() === 'https://staging.example.com/page' && $request->hasHeader('Authorization', $basic));
+            Http::assertSent(fn (Request $request) => $request->url() === 'https://other.example.net/missing' && ! $request->hasHeader('Authorization'));
+            Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 's3cr'));
+        } finally {
+            @unlink($path);
+        }
+    }
 }

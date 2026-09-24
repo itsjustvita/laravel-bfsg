@@ -4,12 +4,19 @@ namespace ItsJustVita\LaravelBfsg\Http;
 
 use RuntimeException;
 
-/** A page could not be fetched as HTML; `status` is the final HTTP status when there was one. */
+/**
+ * A page could not be fetched as HTML; `status` is the final HTTP status when there was one. Credentials in the URL
+ * (`user:pass@`) are removed from `url` and the message.
+ */
 final class FetchFailed extends RuntimeException
 {
-    public function __construct(string $message, public readonly string $url, public readonly ?int $status = null)
+    public readonly string $url;
+
+    public function __construct(string $message, string $url, public readonly ?int $status = null)
     {
-        parent::__construct($message);
+        $this->url = UrlFetcher::redact($url);
+
+        parent::__construct($url === $this->url ? $message : str_replace($url, $this->url, $message));
     }
 
     public static function invalidUrl(string $url): self

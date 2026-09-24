@@ -248,6 +248,23 @@ class McpToolsTest extends TestCase
         BfsgMcpServer::tool(GenerateReport::class, ['url' => '/mcp-report', 'format' => 'xml'])->assertHasErrors(['Invalid format [xml]']);
     }
 
+    public function test_url_credentials_are_sent_as_basic_auth_and_kept_out_of_reports_errors_and_the_database(): void
+    {
+        Http::fake([
+            'https://docs.example.com/missing' => Http::response('', 404),
+            '*' => Http::response(self::BROKEN, 200),
+        ]);
+
+        $payload = BfsgMcpServer::tool(GenerateReport::class, ['url' => 'https://deploy:s3cret@docs.example.com/page', 'save' => true])->assertOk()->payload();
+        $error = BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://deploy:s3cret@docs.example.com/missing']);
+
+        $error->assertHasErrors(['Fetching https://docs.example.com/missing failed with HTTP 404']);
+        $this->assertSame('https://docs.example.com/page', json_decode($payload['report'], true)['url']);
+        $this->assertSame('https://docs.example.com/page', BfsgReport::query()->findOrFail($payload['report_id'])->url);
+        $this->assertStringNotContainsString('s3cret', json_encode($payload).$error->text());
+        Http::assertSent(fn (HttpRequest $request) => $request->url() === 'https://docs.example.com/page' && $request->hasHeader('Authorization', 'Basic '.base64_encode('deploy:s3cret')));
+    }
+
     /** @return array<string, array{0: string}> */
     public static function refusedWithoutAllowList(): array
     {

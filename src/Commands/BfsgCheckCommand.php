@@ -119,7 +119,9 @@ class BfsgCheckCommand extends Command
             }
 
             $url = $fetcher->absolute($this->argument('url') ?? '/');
-            $this->status($this->trans('cli.checking', ['url' => $url]));
+            // Credentials in the URL are for the request only (UrlFetcher turns them into a Basic header)
+            $userInfo = (string) parse_url($url, PHP_URL_USER).(parse_url($url, PHP_URL_PASS) === null ? '' : ':'.parse_url($url, PHP_URL_PASS));
+            $this->status($this->trans('cli.checking', ['url' => UrlFetcher::redact($url)]));
             [$html, $url] = $this->option('browser') ? $this->render($browser, $url) : $this->fetch($fetcher, $url);
 
             $result = $registry->analyze($html, ['url' => $url, 'locale' => $this->locale, 'fragment' => false]);
@@ -137,7 +139,8 @@ class BfsgCheckCommand extends Command
 
             return $this->thresholdExceeded($result, $report, $failOn, $minScore) ? self::FAILURE : self::SUCCESS;
         } catch (Throwable $e) {
-            $this->stderr()->writeln('<error>'.OutputFormatter::escape($e->getMessage()).'</error>');
+            $message = ($userInfo ?? '') === '' ? $e->getMessage() : str_replace($userInfo.'@', '', $e->getMessage());
+            $this->stderr()->writeln('<error>'.OutputFormatter::escape($message).'</error>');
 
             return self::OPERATIONAL_ERROR;
         }
@@ -281,7 +284,7 @@ class BfsgCheckCommand extends Command
         }
 
         if ($page->landedOnLogin && ! $this->option('allow-login-page')) {
-            throw new InvalidArgumentException("{$url} redirected to the login page {$page->finalUrl}. Authenticate (--as, --auth, --bearer, --session) or pass --allow-login-page to check the login page.");
+            throw new InvalidArgumentException(UrlFetcher::redact($url)." redirected to the login page {$page->finalUrl}. Authenticate (--as, --auth, --bearer, --session) or pass --allow-login-page to check the login page.");
         }
 
         return [$page->html, $page->finalUrl];
@@ -297,14 +300,14 @@ class BfsgCheckCommand extends Command
             throw new InvalidArgumentException('--headless must be true or false and --timeout a positive number of milliseconds.');
         }
 
-        $this->status($this->trans('cli.rendering', ['url' => $url, 'engine' => $this->option('engine')]));
+        $this->status($this->trans('cli.rendering', ['url' => UrlFetcher::redact($url), 'engine' => $this->option('engine')]));
 
         return [$browser->render($url, [
             'headless' => $headless,
             'timeout' => (int) $timeout,
             'waitFor' => (string) $this->option('wait-for'),
             'engine' => (string) $this->option('engine'),
-        ]), $url];
+        ]), UrlFetcher::redact($url)];
     }
 
     private function actingAs(UrlFetcher $fetcher, string $url): ?Authenticatable
