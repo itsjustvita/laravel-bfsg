@@ -100,8 +100,9 @@ return [
     | AAAA records; numeric forms like 0x7f000001 or 127.1 are parsed, not resolved) and every non-public address
     | is refused: loopback, private, link-local (incl. the cloud metadata address 169.254.169.254), CGNAT
     | 100.64/10, reserved, documentation and benchmarking ranges, unspecified, IPv6 unique/site-local, and IPv6
-    | addresses embedding one of these (IPv4-mapped/-compatible, NAT64 64:ff9b::/96, 6to4 2002::/16). Hosts that
-    | do not resolve are refused. URLs of this application (the origin of app.url: scheme, host and port) are
+    | addresses embedding one of these (IPv4-mapped/-compatible, NAT64 64:ff9b::/96, 6to4 2002::/16) and local-use
+    | NAT64 64:ff9b:1::/48. Hosts that do not resolve, and names that are not plain ASCII (letters, digits, dots,
+    | hyphens; give IDNs in punycode), are refused. URLs of this application (the origin of app.url: scheme, host and port) are
     | exempt. Each request (redirect hops and stylesheets included) is pinned to the addresses that were checked
     | (CURLOPT_RESOLVE), so a DNS answer that changes after the check (rebinding) is never connected to; this needs
     | the curl extension, and without it such fetches fail. TLS verification comes only from verify_ssl; MCP
