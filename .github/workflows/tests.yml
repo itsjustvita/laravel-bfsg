@@ -60,6 +60,10 @@ jobs:
   live:
     runs-on: ubuntu-latest
     name: Live smoke test (fresh Laravel app, PHP 8.4)
+    env:
+      # Pinned: a new Playwright release (new browser build, changed system packages) must not turn this job red.
+      # Bump it deliberately, together with the cache key below.
+      PLAYWRIGHT_VERSION: 1.60.0
     steps:
       - uses: actions/checkout@v4
       - name: Setup PHP
@@ -72,10 +76,15 @@ jobs:
         run: composer create-project laravel/laravel "$RUNNER_TEMP/live-app" --prefer-dist --no-interaction
       - name: Install the package and the live fixtures
         run: tests/Live/setup.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/live-app"
+      - name: Cache the Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ms-playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}-chromium
       - name: Install Playwright (Chromium) into the app
         working-directory: ${{ runner.temp }}/live-app
         run: |
-          npm install --no-save --no-audit --no-fund playwright@1
+          npm install --no-save --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION"
           npx playwright install --with-deps chromium
       - name: Run the live smoke test
         env:

@@ -37,6 +37,8 @@ tests/Live/setup.sh "$PWD" /tmp/bfsg-live-app
 tests/Live/smoke.sh /tmp/bfsg-live-app
 ```
 
+For the browser step, install the Playwright version CI pins (`PLAYWRIGHT_VERSION` in `.github/workflows/tests.yml`) into the application first: `npm install --no-save playwright@1.60.0 && npx playwright install chromium` in `/tmp/bfsg-live-app`, then run the smoke test with `BFSG_LIVE_BROWSER=required`.
+
 CI runs PHPUnit for PHP 8.2 to 8.4 with Laravel 12 and 13, Pint, and the live smoke test on every push and pull request.
 
 ## Pull requests
