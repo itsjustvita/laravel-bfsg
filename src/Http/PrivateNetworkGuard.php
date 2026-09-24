@@ -10,7 +10,8 @@ use Closure;
  * resolved (A records via gethostbynamel(), which also covers /etc/hosts, and AAAA records via dns_get_record()) and
  * refused when any address is blocked. Numeric hosts in the forms libcurl accepts (hex, octal, decimal, short:
  * 0x7f000001, 0177.0.0.1, 2130706433, 127.1) are parsed like inet_aton() and classified; digits-and-dots hosts that
- * are no valid address are refused. A host that does not resolve at all is refused too (fail closed). check()
+ * are no valid address are refused, and so is every other host that is not made of ASCII letters, digits, dots and
+ * hyphens (IDNs must be given in punycode). A host that does not resolve at all is refused too (fail closed). check()
  * returns the vetted addresses; UrlFetcher pins the request to them (CURLOPT_RESOLVE) against DNS rebinding.
  */
 class PrivateNetworkGuard
@@ -18,8 +19,11 @@ class PrivateNetworkGuard
     /** IPv4 ranges on top of FILTER_FLAG_GLOBAL_RANGE: this network, private, loopback, link-local, CGNAT, reserved. */
     private const BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '198.18.0.0/15', '240.0.0.0/4'];
 
-    /** IPv6 ranges on top of FILTER_FLAG_GLOBAL_RANGE: unspecified, loopback, unique local, link-local, site-local. */
-    private const BLOCKED_V6 = ['::/128', '::1/128', 'fc00::/7', 'fe80::/10', 'fec0::/10'];
+    /**
+     * IPv6 ranges on top of FILTER_FLAG_GLOBAL_RANGE: unspecified, loopback, local-use NAT64 (RFC 8215), unique local,
+     * link-local, site-local.
+     */
+    private const BLOCKED_V6 = ['::/128', '::1/128', '64:ff9b:1::/48', 'fc00::/7', 'fe80::/10', 'fec0::/10'];
 
     /** @var Closure(string): list<string> */
     private Closure $resolver;
@@ -34,7 +38,7 @@ class PrivateNetworkGuard
      * @return list<string> the vetted addresses of the URL's host
      *
      * @throws FetchFailed when the URL's host is (or resolves to) a blocked address, is a malformed numeric address,
-     *                     or does not resolve at all
+     *                     is not a plain ASCII name, or does not resolve at all
      */
     public function check(string $url): array
     {
@@ -46,6 +50,10 @@ class PrivateNetworkGuard
 
         if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
             $addresses = [$host];
+        } elseif (preg_match('/^[a-z0-9.-]+$/i', $host) !== 1) {
+            // Non-ASCII or percent-encoded names: Guzzle 7 hands them to curl unconverted, so the CURLOPT_RESOLVE pin
+            // would not match the name curl resolves and DNS rebinding could slip past the check
+            throw FetchFailed::unsupportedHost($url, $host);
         } elseif (self::looksNumeric($host)) {
             // 0x7f000001, 0177.1, 2130706433, 127.1: libcurl connects to these as IPv4 addresses without a lookup
             $address = self::parseNumericHost($host) ?? throw FetchFailed::malformedAddress($url, $host);

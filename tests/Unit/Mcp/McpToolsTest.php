@@ -377,6 +377,29 @@ class McpToolsTest extends TestCase
         }
     }
 
+    public function test_hosts_that_are_neither_ip_literals_nor_plain_ascii_names_are_refused(): void
+    {
+        // Guzzle 7 does not convert non-ASCII or percent-encoded names before CURLOPT_RESOLVE, so the pin would miss them
+        $guard = new PrivateNetworkGuard(fn () => $this->fail('such hosts must not be resolved'));
+
+        foreach (['http://bücher.example/', 'http://exa'."\u{200B}".'mple.com/', 'http://ex%61mple.com/', 'http://exa_mple.com/'] as $url) {
+            try {
+                $guard->check($url);
+                $this->fail("{$url} was not refused");
+            } catch (FetchFailed $e) {
+                $this->assertStringContainsString('not a plain ASCII host name', $e->getMessage());
+            }
+        }
+
+        $this->assertSame(['93.184.215.14'], (new PrivateNetworkGuard(fn () => ['93.184.215.14']))->check('http://xn--bcher-kva.example/'));
+
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://bücher.example/'])->assertHasErrors(['not a plain ASCII host name']);
+
+        Http::assertNothingSent();
+    }
+
     public function test_every_remote_hop_and_its_stylesheets_are_pinned_to_the_vetted_addresses(): void
     {
         $sent = [];
@@ -435,7 +458,7 @@ class McpToolsTest extends TestCase
 
     public function test_the_guard_classifies_addresses(): void
     {
-        foreach (['127.0.0.1', '10.255.255.255', '172.16.0.0', '192.168.0.1', '169.254.169.254', '0.0.0.0', '::1', '::', 'fc00::', 'fdff:ffff::1', 'fe80::1', 'febf::1', '::ffff:10.0.0.1', '[::1]', '100.64.0.1', '100.100.100.200', '198.18.0.1', '198.19.255.255', '240.0.0.1', '255.255.255.255', '192.0.0.8', '192.0.2.1', '203.0.113.10', 'fec0::1', '2001:db8::1', '64:ff9b::a9fe:a9fe', '64:ff9b::7f00:1', '2002:a9fe:a9fe::1', '2002:7f00:1::', '::127.0.0.1', '::10.0.0.1'] as $blocked) {
+        foreach (['127.0.0.1', '10.255.255.255', '172.16.0.0', '192.168.0.1', '169.254.169.254', '0.0.0.0', '::1', '::', 'fc00::', 'fdff:ffff::1', 'fe80::1', 'febf::1', '::ffff:10.0.0.1', '[::1]', '100.64.0.1', '100.100.100.200', '198.18.0.1', '198.19.255.255', '240.0.0.1', '255.255.255.255', '192.0.0.8', '192.0.2.1', '203.0.113.10', 'fec0::1', '2001:db8::1', '64:ff9b::a9fe:a9fe', '64:ff9b::7f00:1', '2002:a9fe:a9fe::1', '2002:7f00:1::', '::127.0.0.1', '::10.0.0.1', '64:ff9b:1::a9fe:a9fe', '64:ff9b:1::1'] as $blocked) {
             $this->assertTrue(PrivateNetworkGuard::isBlocked($blocked), $blocked);
         }
 
