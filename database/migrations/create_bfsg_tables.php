@@ -15,13 +15,13 @@ return new class extends Migration
     {
         Schema::create('bfsg_reports', function (Blueprint $table) {
             $table->id();
-            $table->string('url');
+            $table->text('url');
+            $table->string('url_hash', 64)->nullable()->index();
             $table->integer('total_violations')->default(0);
             $table->decimal('score', 5, 2)->default(100);
             $table->string('grade', 2)->default('A+');
             $table->json('metadata')->nullable();
             $table->timestamps();
-            $table->index('url');
             $table->index('created_at');
         });
 

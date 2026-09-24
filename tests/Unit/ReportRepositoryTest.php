@@ -107,9 +107,30 @@ class ReportRepositoryTest extends TestCase
         $this->assertSame(450, $report->violations()->distinct()->count('fingerprint'));
     }
 
+    public function test_long_urls_are_stored_whole_up_to_2048_characters_and_found_through_the_hash(): void
+    {
+        $url = 'https://example.com/'.str_repeat('segment/', 200);
+        $report = (new ReportRepository)->store(new AnalysisResult([], ['images'], $url.'?page=2', 'en'));
+
+        $this->assertSame(1620, mb_strlen($report->fresh()->url));
+        $this->assertSame($url, $report->fresh()->url);
+        $this->assertSame(hash('sha256', $url), $report->fresh()->url_hash);
+        $this->assertSame([$report->id], BfsgReport::forUrl($url.'#top')->pluck('id')->all());
+        $this->assertSame(2048, mb_strlen(ReportRepository::storedUrl('https://example.com/'.str_repeat('x', 5000))));
+
+        $report->update(['url' => 'https://example.com/moved']);
+        $this->assertSame(hash('sha256', 'https://example.com/moved'), $report->fresh()->url_hash, 'the hash follows every save');
+    }
+
     public function test_is_migrated_checks_for_the_v3_columns(): void
     {
         $repository = new ReportRepository;
+        $this->assertTrue($repository->isMigrated());
+
+        Schema::table('bfsg_reports', fn (Blueprint $table) => $table->dropIndex(['url_hash']));
+        Schema::table('bfsg_reports', fn (Blueprint $table) => $table->dropColumn('url_hash'));
+        $this->assertFalse($repository->isMigrated(), 'without url_hash');
+        Schema::table('bfsg_reports', fn (Blueprint $table) => $table->string('url_hash', 64)->nullable()->index());
         $this->assertTrue($repository->isMigrated());
 
         Schema::table('bfsg_violations', fn (Blueprint $table) => $table->dropIndex(['fingerprint']));
@@ -133,6 +154,29 @@ class ReportRepositoryTest extends TestCase
 
         $migration->up();
         $this->assertTrue(Schema::hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+    }
+
+    public function test_the_url_migration_widens_an_earlier_table_keeps_its_rows_and_is_a_no_op_otherwise(): void
+    {
+        $migration = require __DIR__.'/../../database/migrations/2026_09_24_000000_widen_url_of_bfsg_reports.php';
+
+        $migration->up(); // fresh install: create_bfsg_tables made both columns
+        $this->assertSame('text', Schema::getColumnType('bfsg_reports', 'url'));
+
+        DB::table('bfsg_reports')->insert(['url' => 'https://example.com/'.str_repeat('a', 300), 'url_hash' => 'x', 'created_at' => now(), 'updated_at' => now()]);
+        $migration->down();
+        $this->assertFalse(Schema::hasColumn('bfsg_reports', 'url_hash'), 'earlier schema');
+        $this->assertSame('varchar', Schema::getColumnType('bfsg_reports', 'url'));
+        $this->assertTrue(Schema::hasIndex('bfsg_reports', ['url']));
+        $this->assertSame(255, mb_strlen(DB::table('bfsg_reports')->value('url')), 'rolled back rows fit the old column');
+
+        DB::table('bfsg_reports')->insert(['url' => 'https://example.com/b', 'created_at' => now(), 'updated_at' => now()]);
+        $migration->up();
+        $this->assertSame('text', Schema::getColumnType('bfsg_reports', 'url'));
+        $this->assertFalse(Schema::hasIndex('bfsg_reports', ['url']));
+        $this->assertTrue(Schema::hasIndex('bfsg_reports', ['url_hash']));
+        $this->assertSame(hash('sha256', 'https://example.com/b'), DB::table('bfsg_reports')->where('url', 'https://example.com/b')->value('url_hash'));
+        $this->assertSame(2, DB::table('bfsg_reports')->whereNotNull('url_hash')->count(), 'every row got its hash');
     }
 
     public function test_container_resolution_honours_configured_weights(): void
@@ -183,10 +227,12 @@ class ReportRepositoryTest extends TestCase
 
         $schema = Schema::connection('bfsg_fresh');
         $this->assertTrue($schema->hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $this->assertTrue($schema->hasColumn('bfsg_reports', 'url_hash'));
+        $this->assertSame('text', $schema->getColumnType('bfsg_reports', 'url'));
         $this->assertSame(
-            ['2026_09_18_000000_add_context_and_fingerprint_to_bfsg_violations', 'create_bfsg_tables'],
+            ['2026_09_18_000000_add_context_and_fingerprint_to_bfsg_violations', '2026_09_24_000000_widen_url_of_bfsg_reports', 'create_bfsg_tables'],
             DB::connection('bfsg_fresh')->table('migrations')->orderBy('id')->pluck('migration')->all(),
-            'the dated upgrade sorts first and is a no-op on a fresh install',
+            'the dated upgrades sort first and are no-ops on a fresh install',
         );
 
         $report = (new ReportRepository)->store($this->sampleResult());
@@ -231,6 +277,9 @@ class ReportRepositoryTest extends TestCase
         $this->artisan('migrate', ['--database' => 'bfsg_v2', '--path' => realpath(__DIR__.'/../../database/migrations'), '--realpath' => true])->assertSuccessful();
 
         $this->assertTrue($schema->hasColumns('bfsg_violations', ['key', 'fingerprint', 'context']));
+        $this->assertSame('text', $schema->getColumnType('bfsg_reports', 'url'));
+        $this->assertSame(hash('sha256', 'https://v2.example.com/'), $db->table('bfsg_reports')->value('url_hash'));
+        $this->assertSame([$reportId], BfsgReport::forUrl('https://v2.example.com/')->pluck('id')->all());
         $row = $db->table('bfsg_violations')->sole();
         $this->assertSame('v2 message', $row->message);
         $this->assertNull($row->key);
@@ -239,6 +288,8 @@ class ReportRepositoryTest extends TestCase
 
         $this->artisan('migrate:rollback', ['--database' => 'bfsg_v2', '--path' => realpath(__DIR__.'/../../database/migrations'), '--realpath' => true])->assertSuccessful();
         $this->assertFalse($schema->hasColumn('bfsg_violations', 'fingerprint'));
+        $this->assertFalse($schema->hasColumn('bfsg_reports', 'url_hash'));
+        $this->assertSame('https://v2.example.com/', $db->table('bfsg_reports')->value('url'));
         $this->assertSame('v2 message', $db->table('bfsg_violations')->value('message'));
     }
 }

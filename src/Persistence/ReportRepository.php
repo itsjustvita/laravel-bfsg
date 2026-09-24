@@ -16,8 +16,8 @@ final class ReportRepository
 {
     private const CHUNK = 200;
 
-    /** Length of the `bfsg_reports.url` column. */
-    public const URL_LENGTH = 255;
+    /** Longest URL stored (`bfsg_reports.url` is a text column; lookups go through the indexed `url_hash`). */
+    public const URL_LENGTH = 2048;
 
     public function __construct(private ?ScoreCalculator $scores = null)
     {
@@ -26,7 +26,7 @@ final class ReportRepository
 
     /**
      * Store a report and all its findings in one transaction on the bfsg connection. The URL is stored like the
-     * middleware stores it: without query string and fragment (signatures, tokens), cut to the column length.
+     * middleware stores it: without query string and fragment (signatures, tokens), cut to URL_LENGTH characters.
      *
      * @param  array<string, mixed>  $metadata  merged into the report's metadata column
      */
@@ -65,7 +65,7 @@ final class ReportRepository
         try {
             $schema = (new BfsgReport)->getConnection()->getSchemaBuilder();
 
-            return $schema->hasTable('bfsg_reports') && $schema->hasColumn('bfsg_violations', 'fingerprint');
+            return $schema->hasTable('bfsg_reports') && $schema->hasColumn('bfsg_reports', 'url_hash') && $schema->hasColumn('bfsg_violations', 'fingerprint');
         } catch (Throwable) {
             return false;
         }

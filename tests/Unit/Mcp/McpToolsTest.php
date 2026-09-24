@@ -276,16 +276,16 @@ class McpToolsTest extends TestCase
         Http::assertSent(fn (HttpRequest $request) => $request->url() === 'https://docs.example.com/page' && $request->hasHeader('Authorization', 'Basic '.base64_encode('deploy:s3cret')));
     }
 
-    public function test_generate_report_stores_the_url_without_query_string_and_at_most_255_characters(): void
+    public function test_generate_report_stores_the_url_without_query_string_and_at_most_2048_characters(): void
     {
         Http::fake(fn () => Http::response(self::BROKEN, 200));
-        $long = 'https://docs.example.com/'.str_repeat('b', 300);
+        $long = 'https://docs.example.com/'.str_repeat('b', 3000);
 
         $first = BfsgMcpServer::tool(GenerateReport::class, ['url' => 'https://docs.example.com/page?token=s3cret', 'save' => true])->payload();
         $second = BfsgMcpServer::tool(GenerateReport::class, ['url' => $long, 'save' => true])->payload();
 
         $this->assertSame('https://docs.example.com/page', BfsgReport::query()->findOrFail($first['report_id'])->url);
-        $this->assertSame(mb_substr($long, 0, 255), BfsgReport::query()->findOrFail($second['report_id'])->url);
+        $this->assertSame(mb_substr($long, 0, 2048), BfsgReport::query()->findOrFail($second['report_id'])->url);
     }
 
     /** @return array<string, array{0: string}> */

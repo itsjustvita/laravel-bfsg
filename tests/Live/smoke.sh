@@ -83,6 +83,11 @@ done
 [ "$(php artisan migrate:status | grep -c 'add_context_and_fingerprint_to_bfsg_violations')" = "1" ] || fail "the upgrade migration is listed more than once (published copy shadows the package copy?)"
 pass "bfsg_violations has key, fingerprint and context"
 
+php artisan db:table bfsg_reports --json >"$WORK/reports-table.json" 2>&1 || { cat "$WORK/reports-table.json"; fail "db:table bfsg_reports"; }
+grep -q '"url_hash"' "$WORK/reports-table.json" || { cat "$WORK/reports-table.json"; fail "bfsg_reports has no url_hash column"; }
+[ "$(php artisan migrate:status | grep -c 'widen_url_of_bfsg_reports')" = "1" ] || fail "the url migration is not listed exactly once"
+pass "bfsg_reports has url_hash"
+
 # 4. Web server
 php artisan serve --port="$PORT" >"$WORK/serve.log" 2>&1 &
 SERVER_PID=$!
@@ -151,6 +156,14 @@ grep -q 'Stored as report #' "$WORK/saved.err" || { cat "$WORK/saved.err"; fail 
 php artisan bfsg:history >"$WORK/history.out" 2>&1 || { cat "$WORK/history.out"; fail "bfsg:history"; }
 grep -E 'live/broken +\| +[0-9]+ +\| +[0-9]+% ' "$WORK/history.out" >/dev/null || { cat "$WORK/history.out"; fail "bfsg:history does not list the saved report with a whole-number score"; }
 pass "bfsg:check --save and bfsg:history"
+
+# 6f2. URLs longer than 255 characters are stored whole and found again by the pasted URL (query string included)
+LONG_PATH="/live/long/$(printf 'x%.0s' $(seq 1 600))"
+check long-url 1 "$LONG_PATH" --save
+LONG_URL="$(sed -n 's/^Checking //p' "$WORK/long-url.err" | head -1)"
+php artisan bfsg:history --url="$LONG_URL?utm_source=smoke" >"$WORK/long-history.out" 2>&1 || { cat "$WORK/long-history.out"; fail "bfsg:history --url with a long URL"; }
+grep -q 'live/long/xxx' "$WORK/long-history.out" || { cat "$WORK/long-history.out" "$WORK/long-url.err"; fail "bfsg:history did not find the report of a 600-character path"; }
+pass "bfsg:check --save with a long URL, found by bfsg:history --url"
 
 # 6g. Credentials in the URL (HTTP basic auth) go with the form login too; a second Authorization header is an error
 BASIC="http://deploy:s3cret@127.0.0.1:$PORT"

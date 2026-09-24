@@ -16,6 +16,7 @@ class BfsgReport extends BfsgModel
 
     protected $fillable = [
         'url',
+        'url_hash',
         'total_violations',
         'score',
         'grade',
@@ -29,6 +30,19 @@ class BfsgReport extends BfsgModel
         'created_at' => 'datetime',
     ];
 
+    /** `url_hash` (the indexed lookup key of the text column `url`) always follows `url`. */
+    protected static function booted(): void
+    {
+        static::saving(function (BfsgReport $report) {
+            $report->url_hash = self::urlHash((string) $report->url);
+        });
+    }
+
+    public static function urlHash(string $url): string
+    {
+        return hash('sha256', $url);
+    }
+
     public function violations(): HasMany
     {
         return $this->hasMany(BfsgViolation::class, 'report_id');
@@ -37,7 +51,7 @@ class BfsgReport extends BfsgModel
     /** Reports of $url, compared in its stored form (ReportRepository::storedUrl()), so a pasted URL with query string, fragment or credentials matches. */
     public function scopeForUrl($query, string $url)
     {
-        return $query->where('url', ReportRepository::storedUrl($url));
+        return $query->where('url_hash', self::urlHash(ReportRepository::storedUrl($url)));
     }
 
     public function scopeRecent($query, int $days = 30)

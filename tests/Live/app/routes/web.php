@@ -21,6 +21,7 @@ Route::middleware('bfsg')->prefix('live')->group(function () {
     });
     Route::get('/redirect', fn () => redirect('/live/accessible'));
     Route::view('/spa', 'bfsg-live.spa');
+    Route::view('/long/{rest}', 'bfsg-live.broken')->where('rest', '.*');
 });
 
 // A staging-like area: HTTP basic auth (deploy / s3cret) in front of a form login (live@example.com / secret).
