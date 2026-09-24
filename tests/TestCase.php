@@ -21,6 +21,15 @@ class TestCase extends Orchestra
         $this->app->setLocale('en');
     }
 
+    protected function tearDown(): void
+    {
+        // symfony/console < 7.3 leaves SHELL_VERBOSITY set after a --quiet run, which silences every later command.
+        unset($_ENV['SHELL_VERBOSITY'], $_SERVER['SHELL_VERBOSITY']);
+        putenv('SHELL_VERBOSITY');
+
+        parent::tearDown();
+    }
+
     protected function getPackageProviders($app)
     {
         return [
