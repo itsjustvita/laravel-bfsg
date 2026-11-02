@@ -7,6 +7,7 @@ use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
 class CssParserTest extends TestCase
@@ -502,7 +503,7 @@ class CssParserTest extends TestCase
      * Rules whose rightmost compound nests :is() 8 levels deep with 40 arguments each (followed by 8 :is() of 16 arguments),
      * and a cartesian product: 16 alternatives times an :is() with 20,000 arguments.
      */
-    private function hostileSelectorRule(): string
+    private static function hostileSelectorRule(): string
     {
         $selector = '.x';
 
@@ -519,27 +520,70 @@ class CssParserTest extends TestCase
         return $selector.'{--fg:#111} '.$product.'{--fg:#111} :root{--fg:#999}';
     }
 
-    public function test_selector_reduction_is_bounded(): void
+    /** A rule whose rightmost compound is 63 KB: li:is() of 16 arguments, 2000 classes and 1030 :is() of 16 equal arguments. */
+    private static function longCompoundRule(): string
     {
-        [$parser, $document] = $this->parsed($this->hostileSelectorRule(), '<p id="t" class="x">x</p>');
+        $selector = 'li:is('.implode(',', array_map(fn (int $i) => ".a$i", range(0, 15))).')';
+
+        for ($i = 0; $i < 2000; $i++) {
+            $selector .= ".q$i";
+        }
+
+        return $selector.str_repeat(':is('.implode(',', array_fill(0, 16, '.r')).')', 1030).'{--fg:#111} :root{--fg:#999}';
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function hostileSelectorRules(): array
+    {
+        $lists = 'li';
+
+        for ($list = 0; $list < 5; $list++) {
+            $lists .= ':is('.implode(',', array_map(fn (int $i) => ".e{$list}_$i", range(0, 15))).')';
+        }
+
+        return [
+            'nested lists and a 16 × 20,000 product' => [self::hostileSelectorRule()],
+            // 16^5 alternatives unless the cap applies while they are built: each list stays within the argument cap
+            'five lists of 16 arguments' => [$lists.'{--fg:#111} :root{--fg:#999}'],
+            'a 63 KB rightmost compound' => [self::longCompoundRule()],
+        ];
+    }
+
+    #[DataProvider('hostileSelectorRules')]
+    public function test_selector_reduction_is_bounded(string $rules): void
+    {
+        [$parser, $document] = $this->parsed($rules, '<p id="t" class="x">x</p>');
         memory_reset_peak_usage();
         $before = memory_get_usage(true);
 
         $result = $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');
 
         $this->assertLessThan(8 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.1f MB', (memory_get_peak_usage(true) - $before) / 1048576));
-        $this->assertSame(['#999', true], $result, 'too many alternatives: the maybe rule covers every element');
+        $this->assertSame(['#999', true], $result, 'too many alternatives or too long to reduce: the maybe rule covers every element');
     }
 
     #[Group('performance')]
-    public function test_selector_reduction_finishes_within_the_time_budget(): void
+    #[DataProvider('hostileSelectorRules')]
+    public function test_selector_reduction_finishes_within_the_time_budget(string $rules): void
     {
-        [$parser, $document] = $this->parsed($this->hostileSelectorRule(), '<p id="t" class="x">x</p>');
+        [$parser, $document] = $this->parsed($rules, '<p id="t" class="x">x</p>');
 
         $start = microtime(true);
         $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');
 
         $this->assertLessThan(PerformanceBudget::seconds(0.5), microtime(true) - $start);
+    }
+
+    #[Group('performance')]
+    public function test_a_long_compound_reduces_within_the_time_budget(): void
+    {
+        [$parser, $document] = $this->parsed(self::longCompoundRule(), '<p id="t">x</p>');
+
+        $start = microtime(true);
+        $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(0.2), $elapsed, sprintf('the reduction took %.2f s', $elapsed));
     }
 
     public function test_invalid_at_computed_value_time_uses_the_fallback(): void

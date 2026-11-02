@@ -231,14 +231,17 @@ class CssIndexBudgetTest extends TestCase
         $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
-    /** 4000 custom-property rules on the type selector `p` and 3000 paragraphs reading 64 of the names: 12M possible index entries. */
-    private function typeFanOutPage(string $extra = ''): string
+    /**
+     * 4000 custom-property rules matching every paragraph and 3000 paragraphs reading 64 of the names: 12M possible index
+     * entries. Rule $i has the selector sprintf($selector, $i).
+     */
+    private function typeFanOutPage(string $extra = '', string $selector = 'p'): string
     {
         $css = '';
         $references = '';
 
         for ($i = 0; $i < 4000; $i++) {
-            $css .= "p{--z$i:1}";
+            $css .= sprintf($selector, $i)."{--z$i:1}";
         }
 
         for ($i = 0; $i < 64; $i++) {
@@ -249,15 +252,38 @@ class CssIndexBudgetTest extends TestCase
             .str_repeat('<p>Some text</p>', 3000).'</main>'.$extra.'</body></html>';
     }
 
-    public function test_custom_property_index_entries_are_capped(): void
+    /** @return array<string, array{0: string}> selectors of the fan-out rules: one type selector, and a distinct one per rule that is costlier to match */
+    public static function fanOutSelectors(): array
     {
-        $document = HtmlDocument::fromHtml($this->typeFanOutPage());
+        return [
+            'one type selector' => ['p'],
+            'distinct :not() selectors' => ['p:not(.n%1$d):not(.m%1$d)'],
+        ];
+    }
+
+    #[DataProvider('fanOutSelectors')]
+    public function test_custom_property_index_entries_are_capped(string $selector): void
+    {
+        $document = HtmlDocument::fromHtml($this->typeFanOutPage('', $selector));
 
         $violations = (new ContrastAnalyzer)->analyze($document);
 
         $truncated = array_values(array_filter($violations, fn ($violation) => $violation->key === 'contrast.analysis_truncated'));
         $this->assertGreaterThan(0, $truncated[0]->params['limit'] ?? ContrastAnalyzer::MAX_MEASURED, 'the index build leaves time to measure');
         $this->assertTrue($document->cssParser()->isTruncated(), 'rules beyond the entry cap are skipped');
+    }
+
+    #[Group('performance')]
+    #[DataProvider('fanOutSelectors')]
+    public function test_a_full_custom_property_index_skips_later_rules_within_the_time_budget(string $selector): void
+    {
+        $document = HtmlDocument::fromHtml($this->typeFanOutPage('', $selector));
+
+        $start = microtime(true);
+        (new ContrastAnalyzer)->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(2.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
     public function test_an_index_build_without_a_deadline_stays_bounded(): void

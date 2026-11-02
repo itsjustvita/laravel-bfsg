@@ -28,7 +28,10 @@ class CssParser
     /** Seconds an index build may take when the caller passes no deadline; ContrastAnalyzer uses the same budget. */
     public const INDEX_TIME_BUDGET_SECONDS = 5.0;
 
-    /** Index entries (matched element × rule) of custom-property-only rules and maybe rules; beyond it they are skipped (truncated). */
+    /**
+     * Index entries (matched element × rule) of custom-property-only rules and maybe rules. The first rule that does not
+     * fit fills the index: it and every later such rule are skipped without matching (truncated).
+     */
     private const MAX_CUSTOM_INDEX_ENTRIES = 200000;
 
     /** User-action pseudo-classes: a selector that needs one outside parentheses never matches the base state that is measured. */
@@ -36,6 +39,9 @@ class CssParser
 
     /** Functional pseudo-classes whose selector-list arguments a maybe rule's reduction looks into. */
     private const MATCHES_ANY = ['is', 'where', 'matches', '-webkit-any', '-moz-any'];
+
+    /** Longest rightmost compound a maybe rule's reduction looks into; a longer one covers every element. */
+    private const MAX_REDUCED_COMPOUND_BYTES = 4096;
 
     /** Colour and font properties (spec §6.1) plus display/visibility for CSS-hidden detection. */
     public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font-size', 'font-weight', 'display', 'visibility'];
@@ -1378,8 +1384,8 @@ class CssParser
 
     /**
      * Index the matches of a custom-property-only or maybe rule within MAX_CUSTOM_INDEX_ENTRIES; a rule that does not fit
-     * is skipped and marks the index truncated. Node paths are computed once per element ($keys keeps the element alive,
-     * so its object id stays unique).
+     * is skipped, marks the index truncated and fills it, so later rules are skipped before any matching. Node paths are
+     * computed once per element ($keys keeps the element alive, so its object id stays unique).
      *
      * @param  'customIndex'|'maybeIndex'  $map
      * @param  list<DOMElement>  $elements
@@ -1389,6 +1395,7 @@ class CssParser
     {
         if ($this->customIndexEntries + count($elements) > self::MAX_CUSTOM_INDEX_ENTRIES) {
             $this->truncated = true;
+            $this->customIndexEntries = self::MAX_CUSTOM_INDEX_ENTRIES; // full: later custom and maybe rules are skipped unmatched
 
             return;
         }
@@ -1476,8 +1483,9 @@ class CssParser
      * The rightmost compound of a selector reduced to the simple selectors the parser supports (type, class, id,
      * attribute, :root, :first-child, :last-child, :link, :not(compound)), as alternatives: :is() and :where()
      * contribute the reduced rightmost compound of each argument. [''] (every element) when an alternative is empty,
-     * the nesting is deeper than 4 levels, a list has more than 16 arguments or there would be more than 16
-     * alternatives (checked while they are built); [] when none can match at rest.
+     * the compound is longer than MAX_REDUCED_COMPOUND_BYTES, the nesting is deeper than 4 levels, a list has more than
+     * 16 arguments or there would be more than 16 alternatives (checked while they are built); [] when none can match at
+     * rest.
      *
      * @return list<string>
      */
@@ -1512,6 +1520,11 @@ class CssParser
 
         $compound = substr($selector, $start);
         $length = strlen($compound);
+
+        if ($length > self::MAX_REDUCED_COMPOUND_BYTES) {
+            return [''];
+        }
+
         $type = preg_match('/[a-zA-Z][a-zA-Z0-9-]*|\*/A', $compound, $m) === 1 ? $m[0] : '';
         $position = strlen($type);
         $alternatives = [[$type === '*' ? '' : strtolower($type), '']]; // [type, simple selectors]
@@ -1548,8 +1561,10 @@ class CssParser
             if ($arguments === null) {
                 $token = substr($compound, $begin, $position - $begin);
 
-                foreach ($alternatives as $index => $alternative) {
-                    $alternatives[$index][1] .= $this->simpleSelectorToXpath('*'.$token) === null ? '' : $token;
+                if ($this->simpleSelectorToXpath('*'.$token) !== null) { // supported: every alternative keeps it
+                    foreach (array_keys($alternatives) as $index) {
+                        $alternatives[$index][1] .= $token;
+                    }
                 }
 
                 continue;
@@ -1574,7 +1589,8 @@ class CssParser
                     foreach ($alternatives as [$alternativeType, $simple]) {
                         if ($alternativeType === '' || $reducedType === '' || $alternativeType === $reducedType) {
                             $type = $alternativeType === '' ? $reducedType : $alternativeType;
-                            $combined[$type."\0".$simple.$rest] = [$type, $simple.$rest];
+                            $simple .= $rest;
+                            $combined[$type."\0".$simple] = [$type, $simple];
 
                             if (count($combined) > 16) {
                                 return [''];
