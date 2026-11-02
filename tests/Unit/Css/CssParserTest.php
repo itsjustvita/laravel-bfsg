@@ -498,6 +498,50 @@ class CssParserTest extends TestCase
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .disabled\\:x:disabled{--fg:#111} .peer:checked ~ .peer-checked\\:x{--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'variant classes the element does not carry');
     }
 
+    /**
+     * Rules whose rightmost compound nests :is() 8 levels deep with 40 arguments each (followed by 8 :is() of 16 arguments),
+     * and a cartesian product: 16 alternatives times an :is() with 20,000 arguments.
+     */
+    private function hostileSelectorRule(): string
+    {
+        $selector = '.x';
+
+        for ($level = 0; $level < 8; $level++) {
+            $selector = ':is('.implode(',', array_map(fn (int $i) => ".a{$level}_$i", range(0, 38))).','.$selector.')';
+        }
+
+        for ($level = 0; $level < 8; $level++) {
+            $selector .= ':is('.implode(',', array_map(fn (int $i) => "li.b{$level}_$i", range(0, 15))).')';
+        }
+
+        $product = 'li:is('.implode(',', array_map(fn (int $i) => ".c$i", range(0, 15))).'):is('.implode(',', array_map(fn (int $i) => ".d$i", range(0, 19999))).')';
+
+        return $selector.'{--fg:#111} '.$product.'{--fg:#111} :root{--fg:#999}';
+    }
+
+    public function test_selector_reduction_is_bounded(): void
+    {
+        [$parser, $document] = $this->parsed($this->hostileSelectorRule(), '<p id="t" class="x">x</p>');
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+
+        $result = $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');
+
+        $this->assertLessThan(8 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.1f MB', (memory_get_peak_usage(true) - $before) / 1048576));
+        $this->assertSame(['#999', true], $result, 'too many alternatives: the maybe rule covers every element');
+    }
+
+    #[Group('performance')]
+    public function test_selector_reduction_finishes_within_the_time_budget(): void
+    {
+        [$parser, $document] = $this->parsed($this->hostileSelectorRule(), '<p id="t" class="x">x</p>');
+
+        $start = microtime(true);
+        $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');
+
+        $this->assertLessThan(PerformanceBudget::seconds(0.5), microtime(true) - $start);
+    }
+
     public function test_invalid_at_computed_value_time_uses_the_fallback(): void
     {
         $this->assertSame(['#777777', '#ffffff', false], $this->colors(':root{--a:var(--undef)} p{color:var(--a,#777)}', '<p id="t">x</p>'), 'an undefined reference chain is exact');

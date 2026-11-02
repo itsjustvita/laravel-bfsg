@@ -1476,7 +1476,8 @@ class CssParser
      * The rightmost compound of a selector reduced to the simple selectors the parser supports (type, class, id,
      * attribute, :root, :first-child, :last-child, :link, :not(compound)), as alternatives: :is() and :where()
      * contribute the reduced rightmost compound of each argument. [''] (every element) when an alternative is empty,
-     * the nesting is deeper than 4 levels or there would be more than 16 alternatives; [] when none can match at rest.
+     * the nesting is deeper than 4 levels, a list has more than 16 arguments or there would be more than 16
+     * alternatives (checked while they are built); [] when none can match at rest.
      *
      * @return list<string>
      */
@@ -1554,11 +1555,11 @@ class CssParser
                 continue;
             }
 
-            if ($nesting >= 4) {
+            if ($nesting >= 4 || count($arguments) > 16) {
                 return [''];
             }
 
-            $combined = [];
+            $combined = []; // deduplicated while it is built, so it never holds more than 17 alternatives
 
             foreach ($arguments as $argument) {
                 if ($this->hasUserActionState($argument)) {
@@ -1572,17 +1573,18 @@ class CssParser
 
                     foreach ($alternatives as [$alternativeType, $simple]) {
                         if ($alternativeType === '' || $reducedType === '' || $alternativeType === $reducedType) {
-                            $combined[] = [$alternativeType === '' ? $reducedType : $alternativeType, $simple.$rest];
+                            $type = $alternativeType === '' ? $reducedType : $alternativeType;
+                            $combined[$type."\0".$simple.$rest] = [$type, $simple.$rest];
+
+                            if (count($combined) > 16) {
+                                return [''];
+                            }
                         }
                     }
                 }
             }
 
-            $alternatives = array_values(array_unique($combined, SORT_REGULAR));
-
-            if (count($alternatives) > 16) {
-                return [''];
-            }
+            $alternatives = array_values($combined);
         }
 
         $compounds = array_map(fn (array $alternative): string => $alternative[0].$alternative[1], $alternatives);
