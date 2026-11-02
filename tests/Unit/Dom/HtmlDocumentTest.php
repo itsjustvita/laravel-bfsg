@@ -4,6 +4,7 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit\Dom;
 
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class HtmlDocumentTest extends TestCase
 {
@@ -218,5 +219,68 @@ class HtmlDocumentTest extends TestCase
 
         $this->assertSame('video', $byId['t']->parentNode->nodeName, 'the source inside <script-loader> is closed');
         $this->assertSame('video', $byId['s']->parentNode->nodeName);
+    }
+
+    public function test_deeply_nested_markup_keeps_later_elements(): void
+    {
+        $doc = HtmlDocument::fromHtml(str_repeat('<div>', 300).'<img src=a.png>'.str_repeat('</div>', 300).'<img src=b.png>');
+
+        $this->assertCount(2, $doc->query('//img'));
+    }
+
+    public function test_leading_bom_is_ignored(): void
+    {
+        $doc = HtmlDocument::fromHtml("\xEF\xBB\xBF<!doctype html><html lang=de><head><title>Über uns</title></head><body><p>x</p></body></html>");
+
+        $this->assertSame('de', $doc->root()->getAttribute('lang'));
+        $this->assertFalse($doc->isFragment());
+        $this->assertSame('Über uns', $doc->query('//title')[0]->textContent);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function documentsWithoutHtmlTag(): array
+    {
+        return [
+            'doctype' => ['<!doctype html><title>T</title><body><p>x</p>'],
+            'head' => ['<head><title>T</title></head><body>x</body>'],
+            'comment first' => ['<!-- c --><body><p>x</p></body>'],
+        ];
+    }
+
+    #[DataProvider('documentsWithoutHtmlTag')]
+    public function test_document_without_html_tag_is_a_document(string $html): void
+    {
+        $this->assertFalse(HtmlDocument::fromHtml($html)->isFragment());
+    }
+
+    public function test_late_utf8_meta_charset_is_not_mojibake(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><head><title>Über uns</title><meta charset="utf-8"></head><body>x</body></html>');
+
+        $this->assertSame('Über uns', $doc->query('//title')[0]->textContent);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function legacyCharsets(): array
+    {
+        return ['latin1' => ['iso-8859-1'], 'windows-1252' => ['windows-1252']];
+    }
+
+    #[DataProvider('legacyCharsets')]
+    public function test_declared_latin1_document_is_still_decoded(string $charset): void
+    {
+        $doc = HtmlDocument::fromHtml("<html><head><meta charset=\"$charset\"><title>\xDCber</title></head><body>x</body></html>");
+
+        $this->assertSame('Über', $doc->query('//title')[0]->textContent);
+    }
+
+    public function test_encoding_hint_leaves_no_node(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body><!-- mine --><p>Über</p></body></html>');
+
+        $comments = $doc->xpath()->query('//comment()');
+        $this->assertCount(1, $comments);
+        $this->assertSame(' mine ', $comments->item(0)->data);
+        $this->assertSame(0, $doc->xpath()->query('//processing-instruction()')->length);
     }
 }

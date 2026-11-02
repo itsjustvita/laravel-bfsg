@@ -21,6 +21,9 @@ final class HtmlDocument
      */
     private const UNKNOWN_VOID_ELEMENTS = '~<!--.*?-->|<(script|style|textarea|title|xmp)(?![\w-])[^>]*>.*?</\1\s*>|<(track|source|wbr|embed|keygen)(?![\w-])(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\2\s*>)~is';
 
+    /** A document starts, after whitespace, comments and processing instructions, with a doctype, html, head or body tag. */
+    private const DOCUMENT_START = '~\A(?:\s++|<!--.*?-->|<\?.*?\?>)*+<(?:!doctype|html|head|body)\b~is';
+
     private ?DOMXPath $xpath = null;
 
     private ?CssParser $cssParser = null;
@@ -51,7 +54,11 @@ final class HtmlDocument
             return new self($dom, false, true);
         }
 
-        $fragment = $options['fragment'] ?? (preg_match('/<html[\s>]/i', $html) !== 1);
+        if (str_starts_with($html, "\xEF\xBB\xBF")) {
+            $html = substr($html, 3);
+        }
+
+        $fragment = $options['fragment'] ?? (preg_match(self::DOCUMENT_START, $html) !== 1);
         $html = self::closeUnknownVoidElements($html);
         $hinted = self::needsEncodingHint($html);
 
@@ -59,7 +66,7 @@ final class HtmlDocument
             $html = self::ENCODING_HINT.$html;
         }
 
-        $flags = LIBXML_HTML_NODEFDTD | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
+        $flags = LIBXML_HTML_NODEFDTD | LIBXML_PARSEHUGE | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
         $previous = libxml_use_internal_errors(true);
 
         try {
@@ -70,11 +77,7 @@ final class HtmlDocument
         }
 
         if ($hinted) {
-            foreach (iterator_to_array($dom->childNodes) as $node) {
-                if ($node->nodeType === XML_PI_NODE) {
-                    $dom->removeChild($node);
-                }
-            }
+            self::removeEncodingHint($dom);
         }
 
         $document = new self($dom, $fragment, false);
@@ -348,6 +351,26 @@ final class HtmlDocument
         ) ?? $html;
     }
 
+    /** libxml < 2.14 parses the hint as a processing instruction, >= 2.14 as a comment; neither may stay in the DOM. */
+    private static function removeEncodingHint(DOMDocument $dom): void
+    {
+        foreach (iterator_to_array($dom->childNodes) as $node) {
+            if ($node->nodeType === XML_PI_NODE) {
+                $dom->removeChild($node);
+            }
+        }
+
+        $comments = (new DOMXPath($dom))->query('//comment()');
+
+        foreach ($comments === false ? [] : iterator_to_array($comments) as $comment) {
+            if (trim($comment->data) === '?xml encoding="UTF-8"') {
+                $comment->parentNode?->removeChild($comment);
+
+                return;
+            }
+        }
+    }
+
     private static function needsEncodingHint(string $html): bool
     {
         if (str_starts_with(ltrim($html), '<?xml')) {
@@ -358,6 +381,13 @@ final class HtmlDocument
             return false;
         }
 
-        return preg_match('/<meta[^>]+charset\s*=/i', $html) !== 1;
+        $ascii = strspn($html, implode('', array_map('chr', range(0, 127))));
+        $head = substr($html, 0, $ascii);
+
+        if (preg_match('/charset\s*=/i', $head) !== 1) {
+            return true;
+        }
+
+        return preg_match('/charset\s*=\s*["\']?\s*utf-?8\b/i', $head) === 1;
     }
 }

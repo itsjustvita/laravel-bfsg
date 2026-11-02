@@ -100,4 +100,11 @@ class BfsgTest extends TestCase
         $this->assertTrue($bfsg->isAccessible($accessibleHtml));
         $this->assertFalse($bfsg->isAccessible($inaccessibleHtml));
     }
+
+    public function test_very_deep_document_analyzes_without_error(): void
+    {
+        $result = app(Bfsg::class)->analyze(str_repeat('<div>', 5000).'<img src=a.png>'.str_repeat('</div>', 5000));
+
+        $this->assertContains('images.missing_alt', collect($result->forAnalyzer('images'))->map(fn ($v) => $v->key)->all());
+    }
 }
