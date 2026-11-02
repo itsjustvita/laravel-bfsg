@@ -94,6 +94,7 @@ class MarkupScannerTest extends TestCase
             'attribute after a quoted value' => ['<a x="1"@click="y" #s>', '<a x="1"x-on:click="y" v-slot:s>'],
             'unquoted values' => ['<a title=@home href=#top data-x=a@b>', '<a title=@home href=#top data-x=a@b>'],
             'text and end tags' => ['<p>@click #default a < @b <@x></p @click>', '<p>@click #default a < @b <@x></p @click>'],
+            'void element with shorthands' => ['<source @error="x > y" src=a><track #t kind=c>', '<source x-on:error="x > y" src=a></source><track v-slot:t kind=c></track>'],
             'raw text start tag' => ['<script @load="x > 1">var a = "@b";</script>', '<script x-on:load="x > 1">var a = "@b";</script>'],
             'spaced attribute value' => ["<a @click = \"x\"\n\t#item\f=y>", "<a x-on:click = \"x\"\n\tv-slot:item\f=y>"],
             'doctype and processing instruction' => ['<!DOCTYPE html><?php echo 1 ?><source>', '<!DOCTYPE html><?php echo 1 ?><source></source>'],
