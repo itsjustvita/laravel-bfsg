@@ -141,7 +141,7 @@ class CssIndexBudgetTest extends TestCase
         $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('analyze took %.2f s', $elapsed));
     }
 
-    /** @return array<string, array{0: string}> 4000 root-declared references and 60,000 undefined ones on 500 paragraphs, and 64 references through a 200-element inherit chain */
+    /** @return array<string, array{0: string}> hostile shapes: many references, an inherit chain, long cached values, long node paths */
     public static function hostileCustomPropertyPages(): array
     {
         $page = fn (string $css): string => '<!doctype html><html lang="en"><head><title>x</title><style>'.$css.'</style></head><body><main>'
@@ -160,10 +160,47 @@ class CssIndexBudgetTest extends TestCase
         $chain = '<!doctype html><html lang="en"><head><title>x</title><style>*{--x:#777} div,p{--x:inherit} p{color:#767676 '.str_repeat('var(--x) ', 64).'}</style></head><body>'
             .str_repeat('<div>', 200).str_repeat('<p>Some text</p>', 300).str_repeat('</div>', 200).'</body></html>';
 
+        // 4 KB values cached per element: a universal rule whose names chain to a 4000-character token, read through invalid names.
+        $values = '--a:'.str_repeat('A', 4000).';';
+        $invalid = '';
+
+        for ($i = 0; $i < 64; $i++) {
+            $previous = '--a';
+
+            for ($step = 7; $step >= 1; $step--) {
+                $values .= "--b{$i}_$step:x var($previous);";
+                $previous = "--b{$i}_$step";
+            }
+
+            $values .= "--d$i:var($previous) var(--nope);";
+            $invalid .= " var(--d$i,)";
+        }
+
+        // 12.6 KB node paths: 200 nested owners with 62-character tag names, four paragraphs reading 64 root names each.
+        $tag = 'x-'.str_repeat('a', 60);
+        $root = $classes = $paragraphs = '';
+
+        for ($c = 0; $c < 4; $c++) {
+            $names = '';
+
+            for ($i = 0; $i < 64; $i++) {
+                $root .= '--u'.($c * 64 + $i).':a;';
+                $names .= ' var(--u'.($c * 64 + $i).')';
+            }
+
+            $classes .= ".c$c{color:#767676$names}";
+            $paragraphs .= "<p class=\"c$c\">Some text</p>";
+        }
+
+        $paths = '<!doctype html><html lang="en"><head><title>x</title><style>:root{'.$root."} $tag{--y:1} $classes</style></head><body>"
+            .str_repeat("<$tag>", 200).$paragraphs.str_repeat("</$tag>", 200).'</body></html>';
+
         return [
             'declared on the root' => [$page(":root{{$declared}} p{color:#767676$references}")],
             'undefined with empty fallbacks' => [$page("p{color:#767676$undefined}")],
             'inherit through 200 nested elements' => [$chain],
+            'long values cached per element' => [str_replace(str_repeat('<p>Some text</p>', 500), str_repeat('<p>Some text</p>', 200), $page("*{{$values}} p{color:#767676$invalid}"))],
+            'long node paths' => [$paths],
         ];
     }
 
@@ -192,6 +229,30 @@ class CssIndexBudgetTest extends TestCase
         $elapsed = microtime(true) - $start;
 
         $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+    }
+
+    #[Group('performance')]
+    public function test_wide_custom_property_fan_out_is_analyzed_within_the_time_budget(): void
+    {
+        $css = '';
+        $references = '';
+
+        for ($i = 0; $i < 4000; $i++) {
+            $css .= "*{--z$i:1}";
+        }
+
+        for ($i = 0; $i < 64; $i++) {
+            $references .= " var(--z$i)";
+        }
+
+        $document = HtmlDocument::fromHtml('<!doctype html><html lang="en"><head><title>x</title><style>'.$css.":root{--q:1} p{color:#767676$references;background:#fff$references}</style></head><body><main>"
+            .str_repeat('<p>Some text</p>', 3000).'</main></body></html>');
+
+        $start = microtime(true);
+        (new ContrastAnalyzer)->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(2.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
     #[Group('performance')]

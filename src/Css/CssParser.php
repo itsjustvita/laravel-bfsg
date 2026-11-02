@@ -56,11 +56,17 @@ class CssParser
     /** @var list<int> every rule with the selector `*` that declares custom properties (both indexes) */
     private array $universalRules = [];
 
-    /** @var array<string, true> node path => true for elements whose non-universal matching rules or style attribute declare custom properties */
+    /** @var array<string, true> node path => true for elements whose non-universal matching rules, maybe rules or style attribute declare custom properties */
     private array $customOwners = [];
 
-    /** @var array<string, true> custom property names declared by rules whose selector cannot be evaluated (user-action states and pseudo-elements aside) */
-    private array $uncertainNames = [];
+    /**
+     * @var array<string, list<int>> node path => positions of the "maybe" rules covering the element: rules with custom properties whose
+     *                               selector cannot be evaluated, matched by the supported simple selectors of their rightmost compound
+     */
+    private array $maybeIndex = [];
+
+    /** @var list<int> maybe rules whose reduced rightmost compound is empty: they may match every element */
+    private array $universalMaybeRules = [];
 
     protected bool $indexed = false;
 
@@ -104,34 +110,61 @@ class CssParser
     /** CSS-wide keywords that make a custom property take its parent's value (custom properties inherit). */
     private const INHERITING_KEYWORDS = ['inherit', 'unset', 'revert', 'revert-layer'];
 
-    /** Computed custom-property values kept in the cache; beyond it a value that needs one is unresolvable (approximate). */
-    private const MAX_CACHED_CUSTOM_PROPERTIES = 50000;
+    /** Entries of the custom-property cache; a lookup that would add one beyond it is unresolvable (approximate). */
+    private const MAX_CACHED_CUSTOM_PROPERTIES = 200000;
+
+    /** Bytes of the custom-property cache (keys, values and CACHE_ENTRY_BYTES per entry); beyond it a lookup that would add an entry is unresolvable. */
+    private const MAX_CACHED_CUSTOM_PROPERTY_BYTES = 16 * 1024 * 1024;
+
+    /** PHP bookkeeping counted per cache entry on top of its key and value bytes: hash bucket and slot at power-of-two capacity, key string, approximate flag (measured about 150 bytes). */
+    private const CACHE_ENTRY_BYTES = 160;
+
+    /** An identifier as in CSS selectors: escapes and non-ASCII characters allowed. */
+    private const IDENTIFIER = '-?(?:[a-zA-Z_]|\\\\.|[^\x00-\x7F])(?:[\w-]|\\\\.|[^\x00-\x7F])*';
 
     /** @var array<string, true>|null every custom property name a rule or a style attribute declares; null until prepared */
     private ?array $declaredNames = null;
 
-    /** @var array<string, true> names whose heaviest universal (`*`) declaration is a value: every element declares them */
+    /** @var array<string, list<int>> name => positions of the rules that declare it, ascending */
+    private array $declarers = [];
+
+    /** @var array<string, list<int>> name => positions of the custom-property-only universal rules that declare it */
+    private array $universalDeclarers = [];
+
+    /** @var array<string, list<int>> name => positions of the universal maybe rules that declare it */
+    private array $universalMaybe = [];
+
+    /** @var array<string, true> names every element may declare (a universal value or a universal maybe rule): looked up from the element itself */
     private array $universalNames = [];
 
-    /** @var array<string, string> node path => node path of the nearest custom-property owner (the element or an ancestor), '' for none */
+    /** @var array<string, int> name => compact id used in cache keys */
+    private array $nameIds = [];
+
+    /** @var array<string, int> node path => compact id of the element, for the elements the custom-property lookups visit */
+    private array $elementIds = [];
+
+    /** @var array<int, array{0: DOMElement, 1: string, 2: ?int, 3: ?int}> id => element, node path, id of the next owner above and of the parent (0: none, null: not known yet) */
+    private array $elements = [];
+
+    /** @var array<string, int> node path => id of the nearest custom-property owner (the element or an ancestor), 0 for none */
     private array $ownerOf = [];
 
-    /** @var array<string, array{0: DOMElement, 1: ?string}> owner node path => the element and the next owner above ('' for none, null until known) */
-    private array $owners = [];
-
     /**
-     * @var array<string, string|null|false> "owner path\0depth:name" => computed value of a declaration that contains var()
-     *                                       (null: invalid at computed-value time, false: unresolvable)
+     * @var array<string, string|null|false> "d|i<element id>:<depth>:<name id>" => a declared value with var() substituted (d) or the value an owner
+     *                                       inherits (i); null: invalid at computed-value time, false: unresolvable
      */
     private array $customPropertyCache = [];
 
     /** @var array<string, true> customPropertyCache keys whose value is approximate */
     private array $approximateProperties = [];
 
+    /** Bytes counted for the custom-property cache. */
+    private int $cachedBytes = 0;
+
     /** @var array<string, array<string, array{value: string, important: bool}>> node path => custom properties of its style attribute */
     private array $inlineCustomProperties = [];
 
-    /** @var array<string, true> "owner path\0name" of the custom properties being computed (cycle detection) */
+    /** @var array<string, true> "<element id>:<name id>" of the declarations being substituted (cycle detection) */
     private array $computingProperties = [];
 
     /** @var array{0: ?DOMElement, 1: string}|null the document element and its node path */
@@ -148,7 +181,7 @@ class CssParser
     {
         $this->document = $document;
         $this->rules = [];
-        $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->uncertainNames = [];
+        $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = [];
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
@@ -156,8 +189,10 @@ class CssParser
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
         $this->declaredNames = $this->rootContext = null;
-        $this->universalNames = $this->ownerOf = $this->owners = $this->customPropertyCache = $this->approximateProperties = [];
+        $this->declarers = $this->universalDeclarers = $this->universalMaybe = $this->universalNames = $this->nameIds = [];
+        $this->elementIds = $this->elements = $this->ownerOf = $this->customPropertyCache = $this->approximateProperties = [];
         $this->inlineCustomProperties = $this->computingProperties = [];
+        $this->cachedBytes = 0;
 
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
             foreach ($this->parseStylesheet($css, count($this->rules)) as $rule) {
@@ -223,7 +258,7 @@ class CssParser
 
             if ($expression === null) {
                 if ($custom) {
-                    $this->recordUncertainNames($rule);
+                    $this->indexMaybeRule($position, $rule, $tokens);
                 }
 
                 continue;
@@ -822,7 +857,7 @@ class CssParser
      * var() references inside the value are substituted where the winning declaration sits, as in the CSS computed
      * value. Null when the property is undefined, `initial` (the guaranteed-invalid value), invalid at computed-value
      * time (a reference without value or fallback, a cycle) or beyond a limit (nesting deeper than 8 levels,
-     * MAX_VAR_REFERENCES).
+     * MAX_VAR_REFERENCES, the cache budget).
      */
     public function customProperty(DOMElement $element, string $name): ?string
     {
@@ -834,10 +869,10 @@ class CssParser
     /**
      * Substitute every var(--name[, fallback]) in a value with the element's custom properties (customProperty()). The
      * fallback is used when the property is undefined, `initial` or invalid at computed-value time (approximate for a
-     * cycle). Approximate when a substituted name is also declared by a rule whose selector cannot be evaluated.
-     * [null, true] when a reference cannot be resolved: undefined without a fallback, a cycle without a fallback,
-     * nesting deeper than 8 levels, more than MAX_VAR_REFERENCES references in one value, or a result longer than
-     * MAX_RESOLVED_LENGTH.
+     * cycle). Approximate where a rule whose selector cannot be evaluated could win the element's cascade for a
+     * substituted name, or the element inherits from such an element. [null, true] when a reference cannot be
+     * resolved: undefined without a fallback, a cycle without a fallback, nesting deeper than 8 levels, more than
+     * MAX_VAR_REFERENCES references in one value, a result longer than MAX_RESOLVED_LENGTH, or a full cache.
      *
      * @return array{0: ?string, 1: bool}
      */
@@ -896,7 +931,6 @@ class CssParser
             }
 
             [$replacement, $nested] = $this->customPropertyValue($element, $key, $name, $depth + 1);
-            $nested = $nested || isset($this->uncertainNames[$name]);
 
             if ($replacement === null && $fallback !== null) {
                 [$replacement, $fallbackApproximate] = $this->substituteIn($element, $key, $fallback, $depth + 1);
@@ -923,10 +957,11 @@ class CssParser
 
     /**
      * The custom property $name on the element, its value substituted at nesting depth $depth. Names declared nowhere
-     * are undefined at once. Names a universal rule declares are looked up from the element itself, other names from
-     * the nearest owner (an element whose own rules or style attribute declare custom properties) upwards, so elements
-     * that merely inherit add no cache entries. The result is cached at every owner visited; when the cache holds
-     * MAX_CACHED_CUSTOM_PROPERTIES entries, a lookup that would add one is unresolvable.
+     * are undefined at once. Names every element may declare are looked up from the element itself, other names from
+     * the nearest owner (an element whose own rules, maybe rules or style attribute declare custom properties) upwards,
+     * so elements that merely inherit add no cache entries. The result is cached at every element visited, keyed by
+     * compact ids; a lookup that would grow the cache beyond MAX_CACHED_CUSTOM_PROPERTIES entries or
+     * MAX_CACHED_CUSTOM_PROPERTY_BYTES is unresolvable.
      *
      * @return array{0: string|null|false, 1: bool} value (null: undefined, `initial` or invalid at computed-value time,
      *                                              false: unresolvable) and whether it is approximate
@@ -940,13 +975,14 @@ class CssParser
         }
 
         $universal = isset($this->universalNames[$name]);
-        [$node, $nodeKey] = $universal ? [$element, $key] : $this->owner($this->nearestOwner($element, $key));
-        $suffix = "\0".$depth.':'.$name;
-        $inheriting = []; // cache slots of the visited elements that take the value of the next one, with their revert-layer flag
+        $id = $universal ? $this->elementId($element, $key) : $this->nearestOwner($element, $key);
+        $suffix = ':'.$depth.':'.$this->nameId($name);
+        $inheriting = []; // cache slots of the visited elements that take the value of the next one, with their own uncertainty
         $result = null;
 
-        while ($node !== null) {
-            $slot = $nodeKey.$suffix;
+        while ($id !== 0) {
+            [$node, $nodeKey] = $this->elements[$id];
+            $slot = 'i'.$id.$suffix;
 
             if (array_key_exists($slot, $this->customPropertyCache)) {
                 $result = [$this->customPropertyCache[$slot], isset($this->approximateProperties[$slot])];
@@ -954,38 +990,32 @@ class CssParser
                 break;
             }
 
-            $raw = $this->ownCustomProperty($node, $nodeKey, $name);
+            [$raw, $maybe] = $this->ownCustomProperty($node, $nodeKey, $name);
             $keyword = $raw === null ? null : strtolower(trim($raw));
 
             if ($raw !== null && ! in_array($keyword, self::INHERITING_KEYWORDS, true)) {
-                $result = $keyword === 'initial' ? [null, false] : $this->declaredCustomProperty($node, $nodeKey, $nodeKey, $name, $raw, $depth);
+                [$value, $nested] = $keyword === 'initial' ? [null, false] : $this->declaredCustomProperty($node, $nodeKey, $id, $name, $raw, $depth);
+                $result = [$value, $nested || $maybe];
 
                 break;
             }
 
-            if (count($this->customPropertyCache) + count($inheriting) >= self::MAX_CACHED_CUSTOM_PROPERTIES) {
+            if ($this->cacheIsFull()) {
                 return [false, true];
             }
 
-            $inheriting[] = [$slot, $keyword === 'revert-layer'];
-
-            if ($universal) {
-                $parent = $node->parentNode;
-                [$node, $nodeKey] = $parent instanceof DOMElement ? [$parent, $this->nodeKey($parent)] : [null, ''];
-            } else {
-                [$node, $nodeKey] = $this->owner($this->nextOwner($nodeKey));
-            }
+            $inheriting[] = [$slot, $maybe || $keyword === 'revert-layer'];
+            $id = $universal ? $this->parentId($id) : $this->nextOwner($id);
         }
 
         [$value, $approximate] = $result ?? $this->rootCustomProperty($name, $depth);
 
         for ($i = count($inheriting) - 1; $i >= 0; $i--) {
-            [$slot, $revertLayer] = $inheriting[$i];
-            $approximate = $approximate || $revertLayer;
-            $this->customPropertyCache[$slot] = $value;
+            [$slot, $uncertain] = $inheriting[$i];
+            $approximate = $approximate || $uncertain;
 
-            if ($approximate) {
-                $this->approximateProperties[$slot] = true;
+            if (! $this->remember($slot, $value, $approximate)) {
+                return [false, true];
             }
         }
 
@@ -993,64 +1023,115 @@ class CssParser
     }
 
     /**
-     * The element's own cascaded declaration of $name: the heaviest among its matching rules (as in declarationsFor())
-     * and its style attribute.
+     * The element's own cascaded declaration of $name among its matching rules (as in declarationsFor()) and its style
+     * attribute, and whether a maybe rule covering the element declares $name with more weight.
+     *
+     * @return array{0: ?string, 1: bool}
      */
-    private function ownCustomProperty(DOMElement $element, string $key, string $name): ?string
+    private function ownCustomProperty(DOMElement $element, string $key, string $name): array
     {
-        $value = $weight = null;
+        $declarers = $this->declarers[$name] ?? [];
+        $value = $weight = $maybe = null;
+        $definite = [
+            ...$this->declaring($this->index[$key] ?? [], $declarers),
+            ...$this->declaring($this->customIndex[$key] ?? [], $declarers),
+            ...$this->universalDeclarers[$name] ?? [],
+        ];
 
-        foreach ([$this->index[$key] ?? [], $this->customIndex[$key] ?? [], $this->universalCustomRules] as $positions) {
-            foreach ($positions as $position) {
-                $declaration = $this->rules[$position]['properties'][$name] ?? null;
+        foreach ($definite as $position) {
+            $candidate = $this->declarationWeight($position, $name);
 
-                if ($declaration === null) {
-                    continue;
-                }
-
-                $rule = $this->rules[$position];
-                $candidate = [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']];
-
-                if ($weight === null || $candidate > $weight) {
-                    [$value, $weight] = [$declaration['value'], $candidate];
-                }
+            if ($candidate !== null && ($weight === null || $candidate > $weight)) {
+                [$value, $weight] = [$this->rules[$position]['properties'][$name]['value'], $candidate];
             }
         }
 
         $inline = $this->inlineCustomProperties[$key][$name] ?? null;
 
         if ($inline !== null && ($weight === null || [$inline['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX] > $weight)) {
-            $value = $inline['value'];
+            [$value, $weight] = [$inline['value'], [$inline['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX]];
         }
 
-        return $value;
+        foreach ([...$this->declaring($this->maybeIndex[$key] ?? [], $declarers), ...$this->universalMaybe[$name] ?? []] as $position) {
+            $candidate = $this->declarationWeight($position, $name);
+            $maybe = $candidate !== null && ($maybe === null || $candidate > $maybe) ? $candidate : $maybe;
+        }
+
+        return [$value, $maybe !== null && ($weight === null || $maybe > $weight)];
+    }
+
+    /** @return list<int>|null cascade weight of the rule's declaration of $name, null when it does not declare it */
+    private function declarationWeight(int $position, string $name): ?array
+    {
+        $rule = $this->rules[$position];
+        $declaration = $rule['properties'][$name] ?? null;
+
+        return $declaration === null ? null : [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']];
     }
 
     /**
-     * A declared custom property value with its var() references substituted in the declaring element's context.
-     * $owner names the declaration in the cache and the cycle guard.
+     * The element's rule positions that may declare the name: binary search of the declarers when they are few, else all
+     * positions (the caller checks each declaration). Both lists are ascending.
+     *
+     * @param  list<int>  $positions
+     * @param  list<int>  $declarers
+     * @return list<int>
+     */
+    private function declaring(array $positions, array $declarers): array
+    {
+        if ($positions === [] || $declarers === []) {
+            return [];
+        }
+
+        if (count($declarers) * 8 >= count($positions)) {
+            return $positions;
+        }
+
+        $found = [];
+
+        foreach ($declarers as $position) {
+            for ($low = 0, $high = count($positions) - 1; $low <= $high;) {
+                $middle = ($low + $high) >> 1;
+
+                if ($positions[$middle] === $position) {
+                    $found[] = $position;
+
+                    break;
+                }
+
+                [$low, $high] = $positions[$middle] < $position ? [$middle + 1, $high] : [$low, $middle - 1];
+            }
+        }
+
+        return $found;
+    }
+
+    /**
+     * A declared custom property value with its var() references substituted in the declaring element's context;
+     * $id names the declaring element in the cache and the cycle guard (-1: the root custom properties).
      *
      * @return array{0: string|null|false, 1: bool}
      */
-    private function declaredCustomProperty(DOMElement $element, string $key, string $owner, string $name, string $raw, int $depth): array
+    private function declaredCustomProperty(DOMElement $element, string $key, int $id, string $name, string $raw, int $depth): array
     {
         if (stripos($raw, 'var(') === false) {
             return [$raw, false];
         }
 
-        $slot = $owner."\0".$depth.':'.$name;
+        $nameId = $this->nameId($name);
+        $slot = 'd'.$id.':'.$depth.':'.$nameId;
 
         if (array_key_exists($slot, $this->customPropertyCache)) {
             return [$this->customPropertyCache[$slot], isset($this->approximateProperties[$slot])];
         }
 
-        $guard = $owner."\0".$name;
+        $guard = $id.':'.$nameId;
 
         if (isset($this->computingProperties[$guard])) {
             return [null, true]; // a cycle: invalid at computed-value time
         }
 
-        if (count($this->customPropertyCache) >= self::MAX_CACHED_CUSTOM_PROPERTIES) {
+        if ($this->cacheIsFull()) {
             return [false, true];
         }
 
@@ -1058,13 +1139,7 @@ class CssParser
         [$value, $approximate] = $this->substituteIn($element, $key, $raw, $depth);
         unset($this->computingProperties[$guard]);
 
-        $this->customPropertyCache[$slot] = $value;
-
-        if ($approximate) {
-            $this->approximateProperties[$slot] = true;
-        }
-
-        return [$value, $approximate];
+        return $this->remember($slot, $value, $approximate) ? [$value, $approximate] : [false, true];
     }
 
     /**
@@ -1083,10 +1158,34 @@ class CssParser
             return [null, false];
         }
 
-        return $this->declaredCustomProperty($root, $rootKey, "\0root", $name, $raw, $depth);
+        return $this->declaredCustomProperty($root, $rootKey, -1, $name, $raw, $depth);
     }
 
-    /** Collect the declared names, the style-attribute custom properties and the names every element declares (once per parse). */
+    /** Store a cache entry within MAX_CACHED_CUSTOM_PROPERTIES and MAX_CACHED_CUSTOM_PROPERTY_BYTES; false when it does not fit. */
+    private function remember(string $slot, string|null|false $value, bool $approximate): bool
+    {
+        $bytes = strlen($slot) + (is_string($value) ? strlen($value) : 0) + self::CACHE_ENTRY_BYTES;
+
+        if (count($this->customPropertyCache) >= self::MAX_CACHED_CUSTOM_PROPERTIES || $this->cachedBytes + $bytes > self::MAX_CACHED_CUSTOM_PROPERTY_BYTES) {
+            return false;
+        }
+
+        $this->customPropertyCache[$slot] = $value;
+        $this->cachedBytes += $bytes;
+
+        if ($approximate) {
+            $this->approximateProperties[$slot] = true;
+        }
+
+        return true;
+    }
+
+    private function cacheIsFull(): bool
+    {
+        return count($this->customPropertyCache) >= self::MAX_CACHED_CUSTOM_PROPERTIES || $this->cachedBytes >= self::MAX_CACHED_CUSTOM_PROPERTY_BYTES;
+    }
+
+    /** Collect the declared names and their rules, the style-attribute custom properties and the names every element may declare (once per parse). */
     private function prepareCustomProperties(): void
     {
         if ($this->declaredNames !== null) {
@@ -1096,10 +1195,11 @@ class CssParser
         $this->buildIndex();
         $names = [];
 
-        foreach ($this->rules as $rule) {
+        foreach ($this->rules as $position => $rule) {
             foreach ($rule['properties'] as $name => $declaration) {
                 if (str_starts_with((string) $name, '--')) {
                     $names[$name] = true;
+                    $this->declarers[$name][] = $position;
                 }
             }
         }
@@ -1118,11 +1218,9 @@ class CssParser
         $winners = [];
 
         foreach ($this->universalRules as $position) {
-            $rule = $this->rules[$position];
-
-            foreach ($rule['properties'] as $name => $declaration) {
+            foreach ($this->rules[$position]['properties'] as $name => $declaration) {
                 if (str_starts_with((string) $name, '--')) {
-                    $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']]);
+                    $this->keepHeavier($winners, $name, $declaration, $this->declarationWeight($position, $name));
                 }
             }
         }
@@ -1133,11 +1231,38 @@ class CssParser
             }
         }
 
+        foreach (['universalDeclarers' => $this->universalCustomRules, 'universalMaybe' => $this->universalMaybeRules] as $map => $positions) {
+            foreach ($positions as $position) {
+                foreach ($this->rules[$position]['properties'] as $name => $declaration) {
+                    if (str_starts_with((string) $name, '--')) {
+                        $this->{$map}[$name][] = $position;
+                    }
+                }
+            }
+        }
+
+        $this->universalNames += array_fill_keys(array_keys($this->universalMaybe), true);
         $this->declaredNames = $names;
     }
 
-    /** Node path of the nearest custom-property owner, the element itself or an ancestor; '' for none. One entry per element. */
-    private function nearestOwner(DOMElement $element, string $key): string
+    /** Compact id of an element the lookups visit, assigned on first use. */
+    private function elementId(DOMElement $element, string $key): int
+    {
+        if (! isset($this->elementIds[$key])) {
+            $this->elementIds[$key] = count($this->elements) + 1;
+            $this->elements[$this->elementIds[$key]] = [$element, $key, null, null];
+        }
+
+        return $this->elementIds[$key];
+    }
+
+    private function nameId(string $name): int
+    {
+        return $this->nameIds[$name] ??= count($this->nameIds) + 1;
+    }
+
+    /** Id of the nearest custom-property owner, the element itself or an ancestor; 0 for none. One entry per element. */
+    private function nearestOwner(DOMElement $element, string $key): int
     {
         $pending = [];
         $node = $element;
@@ -1150,19 +1275,18 @@ class CssParser
                 break;
             }
 
+            $pending[] = $nodeKey;
+
             if (isset($this->customOwners[$nodeKey])) {
-                $owner = $nodeKey;
-                $this->owners[$owner] ??= [$node, null];
-                $pending[] = $nodeKey;
+                $owner = $this->elementId($node, $nodeKey);
 
                 break;
             }
 
-            $pending[] = $nodeKey;
             $parent = $node->parentNode;
 
             if (! $parent instanceof DOMElement) {
-                $owner = '';
+                $owner = 0;
 
                 break;
             }
@@ -1178,21 +1302,26 @@ class CssParser
         return $owner;
     }
 
-    /** The owner above an owner; '' for none. */
-    private function nextOwner(string $owner): string
+    /** The owner above an owner; 0 for none. */
+    private function nextOwner(int $id): int
     {
-        if ($this->owners[$owner][1] === null) {
-            $parent = $this->owners[$owner][0]->parentNode;
-            $this->owners[$owner][1] = $parent instanceof DOMElement ? $this->nearestOwner($parent, $this->nodeKey($parent)) : '';
+        if ($this->elements[$id][2] === null) {
+            $parent = $this->elements[$id][0]->parentNode;
+            $this->elements[$id][2] = $parent instanceof DOMElement ? $this->nearestOwner($parent, $this->nodeKey($parent)) : 0;
         }
 
-        return $this->owners[$owner][1];
+        return $this->elements[$id][2];
     }
 
-    /** @return array{0: ?DOMElement, 1: string} the owner's element and node path, [null, ''] for none */
-    private function owner(string $owner): array
+    /** The parent of a visited element; 0 for none. */
+    private function parentId(int $id): int
     {
-        return $owner === '' ? [null, ''] : [$this->owners[$owner][0], $owner];
+        if ($this->elements[$id][3] === null) {
+            $parent = $this->elements[$id][0]->parentNode;
+            $this->elements[$id][3] = $parent instanceof DOMElement ? $this->elementId($parent, $this->nodeKey($parent)) : 0;
+        }
+
+        return $this->elements[$id][3];
     }
 
     /**
@@ -1219,36 +1348,168 @@ class CssParser
     }
 
     /**
-     * The custom property names of a rule whose selector cannot be evaluated: the element may see their values, so
-     * substituting them is approximate. Pseudo-element rules never style the element itself, and a selector whose only
-     * unsupported parts are user-action states (:hover, :focus, …) does not apply to the base state that is measured;
-     * :host declarations resolve through the root custom properties.
+     * Index a rule with custom properties whose selector cannot be evaluated as a "maybe" rule: it covers the elements
+     * matched by the supported simple selectors of its rightmost compound (every element when none is left). Left out:
+     * pseudo-element rules, which never style the element itself; selectors whose only unsupported parts are
+     * user-action states outside :not() (:hover, :focus, …), which do not apply to the base state that is measured;
+     * and :host, which resolves through the root custom properties.
      *
      * @param  array{selector: string, properties: array<string, array{value: string, important: bool}>}  $rule
+     * @param  array{class: array<string, list<DOMElement>>, id: array<string, list<DOMElement>>}|null  $tokens
      */
-    private function recordUncertainNames(array $rule): void
+    private function indexMaybeRule(int $position, array $rule, ?array &$tokens): void
     {
         $selector = $rule['selector'];
 
-        if (in_array(strtolower($selector), self::ROOT_SELECTORS, true)) {
-            return; // :host resolves through the root custom properties
-        }
-
-        if (str_contains($selector, '::') || preg_match('/:(?:before|after|first-line|first-letter)(?![\w-])/i', $selector) === 1) {
+        if (in_array(strtolower($selector), self::ROOT_SELECTORS, true)
+            || str_contains($selector, '::')
+            || preg_match('/:(?:before|after|first-line|first-letter)(?![\w-])/i', $selector) === 1
+            || $this->onlyUserActionStates($selector)) {
             return;
         }
 
-        $base = preg_replace('/:(?:hover|focus-visible|focus-within|focus|active|visited)(?![\w-])/i', '[_]', $selector) ?? $selector;
+        $compound = $this->reducedRightmostCompound($selector);
+        $expression = $compound === '' ? null : $this->simpleSelectorToXpath($compound);
 
-        if ($base !== $selector && $this->simpleSelectorToXpath($base) !== null) {
+        if ($expression === null || $expression === '//*') {
+            $this->universalMaybeRules[] = $position;
+
             return;
         }
 
-        foreach ($rule['properties'] as $name => $declaration) {
-            if (str_starts_with((string) $name, '--')) {
-                $this->uncertainNames[$name] = true;
+        foreach ($this->elementsMatching($compound, $expression, $tokens) as $element) {
+            $key = $this->nodeKey($element);
+            $this->maybeIndex[$key][] = $position;
+            $this->customOwners[$key] = true;
+        }
+    }
+
+    /** Whether the selector becomes supported once its user-action states outside parentheses and brackets are neutralised. */
+    private function onlyUserActionStates(string $selector): bool
+    {
+        $base = '';
+        $depth = 0;
+        $length = strlen($selector);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $selector[$i];
+
+            if ($char === '\\') {
+                $base .= substr($selector, $i++, 2);
+
+                continue;
+            }
+
+            if ($char === '(' || $char === '[') {
+                $depth++;
+            } elseif ($char === ')' || $char === ']') {
+                $depth = max(0, $depth - 1);
+            } elseif ($char === ':' && $depth === 0 && preg_match('/:(?:hover|focus-visible|focus-within|focus|active|visited)(?![\w-])/Ai', $selector, $m, 0, $i) === 1) {
+                $base .= '[_]';
+                $i += strlen($m[0]) - 1;
+
+                continue;
+            }
+
+            $base .= $char;
+        }
+
+        return $base !== $selector && $this->simpleSelectorToXpath($base) !== null;
+    }
+
+    /**
+     * The rightmost compound of a selector reduced to the simple selectors the parser supports (type, class, id,
+     * attribute, :root, :first-child, :last-child, :link, :not(compound)); '' when none is left.
+     */
+    private function reducedRightmostCompound(string $selector): string
+    {
+        $start = 0;
+        $depth = 0;
+        $quote = null;
+        $length = strlen($selector);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $selector[$i];
+
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    $i++;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+            } elseif ($char === '\\') {
+                $i++;
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '(' || $char === '[') {
+                $depth++;
+            } elseif ($char === ')' || $char === ']') {
+                $depth = max(0, $depth - 1);
+            } elseif ($depth === 0 && ($char === '>' || $char === '+' || $char === '~' || ctype_space($char))) {
+                $start = $i + 1;
             }
         }
+
+        $compound = substr($selector, $start);
+        $length = strlen($compound);
+        $kept = preg_match('/[a-zA-Z][a-zA-Z0-9-]*|\*/A', $compound, $m) === 1 ? $m[0] : '';
+        $position = strlen($kept);
+        $kept = $kept === '*' ? '' : $kept;
+
+        while ($position < $length) {
+            $begin = $position;
+            $char = $compound[$position];
+
+            if (($char === '.' || $char === '#') && preg_match('/'.self::IDENTIFIER.'/A', $compound, $m, 0, $position + 1) === 1) {
+                $position += 1 + strlen($m[0]);
+            } elseif ($char === '[' && ($end = $this->closingBracket($compound, $position)) !== null) {
+                $position = $end + 1;
+            } elseif ($char === ':' && preg_match('/::?-?[\w-]+/A', $compound, $m, 0, $position) === 1) {
+                $position += strlen($m[0]);
+
+                if (($compound[$position] ?? '') === '(') {
+                    $end = $this->closingParenthesis($compound, $position);
+
+                    if ($end === null) {
+                        break;
+                    }
+
+                    $position = $end + 1;
+                }
+            } else {
+                break;
+            }
+
+            $token = substr($compound, $begin, $position - $begin);
+            $kept .= $this->simpleSelectorToXpath('*'.$token) === null ? '' : $token;
+        }
+
+        return $kept;
+    }
+
+    /** Index of the bracket closing the one at $open (quotes respected), or null. */
+    private function closingBracket(string $value, int $open): ?int
+    {
+        $quote = null;
+        $length = strlen($value);
+
+        for ($i = $open + 1; $i < $length; $i++) {
+            $char = $value[$i];
+
+            if ($quote !== null) {
+                if ($char === '\\') {
+                    $i++;
+                } elseif ($char === $quote) {
+                    $quote = null;
+                }
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === ']') {
+                return $i;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -1440,7 +1701,7 @@ class CssParser
     private function simplePredicate(string $selector, int &$position, array &$tokens = []): ?string
     {
         $char = $selector[$position];
-        $ident = '-?(?:[a-zA-Z_]|\\\\.|[^\x00-\x7F])(?:[\w-]|\\\\.|[^\x00-\x7F])*';
+        $ident = self::IDENTIFIER;
 
         if ($char === '#' || $char === '.') {
             if (preg_match('/'.$ident.'/A', $selector, $m, 0, $position + 1) !== 1) {

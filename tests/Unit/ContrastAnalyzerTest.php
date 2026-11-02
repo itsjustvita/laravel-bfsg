@@ -7,6 +7,7 @@ use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class ContrastAnalyzerTest extends AnalyzerTestCase
 {
@@ -173,6 +174,25 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
         $violation = $this->assertHasViolation($this->analyze($this->page($css, '<p class="md:text-gray-300">Hi</p>')), 'contrast.insufficient', severity: Severity::Error);
         $this->assertSame('1.47', $violation->params['ratio'], 'the same result as a plain color: #d1d5db in that block');
+    }
+
+    /** @return array<string, array{0: string}> Tailwind v3 variant rules that no element on the page uses */
+    public static function unusedTailwindVariants(): array
+    {
+        return [
+            'disabled:' => ['.disabled\\:text-gray-400:disabled{--tw-text-opacity:1;color:rgb(156 163 175 / var(--tw-text-opacity))}'],
+            'even:' => ['.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255 / var(--tw-bg-opacity))} .even\\:bg-gray-50:nth-child(even){--tw-bg-opacity:1;background-color:rgb(249 250 251 / var(--tw-bg-opacity))}'],
+            'peer-checked:' => ['.peer:checked ~ .peer-checked\\:text-blue-600{--tw-text-opacity:1;color:rgb(37 99 235 / var(--tw-text-opacity))}'],
+        ];
+    }
+
+    #[DataProvider('unusedTailwindVariants')]
+    public function test_unused_tailwind_variants_keep_errors_definite(string $variant): void
+    {
+        $css = '.text-gray-300{--tw-text-opacity:1;color:rgb(209 213 219 / var(--tw-text-opacity))}'.$variant;
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<div class="bg-white"><p class="text-gray-300">Hi</p></div>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('1.47', $violation->params['ratio']);
     }
 
     public function test_bootstrap_button_variables(): void

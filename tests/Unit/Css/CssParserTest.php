@@ -479,11 +479,17 @@ class CssParserTest extends TestCase
     public function test_custom_properties_from_unsupported_selectors_are_approximate(): void
     {
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} li:nth-child(odd){--fg:#111} li{color:var(--fg)}', '<ul><li id="t">x</li></ul>'), 'odd rows may render another value');
-        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :root:has(.on){--fg:#111} p{color:var(--fg)}', '<p id="t" class="on">x</p>'));
-        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .a ~ p{--fg:#111} p{color:var(--fg, #000)}', '<p id="t">x</p>'), 'also when the fallback is not used');
-        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover{--fg:#111} a:focus-visible{--fg:#222} :active{--fg:#333} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'user-action states are not the base state');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} li:nth-child(odd){--fg:#111} p{color:var(--fg)}', '<div><p id="t">x</p></div>'), 'the maybe rule covers li elements only');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :root:has(.on){--fg:#111} p{color:var(--fg)}', '<p id="t" class="on">x</p>'), ':root:has() reduces to :root, whose value every element inherits');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .a ~ p{--fg:#111} p{color:var(--fg, #000)}', '<p id="t">x</p>'), 'the rightmost compound decides');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} div:nth-child(1){--fg:#111}', '<div><p id="t" style="color:var(--fg)">x</p></div>'), 'inherited from an element a maybe rule covers');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#111} li:nth-child(odd){--fg:#111} #t{--fg:#999} li{color:var(--fg)}', '<ul><li id="t">x</li></ul>'), 'a heavier definite declaration wins over the maybe rule');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .x:not(:hover){--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), ':not(:hover) matches at rest');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :not(:focus-visible){--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'an empty reduction covers every element');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover{--fg:#111} a:focus-visible{--fg:#222} :active{--fg:#333} .y:hover .z{--fg:#444} p{color:var(--fg)}', '<p id="t" class="x z">x</p>'), 'user-action states are not the base state');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} *, ::before, ::after{--other:1} p::first-line{--fg:#111} p:after{--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'pseudo-element rules never style the element itself');
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .x:hover:nth-child(2){--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'an unsupported part besides the state');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .disabled\\:x:disabled{--fg:#111} .peer:checked ~ .peer-checked\\:x{--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'variant classes the element does not carry');
     }
 
     public function test_invalid_at_computed_value_time_uses_the_fallback(): void
