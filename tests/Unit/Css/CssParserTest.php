@@ -283,6 +283,219 @@ class CssParserTest extends TestCase
         $this->assertFalse($parser->isBold($byId['b']));
     }
 
+    /** Lower bound of the font size of #t (a p inside the body unless $body says otherwise). */
+    private function lowerBound(string $css, string $body = '<p id="t">x</p>'): ?float
+    {
+        [$parser, $document] = $this->parsed($css, $body);
+
+        return $parser->fontSizeLowerBoundPx($this->target($document));
+    }
+
+    /** @return array<string, array{0: string, 1: ?float}> */
+    public static function fontSizeLowerBounds(): array
+    {
+        return [
+            '16px' => ['16px', 16.0],
+            '2rem' => ['2rem', 32.0],
+            'clamp(2rem, 5vw, 3rem)' => ['clamp(2rem, 5vw, 3rem)', 32.0],
+            'min(20px, 2rem)' => ['min(20px, 2rem)', 20.0],
+            'max(1rem, 5vw)' => ['max(1rem, 5vw)', 16.0],
+            'calc(1rem + 2px)' => ['calc(1rem + 2px)', 18.0],
+            '150%' => ['150%', 24.0],
+            'var(--x)' => ['var(--x)', 30.0],
+            '5vw' => ['5vw', null],
+            'calc(100vw - 2rem)' => ['calc(100vw - 2rem)', null],
+        ];
+    }
+
+    #[DataProvider('fontSizeLowerBounds')]
+    public function test_font_size_lower_bound(string $value, ?float $expected): void
+    {
+        $bound = $this->lowerBound(":root{--x:1.875rem} p{font-size:$value}");
+
+        $expected === null ? $this->assertNull($bound) : $this->assertEqualsWithDelta($expected, $bound, 0.001);
+    }
+
+    /** @return array<string, array{0: string, 1: ?float}> */
+    public static function fontSizeLowerBoundForms(): array
+    {
+        return [
+            'absolute unit' => ['12pt', 16.0],
+            'keyword' => ['x-large', 24.0],
+            'relative keyword' => ['larger', 19.2],
+            'inherit' => ['inherit', 16.0],
+            'initial' => ['initial', 16.0],
+            'em' => ['1.5em', 24.0],
+            'scientific notation' => ['1.5e1px', 15.0],
+            'uppercase' => ['CALC(1REM + 2PX)', 18.0],
+            'product, number first' => ['calc(2 * 1rem)', 32.0],
+            'product, number last' => ['calc(1rem * 1.5)', 24.0],
+            'products bind tighter than sums' => ['calc(1rem + 2 * 3px)', 22.0],
+            'parentheses and nested functions' => ['calc((1rem + 2px) * 2 + min(4px, 1em))', 40.0],
+            'number products' => ['calc(2 * 3 * 1px)', 6.0],
+            'a negative sum is clamped to zero' => ['calc(-2px)', 0.0],
+            'clamp: the maximum caps the preferred value' => ['clamp(1vw, 30px, 10px)', 10.0],
+            'clamp: the preferred value above the minimum' => ['clamp(10px, 20px, 30px)', 20.0],
+            'clamp: unknown minimum' => ['clamp(1vw, 20px, 30px)', 20.0],
+            'clamp: unknown minimum and maximum' => ['clamp(1vw, 20px, 5vw)', null],
+            'min with an unknown argument' => ['min(20px, 5vw)', null],
+            'max without a known argument' => ['max(5vw, 1vh)', null],
+            'container and font-relative units' => ['calc(1cqi + 1ex)', null],
+            'negative factor' => ['calc(-1 * 1rem)', null],
+            'subtraction' => ['calc(2rem - 2px)', null],
+            'division' => ['calc(2rem / 2)', null],
+            'non-finite number' => ['1e999px', null],
+            'overflowing product' => ['calc(1e300 * 1e300 * 1px)', null],
+            'negative length' => ['-2px', null],
+            'unsupported function' => ['round(up, 20px, 1px)', null],
+            'operator without whitespace' => ['calc(1px +2px)', null],
+            'length plus number' => ['calc(1px + 2)', null],
+            'unclosed function' => ['calc(1px + 2px', null],
+            'two values' => ['16px 2px', null],
+            'parentheses outside a function' => ['(16px)', null],
+            'undefined custom property' => ['var(--undefined)', null],
+            'custom property fallback' => ['var(--undefined, 20px)', 20.0],
+        ];
+    }
+
+    #[DataProvider('fontSizeLowerBoundForms')]
+    public function test_font_size_lower_bound_forms(string $value, ?float $expected): void
+    {
+        $bound = $this->lowerBound("p{font-size:$value}");
+
+        $expected === null ? $this->assertNull($bound) : $this->assertEqualsWithDelta($expected, $bound, 0.001);
+    }
+
+    public function test_font_size_lower_bound_follows_the_root_and_the_parent(): void
+    {
+        $this->assertEqualsWithDelta(20.0, $this->lowerBound('html{font-size:62.5%} p{font-size:2rem}'), 0.001);
+        $this->assertEqualsWithDelta(32.0, $this->lowerBound('html{font-size:2rem} p{font-size:1rem}'), 0.001, 'rem on the root is relative to the initial size');
+        $this->assertEqualsWithDelta(32.0, $this->lowerBound('html{font-size:2vw} p{font-size:2rem}'), 0.001, 'an unknown root size counts as 16px');
+
+        $unknownParent = '<div class="a"><p id="t">x</p><h1 id="h">x</h1></div>';
+        $this->assertNull($this->lowerBound('.a{font-size:5vw}', $unknownParent), 'inherits an unknown size');
+        $this->assertNull($this->lowerBound('.a{font-size:5vw} p{font-size:2em}', $unknownParent));
+        $this->assertNull($this->lowerBound('.a{font-size:5vw} p{font-size:50%}', $unknownParent));
+        $this->assertEqualsWithDelta(16.0, $this->lowerBound('.a{font-size:5vw} p{font-size:1rem}', $unknownParent), 0.001);
+        $this->assertEqualsWithDelta(32.0, $this->lowerBound('.a{font-size:1rem}', '<div class="a"><h1 id="t">x</h1></div>'), 0.001, 'the UA heading size');
+        $this->assertNull($this->lowerBound('.a{font-size:5vw}', '<div class="a"><h1 id="t">x</h1></div>'));
+    }
+
+    public function test_font_size_px_falls_back_to_the_estimate_without_a_lower_bound(): void
+    {
+        [$parser, $document] = $this->parsed('.a{font-size:5vw} p{font-size:2em}', '<div class="a"><p id="t">x</p></div>');
+
+        $this->assertNull($parser->fontSizeLowerBoundPx($this->target($document)));
+        $this->assertEqualsWithDelta(32.0, $parser->fontSizePx($this->target($document)), 0.001);
+    }
+
+    public function test_font_shorthand_sets_size_and_weight(): void
+    {
+        $cases = [
+            'p{font:italic bold 20px/1.5 serif}' => [20.0, true],
+            'p{font:700 clamp(2rem, 5vw, 3rem)/1 sans-serif}' => [32.0, true],
+            'p{font:small-caps 600 condensed 1.5rem / 2 "Open Sans", serif}' => [24.0, false],
+            'p{font:oblique 10deg 30px serif}' => [30.0, false],
+            ':root{--f:bold 30px serif} p{font:var(--f)}' => [30.0, true],
+            'div{font:bold 30px serif} p{font:inherit}' => [30.0, true],
+            'p{font-size:30px} p.a{font:20px serif}' => [20.0, false],
+            'p.a{font-size:30px} p{font:bold 20px serif}' => [30.0, true],
+            'p{font:menu}' => [null, false],
+            'p{font:20px}' => [null, false],
+        ];
+
+        foreach ($cases as $css => [$size, $bold]) {
+            [$parser, $document] = $this->parsed($css, '<div><p id="t" class="a">x</p></div>');
+            $bound = $parser->fontSizeLowerBoundPx($this->target($document));
+
+            $size === null ? $this->assertNull($bound, $css) : $this->assertEqualsWithDelta($size, $bound, 0.001, $css);
+            $this->assertSame($bold, $parser->isBold($this->target($document)), $css);
+        }
+
+        [$parser, $document] = $this->parsed('h3{font:20px serif}', '<h3 id="t">x</h3>');
+        $this->assertFalse($parser->isBold($this->target($document)), 'the shorthand resets the weight to normal');
+    }
+
+    /** @return array<string, array{0: string, 1: string, 2: bool}> */
+    public static function fontWeights(): array
+    {
+        return [
+            'inherit walks up instead of the UA bold' => ['h3{font-weight:inherit}', '<div><h3 id="t">x</h3></div>', false],
+            'inherit takes a bold parent' => ['div{font-weight:700} h3{font-weight:inherit}', '<div><h3 id="t">x</h3></div>', true],
+            'unset inherits' => ['div{font-weight:bold} p{font-weight:unset}', '<div><p id="t">x</p></div>', true],
+            'missing inherits' => ['div{font-weight:bold}', '<div><p id="t">x</p></div>', true],
+            'UA bold without a font-weight rule' => ['h3{color:#111}', '<h3 id="t">x</h3>', true],
+            'a font-weight rule replaces the UA bold' => ['h3{font-weight:normal}', '<h3 id="t">x</h3>', false],
+            'numeric below 700' => ['p{font-weight:650}', '<p id="t">x</p>', false],
+            'numeric 700' => ['p{font-weight:700}', '<p id="t">x</p>', true],
+            'custom property' => [':root{--font-weight-bold:700} p{font-weight:var(--font-weight-bold)}', '<p id="t">x</p>', true],
+            'undefined custom property inherits' => ['div{font-weight:800} p{font-weight:var(--undefined)}', '<div><p id="t">x</p></div>', true],
+            'invalid value is dropped' => ['p{font-weight:1001}', '<div><p id="t">x</p></div>', false],
+            'bolder below 350' => ['div{font-weight:349} p{font-weight:bolder}', '<div><p id="t">x</p></div>', false],
+            'bolder from 350' => ['div{font-weight:350} p{font-weight:bolder}', '<div><p id="t">x</p></div>', true],
+            'bolder below 100' => ['div{font-weight:99} p{font-weight:bolder}', '<div><p id="t">x</p></div>', false],
+            'bolder at 900 keeps it' => ['div{font-weight:950} p{font-weight:bolder}', '<div><p id="t">x</p></div>', true],
+            'lighter below 750' => ['div{font-weight:749} p{font-weight:lighter}', '<div><p id="t">x</p></div>', false],
+            'lighter from 750' => ['div{font-weight:750} p{font-weight:lighter}', '<div><p id="t">x</p></div>', true],
+            'lighter from 900' => ['div{font-weight:900} p{font-weight:lighter}', '<div><p id="t">x</p></div>', true],
+            'lighter twice from 900' => ['div{font-weight:900} p{font-weight:lighter} span{font-weight:lighter}', '<div><p><span id="t">x</span></p></div>', false],
+            'bolder then lighter from 550' => ['div{font-weight:550} p{font-weight:bolder} span{font-weight:lighter}', '<div><p><span id="t">x</span></p></div>', true],
+            'bolder twice from 100' => ['div{font-weight:100} p{font-weight:bolder} span{font-weight:bolder}', '<div><p><span id="t">x</span></p></div>', true],
+            'lighter then bolder from 100' => ['div{font-weight:100} p{font-weight:lighter} span{font-weight:bolder}', '<div><p><span id="t">x</span></p></div>', false],
+        ];
+    }
+
+    #[DataProvider('fontWeights')]
+    public function test_font_weight(string $css, string $body, bool $bold): void
+    {
+        [$parser, $document] = $this->parsed($css, $body);
+
+        $this->assertSame($bold, $parser->isBold($this->target($document)));
+    }
+
+    public function test_font_size_math_is_capped_in_depth_and_length(): void
+    {
+        $nested = fn (int $depth, string $open = 'calc(') => str_repeat($open, $depth).'1px'.str_repeat(')', $depth);
+        $sum = fn (int $terms) => 'calc('.implode(' + ', array_fill(0, $terms, '1px')).')';
+
+        $this->assertEqualsWithDelta(1.0, $this->lowerBound('p{font-size:'.$nested(32).'}'), 0.001, '32 levels are followed');
+        $this->assertNull($this->lowerBound('p{font-size:'.$nested(33).'}'), 'deeper than 32 levels is unknown');
+        $this->assertNull($this->lowerBound('p{font-size:calc('.$nested(2000, '(').')}'), 'deep parentheses within the length limit');
+        $this->assertEqualsWithDelta(600.0, $this->lowerBound('p{font-size:'.$sum(600).'}'), 0.001);
+        $this->assertNull($this->lowerBound('p{font-size:'.$sum(700).'}'), 'longer than MAX_RESOLVED_LENGTH is unknown');
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function hostileFontSizes(): array
+    {
+        return ['calc() nested 10,000 deep' => ['nested'], '1 MB sum' => ['sum'], '1 MB sum in the font shorthand' => ['shorthand'], '2,000 nested parentheses' => ['parentheses']];
+    }
+
+    #[Group('performance')]
+    #[DataProvider('hostileFontSizes')]
+    public function test_hostile_font_sizes_resolve_within_the_time_budget(string $shape): void
+    {
+        $sum = 'calc(1px'.str_repeat(' + 1px', 174000).')'; // about 1 MB
+        $declaration = match ($shape) {
+            'nested' => 'font-size:'.str_repeat('calc(', 10000).'1px'.str_repeat(')', 10000),
+            'sum' => 'font-size:'.$sum,
+            'shorthand' => 'font:700 '.$sum.'/1 serif',
+            'parentheses' => 'font-size:calc('.str_repeat('(', 2000).'1px'.str_repeat(')', 2000).')',
+        };
+        [$parser, $document] = $this->parsed("p{{$declaration}}", '<div><p id="t">x</p></div>');
+        $parser->buildIndex();
+
+        $start = microtime(true);
+        $bound = $parser->fontSizeLowerBoundPx($this->target($document));
+        $estimate = $parser->fontSizePx($this->target($document));
+        $parser->isBold($this->target($document));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertNull($bound);
+        $this->assertEqualsWithDelta(16.0, $estimate, 0.001);
+        $this->assertLessThan(PerformanceBudget::seconds(0.2), $elapsed, sprintf('took %.3f s', $elapsed));
+    }
+
     public function test_rules_carry_the_index_of_their_stylesheet(): void
     {
         $document = HtmlDocument::fromHtml('<html><head><style>a{color:red}</style><style media="print">b{color:red}</style><style>c{color:red}</style></head><body></body></html>');

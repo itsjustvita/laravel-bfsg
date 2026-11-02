@@ -55,7 +55,7 @@ class ContrastAnalyzer extends BaseAnalyzer
     {
         $colors = $parser->resolveColors($element);
         $ratio = $colors['foreground']->contrastRatio($colors['background']);
-        $size = $parser->fontSizePx($element);
+        $size = $parser->fontSizeLowerBoundPx($element) ?? $parser->fontSizePx($element);
         $large = $size >= 24.0 || ($size >= 18.66 && $parser->isBold($element));
         [$aaNormal, $aaLarge] = self::THRESHOLDS['AA'];
         $aaRequired = $large ? $aaLarge : $aaNormal;

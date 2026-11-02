@@ -44,7 +44,7 @@ class CssParser
     private const MAX_REDUCED_COMPOUND_BYTES = 4096;
 
     /** Colour and font properties (spec §6.1) plus display/visibility for CSS-hidden detection. */
-    public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font-size', 'font-weight', 'display', 'visibility'];
+    public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font', 'font-size', 'font-weight', 'display', 'visibility'];
 
     /** At-rules whose body is unwrapped (their rules apply unconditionally for static analysis). */
     private const UNWRAPPED_AT_RULES = ['layer', 'supports', 'container', 'scope', 'document', '-moz-document'];
@@ -58,6 +58,30 @@ class CssParser
     private const TAG_FONT_FACTORS = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.67, 'small' => 0.83];
 
     private const BOLD_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th', 'b', 'strong'];
+
+    /** Nesting levels of math functions and parentheses a font-size lower bound follows; deeper is unknown. */
+    private const MAX_CALC_DEPTH = 32;
+
+    /** Absolute length units in px. */
+    private const ABSOLUTE_UNITS = ['px' => 1.0, 'pt' => 4 / 3, 'pc' => 16.0, 'in' => 96.0, 'cm' => 96 / 2.54, 'mm' => 96 / 25.4, 'q' => 96 / 101.6];
+
+    /** Viewport, container and font-relative units (other than em and rem): valid, but without a bound. */
+    private const UNBOUNDED_UNITS = '/^(?:[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|r?(?:ex|ch|lh|cap|ic))$/';
+
+    /** larger / smaller as factors of the parent size: engines use 1.2 and 1 / 1.2, so both are lower bounds. */
+    private const RELATIVE_FONT_SIZES = ['larger' => 1.2, 'smaller' => 0.83];
+
+    /** System fonts of the `font` shorthand: their size and weight are platform-dependent. */
+    private const SYSTEM_FONTS = ['caption', 'icon', 'menu', 'message-box', 'small-caption', 'status-bar'];
+
+    /** Keywords that may precede the size in the `font` shorthand besides weights: font-style, font-variant-css2, font-width-css3. */
+    private const FONT_PREFIX_KEYWORDS = [
+        'normal', 'italic', 'oblique', 'small-caps', 'ultra-condensed', 'extra-condensed', 'condensed', 'semi-condensed',
+        'semi-expanded', 'expanded', 'extra-expanded', 'ultra-expanded',
+    ];
+
+    /** `bolder` and `lighter` (CSS Fonts): [parent weight below, bolder, lighter] per row; null keeps the parent's weight. */
+    private const RELATIVE_WEIGHTS = [[100, 400, null], [350, 400, 100], [550, 700, 100], [750, 900, 400], [900, 900, 700], [PHP_FLOAT_MAX, null, 700]];
 
     /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
     protected array $rules = [];
@@ -106,6 +130,12 @@ class CssParser
 
     /** @var array<string, float> */
     private array $fontSizeCache = [];
+
+    /** @var array<string, ?float> node path => lower bound of the font size in px (null: unknown) */
+    private array $fontSizeBoundCache = [];
+
+    /** @var array<string, ?float> node path => computed font weight (null: unknown) */
+    private array $fontWeightCache = [];
 
     /** @var array<string, array<string, array{value: string, important: bool}>> */
     private array $declarationCache = [];
@@ -208,6 +238,7 @@ class CssParser
         $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
+        $this->fontSizeBoundCache = $this->fontWeightCache = [];
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
         $this->declaredNames = $this->rootContext = null;
@@ -562,12 +593,19 @@ class CssParser
         ];
     }
 
+    /** Font size in px: the lower bound (fontSizeLowerBoundPx()) where there is one, else an estimate. */
     public function fontSizePx(DOMElement $element): float
     {
         $key = $this->nodeKey($element);
 
         if (isset($this->fontSizeCache[$key])) {
             return $this->fontSizeCache[$key];
+        }
+
+        $bound = $this->fontSizeLowerBoundPx($element);
+
+        if ($bound !== null) {
+            return $this->fontSizeCache[$key] = $bound;
         }
 
         $parent = $element->parentNode instanceof DOMElement ? $this->fontSizePx($element->parentNode) : 16.0;
@@ -579,6 +617,41 @@ class CssParser
         }
 
         return $this->fontSizeCache[$key] = $size;
+    }
+
+    /**
+     * A guaranteed lower bound of the element's font size in px, null when there is none (unknown size). The winning
+     * `font-size` or `font` shorthand declaration, var() substituted, is evaluated: absolute units exactly, rem against
+     * the root's bound (16px when the root has none), em and % against the parent's bound, keywords per FONT_KEYWORDS;
+     * viewport, container and font-relative units have no bound. calc(), min(), max() and clamp() combine the bounds of
+     * their arguments (sums, products with a positive number); any other form, nesting deeper than MAX_CALC_DEPTH, a value
+     * longer than MAX_RESOLVED_LENGTH, a non-finite number and an approximate substitution have none. Without a
+     * declaration the parent's bound applies, scaled for headings and <small> as in the UA stylesheet.
+     */
+    public function fontSizeLowerBoundPx(DOMElement $element): ?float
+    {
+        $key = $this->nodeKey($element);
+
+        if (array_key_exists($key, $this->fontSizeBoundCache)) {
+            return $this->fontSizeBoundCache[$key];
+        }
+
+        $parent = $element->parentNode instanceof DOMElement ? $this->fontSizeLowerBoundPx($element->parentNode) : 16.0;
+        $declared = $this->winningDeclaration($element, 'font-size', 'font');
+
+        if ($declared === null) {
+            return $this->fontSizeBoundCache[$key] = $this->defaultFontSize($element, $parent);
+        }
+
+        [$value, $approximate] = $this->substituteValue($element, $key, $declared[0]);
+
+        if ($value === null || $approximate || strlen($value) > self::MAX_RESOLVED_LENGTH) {
+            return $this->fontSizeBoundCache[$key] = null;
+        }
+
+        $value = $declared[1] ? $this->fontShorthand($value)['size'] ?? null : strtolower(trim($value));
+
+        return $this->fontSizeBoundCache[$key] = $value === null ? null : $this->fontSizeBound($value, $parent, $element);
     }
 
     /**
@@ -606,27 +679,71 @@ class CssParser
         return $visibility === 'hidden' || $visibility === 'collapse';
     }
 
+    /**
+     * Whether the element's computed font weight is at least 700. The winning `font-weight` or `font` shorthand
+     * declaration (which sets `normal` unless it names a weight) counts, var() substituted; inherit, unset and no
+     * declaration take the parent's weight, except that BOLD_TAGS are 700 when no declaration sets their weight; bolder
+     * and lighter follow the CSS Fonts table. An unknown weight (a system font, an unsupported value) is not bold.
+     */
     public function isBold(DOMElement $element): bool
     {
-        for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
-            $value = strtolower($this->declarationsFor($node)['font-weight']['value'] ?? '');
+        return ($this->fontWeight($element) ?? 0.0) >= 700;
+    }
 
-            if ($value === '' || in_array($value, ['inherit', 'unset'], true)) {
-                if (in_array(Element::tag($node), self::BOLD_TAGS, true)) {
-                    return true;
-                }
+    /** Computed font weight of the element (null: unknown); see isBold(). */
+    private function fontWeight(DOMElement $element): ?float
+    {
+        $key = $this->nodeKey($element);
 
-                continue;
-            }
-
-            if (in_array($value, ['bold', 'bolder'], true)) {
-                return true;
-            }
-
-            return is_numeric($value) && (int) $value >= 700;
+        if (array_key_exists($key, $this->fontWeightCache)) {
+            return $this->fontWeightCache[$key];
         }
 
-        return false;
+        $declared = $this->winningDeclaration($element, 'font-weight', 'font');
+        $default = in_array(Element::tag($element), self::BOLD_TAGS, true) ? 700.0 : null; // UA stylesheet; null inherits
+        $parent = fn (): ?float => $element->parentNode instanceof DOMElement ? $this->fontWeight($element->parentNode) : 400.0;
+
+        if ($declared === null) {
+            return $this->fontWeightCache[$key] = $default ?? $parent();
+        }
+
+        [$value] = $this->substituteValue($element, $key, $declared[0]);
+
+        if ($value === null || strlen($value) > self::MAX_RESOLVED_LENGTH) {
+            return $this->fontWeightCache[$key] = $parent(); // invalid at computed-value time: as unset, which inherits
+        }
+
+        $value = $declared[1] ? $this->fontShorthand($value)['weight'] ?? null : strtolower(trim($value));
+        $weight = match (true) {
+            $value === null => null,
+            in_array($value, ['inherit', 'unset'], true) => $parent(),
+            $value === 'initial', $value === 'normal' => 400.0,
+            $value === 'bold' => 700.0,
+            $value === 'bolder', $value === 'lighter' => $this->relativeWeight($parent(), $value),
+            $value === 'revert' => $default ?? $parent(),
+            is_numeric($value) && (float) $value >= 1 && (float) $value <= 1000 => (float) $value,
+            $value === 'revert-layer' => null,
+            // Invalid: a literal is dropped at parse time (the UA weight applies), a substituted one is invalid at computed-value time.
+            default => stripos($declared[0], 'var(') === false ? $default ?? $parent() : $parent(),
+        };
+
+        return $this->fontWeightCache[$key] = $weight;
+    }
+
+    /** `bolder` or `lighter` of the parent's weight, per the CSS Fonts table. */
+    private function relativeWeight(?float $parent, string $keyword): ?float
+    {
+        if ($parent === null) {
+            return null;
+        }
+
+        foreach (self::RELATIVE_WEIGHTS as [$below, $bolder, $lighter]) {
+            if ($parent < $below) {
+                return (float) (($keyword === 'bolder' ? $bolder : $lighter) ?? $parent);
+            }
+        }
+
+        return $parent;
     }
 
     /** @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}>  $rules */
@@ -1742,18 +1859,368 @@ class CssParser
     /** The value of whichever of background / background-color wins the cascade for the element. */
     private function winningBackground(DOMElement $element): ?string
     {
-        $declarations = $this->declarationsFor($element);
-        $weights = $this->weightCache[$this->nodeKey($element)] ?? [];
-        $shorthand = $declarations['background'] ?? null;
-        $longhand = $declarations['background-color'] ?? null;
-
-        if ($shorthand === null || $longhand === null) {
-            return ($longhand ?? $shorthand)['value'] ?? null;
-        }
-
-        return $weights['background-color'] >= $weights['background'] ? $longhand['value'] : $shorthand['value'];
+        return $this->winningDeclaration($element, 'background-color', 'background')[0] ?? null;
     }
 
+    /**
+     * The value of whichever of a longhand and its shorthand wins the cascade for the element (the longhand on a tie),
+     * and whether it is the shorthand; null when neither is declared.
+     *
+     * @return array{0: string, 1: bool}|null
+     */
+    private function winningDeclaration(DOMElement $element, string $longhand, string $shorthand): ?array
+    {
+        $declarations = $this->declarationsFor($element);
+        $long = $declarations[$longhand] ?? null;
+        $short = $declarations[$shorthand] ?? null;
+
+        if ($short === null) {
+            return $long === null ? null : [$long['value'], false];
+        }
+
+        $weights = $this->weightCache[$this->nodeKey($element)] ?? [];
+
+        return $long !== null && $weights[$longhand] >= $weights[$shorthand] ? [$long['value'], false] : [$short['value'], true];
+    }
+
+    /**
+     * Size and weight of a `font` shorthand value (lowercased): a CSS-wide keyword stands for both; the weight is
+     * `normal` unless the value names one. Null for system fonts and values that are not a valid shorthand.
+     *
+     * @return array{size: string, weight: string}|null
+     */
+    private function fontShorthand(string $value): ?array
+    {
+        $value = strtolower(trim($value));
+
+        if (strlen($value) > self::MAX_RESOLVED_LENGTH || in_array($value, self::SYSTEM_FONTS, true)) {
+            return null;
+        }
+
+        if (in_array($value, ['inherit', 'initial', 'unset', 'revert', 'revert-layer'], true)) {
+            return ['size' => $value, 'weight' => $value];
+        }
+
+        $tokens = $this->splitTopLevel(preg_replace('/\s+/', ' ', $value) ?? $value, ' ');
+        $weight = 'normal';
+        $count = count($tokens);
+
+        // [ <font-style> || <font-variant-css2> || <font-weight> || <font-width-css3> ]? <font-size> [ / <line-height> ]? <font-family>
+        for ($i = 0; $i < $count && $i < 5; $i++) {
+            $token = $tokens[$i];
+
+            if (in_array($token, ['bold', 'bolder', 'lighter'], true) || (is_numeric($token) && (float) $token >= 1 && (float) $token <= 1000)) {
+                $weight = $token;
+            } elseif ($token === 'oblique' && preg_match('/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:deg|grad|rad|turn)$/', $tokens[$i + 1] ?? '') === 1) {
+                $i++; // oblique <angle>
+            } elseif (! in_array($token, self::FONT_PREFIX_KEYWORDS, true)) {
+                break;
+            }
+        }
+
+        // The size, an optional `/ <line-height>` (the slash may touch either side) and a family are required.
+        $token = $tokens[$i] ?? '';
+        $slash = $this->topLevelSlash($token);
+        $size = $slash === null ? $token : substr($token, 0, $slash);
+        $family = $i + 1;
+
+        if ($slash !== null) {
+            $family += $slash === strlen($token) - 1 ? 1 : 0; // `20px/ 1.2`: the line height is the next token
+        } elseif (str_starts_with($tokens[$family] ?? '', '/')) {
+            $family += $tokens[$family] === '/' ? 2 : 1;
+        }
+
+        return $size === '' || $family >= $count ? null : ['size' => $size, 'weight' => $weight];
+    }
+
+    /** Offset of the first `/` outside parentheses, or null. */
+    private function topLevelSlash(string $token): ?int
+    {
+        $depth = 0;
+        $length = strlen($token);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $token[$i];
+
+            if ($char === '(') {
+                $depth++;
+            } elseif ($char === ')') {
+                $depth = max(0, $depth - 1);
+            } elseif ($char === '/' && $depth === 0) {
+                return $i;
+            }
+        }
+
+        return null;
+    }
+
+    /** The UA font size without a declaration: the parent's (null: unknown), scaled for headings and <small>. */
+    private function defaultFontSize(DOMElement $element, ?float $parent): ?float
+    {
+        return $parent === null ? null : $parent * (self::TAG_FONT_FACTORS[Element::tag($element)] ?? 1.0);
+    }
+
+    /** Lower bound in px of a lowercased font-size value, given the parent's bound (null: unknown). */
+    private function fontSizeBound(string $value, ?float $parent, DOMElement $element): ?float
+    {
+        if (strlen($value) > self::MAX_RESOLVED_LENGTH) {
+            return null;
+        }
+
+        if (isset(self::FONT_KEYWORDS[$value])) {
+            return self::FONT_KEYWORDS[$value];
+        }
+
+        if (isset(self::RELATIVE_FONT_SIZES[$value])) {
+            return $parent === null ? null : $parent * self::RELATIVE_FONT_SIZES[$value];
+        }
+
+        switch ($value) {
+            case 'inherit':
+            case 'unset':
+                return $parent;
+            case 'initial':
+                return self::FONT_KEYWORDS['medium'];
+            case 'revert':
+                return $this->defaultFontSize($element, $parent);
+        }
+
+        if ($value === '' || $value[0] === '-') {
+            return null; // empty, revert-layer, a negative length
+        }
+
+        $rem = str_contains($value, 'rem') ? $this->rootFontSize($element) : self::FONT_KEYWORDS['medium'];
+        $position = 0;
+        $result = $this->mathFactor($value, $position, 0, $rem, $parent);
+
+        if ($result === null || $position !== strlen($value)) {
+            return null;
+        }
+
+        [$length, $bound] = $result;
+
+        if (! $length) {
+            return $value === '0' ? 0.0 : null; // a bare number is a length only when it is zero
+        }
+
+        return $bound === null ? null : max(0.0, $bound); // math results are clamped to the property's range
+    }
+
+    /** The root's font-size bound for rem (16px for the root itself and when the root has no bound). */
+    private function rootFontSize(DOMElement $element): float
+    {
+        $root = $element->ownerDocument?->documentElement;
+
+        if ($root === null || $root->isSameNode($element)) {
+            return self::FONT_KEYWORDS['medium'];
+        }
+
+        return $this->fontSizeLowerBoundPx($root) ?? self::FONT_KEYWORDS['medium'];
+    }
+
+    /**
+     * One operand of a font-size expression at $position: a number, a dimension, a percentage, or calc(), min(), max(),
+     * clamp() or a parenthesised sum (inside a function only). Recursive descent without backtracking; each call
+     * consumes what it reads.
+     *
+     * @return array{0: bool, 1: ?float}|null whether it is a length (else a number), and its lower bound in px or exact
+     *                                        number (null: unknown); null when the expression is invalid, nests deeper
+     *                                        than MAX_CALC_DEPTH or overflows
+     */
+    private function mathFactor(string $value, int &$position, int $depth, float $rem, ?float $em): ?array
+    {
+        if (preg_match('/[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?/A', $value, $m, 0, $position) === 1) {
+            $position += strlen($m[0]);
+            $number = (float) $m[0];
+
+            if (! is_finite($number)) {
+                return null;
+            }
+
+            if (($value[$position] ?? '') === '%') {
+                $position++;
+
+                return [true, $em === null ? null : $number / 100 * $em];
+            }
+
+            if (preg_match('/[a-z]+/A', $value, $unit, 0, $position) !== 1) {
+                return [false, $number];
+            }
+
+            $position += strlen($unit[0]);
+
+            return match (true) {
+                isset(self::ABSOLUTE_UNITS[$unit[0]]) => [true, $number * self::ABSOLUTE_UNITS[$unit[0]]],
+                $unit[0] === 'rem' => [true, $number * $rem],
+                $unit[0] === 'em' => [true, $em === null ? null : $number * $em],
+                preg_match(self::UNBOUNDED_UNITS, $unit[0]) === 1 => [true, null],
+                default => null,
+            };
+        }
+
+        if ($depth >= self::MAX_CALC_DEPTH || preg_match('/(calc|min|max|clamp)?\(/A', $value, $m, 0, $position) !== 1) {
+            return null;
+        }
+
+        $function = $m[1] ?? '';
+
+        if ($function === '' && $depth === 0) {
+            return null; // parentheses only group inside a math function
+        }
+
+        $position += strlen($m[0]);
+        $arguments = [];
+
+        do {
+            $this->skipWhitespace($value, $position);
+            $argument = $this->mathSum($value, $position, $depth + 1, $rem, $em);
+
+            if ($argument === null) {
+                return null;
+            }
+
+            $arguments[] = $argument;
+            $this->skipWhitespace($value, $position);
+            $separator = $value[$position++] ?? '';
+        } while ($separator === ',');
+
+        return $separator === ')' ? $this->mathFunction($function, $arguments) : null;
+    }
+
+    /**
+     * Operands joined by + and - (surrounded by whitespace, as CSS requires). A sum of lengths is bounded by the sum of
+     * the bounds; a difference has no bound.
+     *
+     * @return array{0: bool, 1: ?float}|null
+     */
+    private function mathSum(string $value, int &$position, int $depth, float $rem, ?float $em): ?array
+    {
+        $left = $this->mathProduct($value, $position, $depth, $rem, $em);
+
+        while ($left !== null) {
+            $start = $position;
+            $operator = $this->skipWhitespace($value, $position) ? $value[$position] ?? '' : '';
+
+            if (($operator !== '+' && $operator !== '-') || ! ctype_space($value[$position + 1] ?? '')) {
+                $position = $start;
+
+                break;
+            }
+
+            $position++;
+            $this->skipWhitespace($value, $position);
+            $right = $this->mathProduct($value, $position, $depth, $rem, $em);
+
+            if ($right === null || $right[0] !== $left[0]) {
+                return null; // a length and a number cannot be added
+            }
+
+            $left = [$left[0], $operator === '+' && $left[1] !== null && $right[1] !== null ? $left[1] + $right[1] : null];
+
+            if ($left[1] !== null && ! is_finite($left[1])) {
+                return null;
+            }
+        }
+
+        return $left;
+    }
+
+    /**
+     * Operands joined by * and /. A positive number times a length scales its bound; a quotient has no bound.
+     *
+     * @return array{0: bool, 1: ?float}|null
+     */
+    private function mathProduct(string $value, int &$position, int $depth, float $rem, ?float $em): ?array
+    {
+        $left = $this->mathFactor($value, $position, $depth, $rem, $em);
+
+        while ($left !== null) {
+            $start = $position;
+            $this->skipWhitespace($value, $position);
+            $operator = $value[$position] ?? '';
+
+            if ($operator !== '*' && $operator !== '/') {
+                $position = $start;
+
+                break;
+            }
+
+            $position++;
+            $this->skipWhitespace($value, $position);
+            $right = $this->mathFactor($value, $position, $depth, $rem, $em);
+
+            if ($right === null || ($right[0] && ($left[0] || $operator === '/'))) {
+                return null; // a length times or divided by a length
+            }
+
+            if ($operator === '/') {
+                $left = [$left[0], null];
+
+                continue;
+            }
+
+            [$number, $length] = $left[0] ? [$right[1], $left] : [$left[1], $right];
+            $left = match (true) {
+                ! $length[0] => [false, $number !== null && $length[1] !== null ? $number * $length[1] : null],
+                default => [true, $number !== null && $number > 0 && $length[1] !== null ? $number * $length[1] : null],
+            };
+
+            if ($left[1] !== null && ! is_finite($left[1])) {
+                return null;
+            }
+        }
+
+        return $left;
+    }
+
+    /**
+     * calc() and parentheses (one argument), min() (every bound known), max() (the known bounds) and clamp(): at least
+     * its minimum, and at least the smaller of its value and maximum. Numbers are exact, so they need every argument.
+     *
+     * @param  list<array{0: bool, 1: ?float}>  $arguments
+     * @return array{0: bool, 1: ?float}|null
+     */
+    private function mathFunction(string $function, array $arguments): ?array
+    {
+        $length = $arguments[0][0];
+        $bounds = [];
+
+        foreach ($arguments as [$isLength, $bound]) {
+            if ($isLength !== $length) {
+                return null; // lengths and numbers mixed
+            }
+
+            $bounds[] = $bound;
+        }
+
+        $arity = match ($function) {
+            '', 'calc' => count($bounds) === 1,
+            'clamp' => count($bounds) === 3,
+            default => true,
+        };
+
+        if (! $arity) {
+            return null;
+        }
+
+        $known = array_values(array_filter($bounds, fn (?float $bound): bool => $bound !== null));
+
+        if (! $length && count($known) !== count($bounds)) {
+            return [false, null];
+        }
+
+        return [$length, match ($function) {
+            '', 'calc' => $bounds[0],
+            'min' => count($known) === count($bounds) ? min($known) : null,
+            'max' => $known === [] ? null : max($known),
+            'clamp' => match (true) {
+                $bounds[1] !== null && $bounds[2] !== null => max($bounds[0] ?? -INF, min($bounds[1], $bounds[2])),
+                default => $bounds[0],
+            },
+        }];
+    }
+
+    /** Today's estimate of a font-size value, used where there is no lower bound. */
     private function fontSizeFrom(string $value, float $parent): ?float
     {
         if ($value === '' || in_array($value, ['inherit', 'unset'], true)) {
@@ -1772,7 +2239,7 @@ class CssParser
             return $parent * ($value === 'larger' ? 1.2 : 0.83);
         }
 
-        if (preg_match('/^(\d*\.?\d+)(px|pt|em|rem|%)$/', $value, $m) !== 1) {
+        if (preg_match('/^(\d+(?:\.\d+)?|\.\d+)(px|pt|em|rem|%)$/', $value, $m) !== 1) {
             return null;
         }
 

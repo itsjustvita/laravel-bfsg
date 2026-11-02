@@ -85,6 +85,35 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($this->analyze('<h4 style="color: #949494;">Small heading</h4>'), 'contrast.insufficient');
     }
 
+    // #8a8a8a on white is about 3.45:1: enough for large text only.
+    public function test_large_text_via_custom_property(): void
+    {
+        $this->assertNoViolation($this->analyze($this->page(':root{--text-3xl:1.875rem} .t{font-size:var(--text-3xl);color:#8a8a8a}', '<p class="t">Large</p>')), 'contrast.insufficient');
+    }
+
+    public function test_bold_via_custom_property(): void
+    {
+        $this->assertNoViolation($this->analyze($this->page(':root{--font-weight-bold:700} .t{font-size:20px;font-weight:var(--font-weight-bold);color:#8a8a8a}', '<p class="t">Bold</p>')), 'contrast.insufficient');
+    }
+
+    public function test_clamp_lower_bound_counts_as_large(): void
+    {
+        $this->assertNoViolation($this->analyze($this->page('.t{font-size:clamp(2rem, 5vw, 3rem);color:#8a8a8a}', '<p class="t">Fluid</p>')), 'contrast.insufficient');
+    }
+
+    public function test_font_shorthand(): void
+    {
+        $this->assertNoViolation($this->analyze($this->page('.t{font:700 20px/1.2 sans-serif;color:#8a8a8a}', '<p class="t">Shorthand</p>')), 'contrast.insufficient');
+    }
+
+    public function test_inherit_font_weight_walks_up(): void
+    {
+        $violations = $this->analyze($this->page('h3{font-weight:inherit;font-size:20px;color:#8a8a8a}', '<div><h3>T</h3></div>'));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'h3', severity: Severity::Error);
+        $this->assertSame(4.5, $violation->params['required']);
+    }
+
     public function test_css_classes_cascade_and_inheritance(): void
     {
         $this->assertHasViolation($this->analyze($this->page('.muted { color: #999999; background-color: #aaaaaa; }', '<p class="muted" id="target">Hard to read</p>')), 'contrast.insufficient', element: 'p#target.muted');
