@@ -167,6 +167,14 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame('#d1d5db', $violation->params['foreground']);
     }
 
+    public function test_tailwind_v3_responsive_text_colour(): void
+    {
+        $css = '@media (min-width:768px){.md\\:text-gray-300{--tw-text-opacity:1;color:rgb(209 213 219 / var(--tw-text-opacity))}}';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<p class="md:text-gray-300">Hi</p>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('1.47', $violation->params['ratio'], 'the same result as a plain color: #d1d5db in that block');
+    }
+
     public function test_bootstrap_button_variables(): void
     {
         $violations = $this->analyze($this->page('.btn{color:var(--bs-btn-color);background-color:var(--bs-btn-bg)} .btn-warning{--bs-btn-color:#fff;--bs-btn-bg:#ffc107}', '<button class="btn btn-warning">Go</button>'));

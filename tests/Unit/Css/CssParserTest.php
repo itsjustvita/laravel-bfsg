@@ -365,7 +365,7 @@ class CssParserTest extends TestCase
     {
         $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors(':root { --fg: #111 } .dark { --fg: #eee } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'), 'the closest declaration wins');
         $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root { --fg: #111 } html.dark { --fg: #eee } p { color: var(--fg) }', '<p id="t">x</p>'), 'a rule that matches nothing changes nothing');
-        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'), 'a heavier conditional declaration may apply');
+        $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'), 'conditional rules apply as they do for color');
         $this->assertSame(['#111111', '#fafafa', false], $this->colors(':root { --fg: #111; --bg: #fafafa } .x { --fg: #222 } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'));
         $this->assertSame(['#111111', '#fafafa', false], $this->colors('@layer theme { :root { --fg: #111 } } @media screen { :root { --bg: #fafafa } } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'), '@layer and plain screen media are unconditional');
     }
@@ -465,11 +465,68 @@ class CssParserTest extends TestCase
         $this->assertSame(['#0000ff', '#ffffff', false], $this->colors(':host{--brand:#00f} p{color:var(--brand)}', '<p id="t">x</p>'));
     }
 
-    public function test_conditional_custom_properties_are_approximate(): void
+    public function test_conditional_custom_properties_apply_like_other_declarations(): void
     {
-        $this->assertSame(['#111111', '#ffffff', true], $this->colors('.x{--fg:#111} @media (min-width: 768px) { .x{--fg:#eee} } p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a heavier conditional declaration may apply');
-        $this->assertSame(['#111111', '#ffffff', false], $this->colors('@supports (color: red) { .x{--fg:#eee} } .x{--fg:#111} p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a lighter conditional declaration never wins');
-        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root{--fg:#111} @container (min-width: 1px) { .x{--fg:#eee} } p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a conditional-only declaration keeps the inherited value');
+        $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors('.x{--fg:#111} @media (min-width: 768px) { .x{--fg:#eee} } p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'as declarationsFor() applies a colour from that rule');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('@supports (color: red) { .x{--fg:#eee} } .x{--fg:#111} p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a lighter conditional declaration loses');
+        $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors(':root{--fg:#111} @container (min-width: 1px) { .x{--fg:#eee} } p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'));
+
+        [$parser, $document] = $this->parsed('@media (min-width: 768px) { .x{--fg:#eee;color:var(--fg)} }', '<p id="t" class="x">x</p>');
+        $this->assertSame('#eee', $parser->declarationsFor($this->target($document))['--fg']['value'], 'both read the same cascade');
+        $this->assertSame('#eee', $parser->customProperty($this->target($document), '--fg'));
+    }
+
+    public function test_custom_properties_from_unsupported_selectors_are_approximate(): void
+    {
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} li:nth-child(odd){--fg:#111} li{color:var(--fg)}', '<ul><li id="t">x</li></ul>'), 'odd rows may render another value');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :root:has(.on){--fg:#111} p{color:var(--fg)}', '<p id="t" class="on">x</p>'));
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .a ~ p{--fg:#111} p{color:var(--fg, #000)}', '<p id="t">x</p>'), 'also when the fallback is not used');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover{--fg:#111} a:focus-visible{--fg:#222} :active{--fg:#333} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'user-action states are not the base state');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} *, ::before, ::after{--other:1} p::first-line{--fg:#111} p:after{--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'pseudo-element rules never style the element itself');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .x:hover:nth-child(2){--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'an unsupported part besides the state');
+    }
+
+    public function test_invalid_at_computed_value_time_uses_the_fallback(): void
+    {
+        $this->assertSame(['#777777', '#ffffff', false], $this->colors(':root{--a:var(--undef)} p{color:var(--a,#777)}', '<p id="t">x</p>'), 'an undefined reference chain is exact');
+        $this->assertSame(['#777777', '#ffffff', true], $this->colors('p{--a:var(--b);--b:var(--a);color:var(--a,#777)}', '<p id="t">x</p>'), 'a cycle is approximate');
+        $this->assertSame(['#000000', '#ffffff', true], $this->colors(':root{--a:var(--undef)} p{color:var(--a)}', '<p id="t">x</p>'), 'without a fallback it stays unresolvable');
+
+        [$parser, $document] = $this->parsed(':root{--a:var(--undef)}', '<p id="t">x</p>');
+        $this->assertNull($parser->customProperty($this->target($document), '--a'));
+        $this->assertSame(['#777', false], $parser->substituteFor($this->target($document), 'var(--a, #777)'));
+    }
+
+    public function test_inherited_custom_properties_are_shared_through_owners(): void
+    {
+        $css = '*{--x:#777} div,p{--x:inherit} .b{--x:#123}';
+        $body = '<div><div class="b"><p id="a">x</p></div><p id="c">x</p></div>';
+
+        foreach ([['a', 'c'], ['c', 'a']] as $order) {
+            [$parser, $document] = $this->parsed($css, $body);
+            $byId = $document->elementsById();
+            $values = [];
+
+            foreach ($order as $id) {
+                $values[$id] = $parser->customProperty($byId[$id], '--x');
+            }
+
+            $this->assertSame(['#123', '#777'], [$values['a'], $values['c']], 'queried as '.implode(', ', $order));
+        }
+
+        [$parser, $document] = $this->parsed(':root{--x:#111} .o{--y:1} .o2{--x:var(--y)}', '<div class="o"><div class="o"><p id="t">x</p></div></div><div class="o"><div class="o2"><p id="u">x</p></div></div>');
+        $this->assertSame('#111', $parser->customProperty($this->target($document), '--x'), 'owners that declare other names are passed');
+        $this->assertSame('1', $parser->customProperty($document->elementsById()['u'], '--x'), 'var() resolves where it is declared');
+    }
+
+    public function test_var_references_per_value_are_capped(): void
+    {
+        [$parser, $document] = $this->parsed(':root{--x:a}', '<p id="t">x</p>');
+        $paragraph = $this->target($document);
+
+        $this->assertSame([str_repeat('a', CssParser::MAX_VAR_REFERENCES), false], $parser->substituteFor($paragraph, str_repeat('var(--x)', CssParser::MAX_VAR_REFERENCES)));
+        $this->assertSame([null, true], $parser->substituteFor($paragraph, str_repeat('var(--x)', CssParser::MAX_VAR_REFERENCES + 1)));
+        $this->assertSame([null, true], $parser->substituteFor($paragraph, str_repeat('var(--undefined,)', CssParser::MAX_VAR_REFERENCES + 1)));
     }
 
     public function test_nested_custom_properties_per_element_are_capped(): void

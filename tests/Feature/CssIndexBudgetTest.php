@@ -6,8 +6,10 @@ use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 
 class CssIndexBudgetTest extends TestCase
@@ -137,6 +139,59 @@ class CssIndexBudgetTest extends TestCase
         $elapsed = microtime(true) - $start;
 
         $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('analyze took %.2f s', $elapsed));
+    }
+
+    /** @return array<string, array{0: string}> 4000 root-declared references and 60,000 undefined ones on 500 paragraphs, and 64 references through a 200-element inherit chain */
+    public static function hostileCustomPropertyPages(): array
+    {
+        $page = fn (string $css): string => '<!doctype html><html lang="en"><head><title>x</title><style>'.$css.'</style></head><body><main>'
+            .str_repeat('<p>Some text</p>', 500).'</main></body></html>';
+        $declared = $references = $undefined = '';
+
+        for ($i = 0; $i < 4000; $i++) {
+            $declared .= "--u$i:a;";
+            $references .= "var(--u$i)";
+        }
+
+        for ($i = 0; $i < 60000; $i++) {
+            $undefined .= "var(--u$i,)";
+        }
+
+        $chain = '<!doctype html><html lang="en"><head><title>x</title><style>*{--x:#777} div,p{--x:inherit} p{color:#767676 '.str_repeat('var(--x) ', 64).'}</style></head><body>'
+            .str_repeat('<div>', 200).str_repeat('<p>Some text</p>', 300).str_repeat('</div>', 200).'</body></html>';
+
+        return [
+            'declared on the root' => [$page(":root{{$declared}} p{color:#767676$references}")],
+            'undefined with empty fallbacks' => [$page("p{color:#767676$undefined}")],
+            'inherit through 200 nested elements' => [$chain],
+        ];
+    }
+
+    #[DataProvider('hostileCustomPropertyPages')]
+    public function test_hostile_custom_properties_stay_bounded(string $html): void
+    {
+        $document = HtmlDocument::fromHtml($html);
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+
+        $violations = (new ContrastAnalyzer)->analyze($document);
+
+        $this->assertLessThan(64 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.0f MB', (memory_get_peak_usage(true) - $before) / 1048576));
+        $errors = array_filter($violations, fn ($violation) => $violation->severity === Severity::Error);
+        $this->assertSame([], $errors, 'colour values with too many var() references are unresolvable, never a definite Error');
+    }
+
+    #[Group('performance')]
+    #[DataProvider('hostileCustomPropertyPages')]
+    public function test_hostile_custom_properties_are_analyzed_within_the_time_budget(string $html): void
+    {
+        $document = HtmlDocument::fromHtml($html);
+
+        $start = microtime(true);
+        (new ContrastAnalyzer)->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
     #[Group('performance')]
