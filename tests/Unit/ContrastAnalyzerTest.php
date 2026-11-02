@@ -156,4 +156,44 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze($this->page('.sr-hidden { display: none } .ghost { color: #eee }', '<div class="sr-hidden"><p class="ghost">Hidden</p></div>')));
     }
+
+    public function test_tailwind_v3_text_opacity_variable(): void
+    {
+        $violations = $this->analyze($this->page('.text-gray-300{--tw-text-opacity:1;color:rgb(209 213 219 / var(--tw-text-opacity))}', '<p class="text-gray-300">Hi</p>'));
+
+        // #d1d5db on white is 1.4735:1 (the audit rounded it to 1.48), the same as a plain color: #d1d5db.
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('1.47', $violation->params['ratio']);
+        $this->assertSame('#d1d5db', $violation->params['foreground']);
+    }
+
+    public function test_bootstrap_button_variables(): void
+    {
+        $violations = $this->analyze($this->page('.btn{color:var(--bs-btn-color);background-color:var(--bs-btn-bg)} .btn-warning{--bs-btn-color:#fff;--bs-btn-bg:#ffc107}', '<button class="btn btn-warning">Go</button>'));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('1.63', $violation->params['ratio']);
+        $this->assertSame(['#ffffff', '#ffc107'], [$violation->params['foreground'], $violation->params['background']]);
+    }
+
+    public function test_filament_inline_custom_properties(): void
+    {
+        $violations = $this->analyze($this->page(
+            '.text-custom-400{color:rgba(var(--c-400),1)} .bg-custom-50{background-color:rgba(var(--c-50),1)}',
+            '<span class="text-custom-400 bg-custom-50" style="--c-50:255,251,235;--c-400:251,191,36">Badge</span>',
+        ));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Error);
+        $this->assertLessThan(2.0, (float) $violation->params['ratio']);
+        $this->assertSame(['#fbbf24', '#fffbeb'], [$violation->params['foreground'], $violation->params['background']]);
+    }
+
+    public function test_custom_properties_inherit_from_ancestors(): void
+    {
+        $violations = $this->analyze($this->page('.card{--muted:#bbb} .meta{color:var(--muted)}', '<div class="card"><section><p class="meta">Inherited</p></section></div>'));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.meta', severity: Severity::Error);
+        $this->assertSame('#bbbbbb', $violation->params['foreground']);
+        $this->assertFalse($violation->meta['approximate']);
+    }
 }

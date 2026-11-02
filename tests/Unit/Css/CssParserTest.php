@@ -317,7 +317,7 @@ class CssParserTest extends TestCase
         $this->assertSame(['#333333', '#ffffff', false], $this->colors($root.' p { color: var(--missing, #333) }', '<p id="t">x</p>'), 'fallback for an undefined name');
         $this->assertSame(['#444444', '#ffffff', false], $this->colors($root.' p { color: var(--missing, var(--also-missing, #444)) }', '<p id="t">x</p>'));
         $this->assertSame(['#000000', '#ffffff', true], $this->colors($root.' p { color: var(--brand) }', '<p id="t">x</p>'), 'undefined without fallback stays approximate');
-        $this->assertSame(['#000000', '#ffffff', true], $this->colors('.dark { --fg: #fff } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'), 'element-scoped properties are not resolved');
+        $this->assertSame(['#ffffff', '#ffffff', false], $this->colors('.dark { --fg: #fff } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'), 'element-scoped properties inherit');
     }
 
     public function test_custom_properties_follow_the_cascade_and_the_html_style_attribute(): void
@@ -361,13 +361,161 @@ class CssParserTest extends TestCase
         $this->assertLessThan(PerformanceBudget::seconds(0.1), microtime(true) - $start);
     }
 
-    public function test_custom_properties_overridden_outside_the_root_are_approximate(): void
+    public function test_custom_properties_declared_outside_the_root_resolve_per_element(): void
     {
-        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } .dark { --fg: #eee } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'));
-        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } html.dark { --fg: #eee } p { color: var(--fg) }', '<p id="t">x</p>'));
-        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'));
-        $this->assertSame(['#111111', '#fafafa', true], $this->colors(':root { --fg: #111; --bg: #fafafa } .x { --fg: #222 } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'));
+        $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors(':root { --fg: #111 } .dark { --fg: #eee } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'), 'the closest declaration wins');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root { --fg: #111 } html.dark { --fg: #eee } p { color: var(--fg) }', '<p id="t">x</p>'), 'a rule that matches nothing changes nothing');
+        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'), 'a heavier conditional declaration may apply');
+        $this->assertSame(['#111111', '#fafafa', false], $this->colors(':root { --fg: #111; --bg: #fafafa } .x { --fg: #222 } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'));
         $this->assertSame(['#111111', '#fafafa', false], $this->colors('@layer theme { :root { --fg: #111 } } @media screen { :root { --bg: #fafafa } } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'), '@layer and plain screen media are unconditional');
+    }
+
+    public function test_guaranteed_invalid_initial_uses_the_fallback(): void
+    {
+        [$parser, $document] = $this->parsed('*{--tw-text:initial} p{color:var(--tw-text, #777)}', '<p id="t">x</p>');
+        $colors = $parser->resolveColors($this->target($document));
+
+        $this->assertSame('#777777', $colors['foreground']->toHex());
+        $this->assertFalse($colors['approximate']);
+
+        $this->assertSame(['#777777', '#ffffff', false], $this->colors(':root{--tw-text:#111} *{--tw-text:initial} p{color:var(--tw-text, #777)}', '<p id="t">x</p>'), 'a reset on the element itself wins over the inherited value');
+        $this->assertSame(['#000000', '#ffffff', true], $this->colors('*{--tw-text:INITIAL} p{color:var(--tw-text)}', '<p id="t">x</p>'), 'initial without a fallback is unresolvable');
+    }
+
+    public function test_cyclic_custom_properties_are_approximate(): void
+    {
+        [$parser, $document] = $this->parsed('body{color:#333} p{--a:var(--b);--b:var(--a);color:var(--a)}', '<p id="t">x</p>');
+        $colors = $parser->resolveColors($this->target($document));
+
+        $this->assertTrue($colors['approximate']);
+        $this->assertSame('#333333', $colors['foreground']->toHex(), 'an unresolvable colour walks up');
+        $this->assertSame([null, true], $parser->substituteFor($this->target($document), 'var(--a)'));
+        $this->assertNull($parser->customProperty($this->target($document), '--b'));
+
+        $this->assertSame(['#123456', '#ffffff', false], $this->colors('p{--a:var(--b);--b:#123456;color:var(--a)}', '<p id="t">x</p>'), 'a chain without a cycle resolves');
+    }
+
+    public function test_custom_property_rules_do_not_evict_colour_rules(): void
+    {
+        $css = '';
+
+        for ($i = 0; $i < 2500; $i++) {
+            $css .= ".v{$i}{--x{$i}:1}";
+        }
+
+        [$parser, $document] = $this->parsed($css.'*{--tw-a:initial} .low{color:#ccc}', '<p id="t" class="low v2499">x</p>');
+        $paragraph = $this->target($document);
+
+        $this->assertFalse($parser->isTruncated());
+        $this->assertSame('#cccccc', $parser->resolveColors($paragraph)['foreground']->toHex());
+        $this->assertSame('1', $parser->customProperty($paragraph, '--x2499'), 'custom-property-only rules are indexed');
+        $this->assertNull($parser->customProperty($paragraph, '--x1'));
+        $this->assertNull($parser->customProperty($paragraph, '--tw-a'));
+    }
+
+    public function test_overflowing_the_custom_property_budget_marks_results_approximate(): void
+    {
+        $css = '';
+
+        for ($i = 0; $i <= CssParser::MAX_CUSTOM_PROPERTY_RULES; $i++) {
+            $css .= ".v{$i}{--x:#{$i}}";
+        }
+
+        [$parser, $document] = $this->parsed($css.'.low{color:#ccc} .late{--late:#123456}', '<p id="t" class="low late">x</p>');
+
+        $this->assertTrue($parser->isTruncated());
+        $colors = $parser->resolveColors($this->target($document));
+        $this->assertSame('#cccccc', $colors['foreground']->toHex(), 'colour rules after the overflow still apply');
+        $this->assertTrue($colors['approximate']);
+        $this->assertNull($parser->customProperty($this->target($document), '--late'), 'custom-property rules beyond the cap are not applied');
+    }
+
+    public function test_custom_properties_resolve_per_element(): void
+    {
+        [$parser, $document] = $this->parsed(
+            ':root{--fg:#111;--ref:var(--fg)} .a{--fg:#222} .b{--fg:#333 !important} .c{--fg:inherit} .d{--fg:unset} .e{--fg:initial}',
+            '<div class="a" id="a"><p id="inherits">x</p><p id="inline" style="--fg: #444">x</p><p id="important" class="b" style="--fg: #444">x</p>'
+                .'<p id="ref">x</p><div class="e" id="e"><p class="c" id="c">x</p><p class="d" id="d">x</p></div></div><p id="root">x</p>',
+        );
+        $byId = $document->elementsById();
+
+        $this->assertSame('#222', $parser->customProperty($byId['a'], '--fg'));
+        $this->assertSame('#222', $parser->customProperty($byId['inherits'], '--fg'), 'the parent value inherits');
+        $this->assertSame('#444', $parser->customProperty($byId['inline'], '--fg'), 'the inline style wins over rules');
+        $this->assertSame('#333', $parser->customProperty($byId['important'], '--fg'), 'an important rule wins over the inline style');
+        $this->assertSame('#111', $parser->customProperty($byId['root'], '--fg'));
+        $this->assertSame('#111', $parser->customProperty($byId['ref'], '--ref'), 'var() inside a custom property resolves where it is declared');
+        $this->assertNull($parser->customProperty($byId['e'], '--fg'), 'initial is the guaranteed-invalid value');
+        $this->assertNull($parser->customProperty($byId['c'], '--fg'), 'inherit takes the parent value');
+        $this->assertNull($parser->customProperty($byId['d'], '--fg'), 'unset inherits');
+        $this->assertNull($parser->customProperty($byId['root'], '--missing'));
+        $this->assertNull($parser->customProperty($byId['root'], '--FG'), 'names are case-sensitive');
+
+        $this->assertSame(['1px solid #222', false], $parser->substituteFor($byId['inherits'], '1px solid var(--fg)'));
+        $this->assertSame(['#abc', false], $parser->substituteFor($byId['e'], 'var(--fg, #abc)'), 'the fallback applies to initial');
+        $this->assertSame(['#abc', false], $parser->substituteFor($byId['e'], 'var(--missing, var(--also-missing, #abc))'));
+        $this->assertSame([null, true], $parser->substituteFor($byId['e'], 'var(--missing)'));
+        $this->assertSame([null, true], $parser->substituteFor($byId['e'], 'var(--fg'), 'unclosed var()');
+        $this->assertSame(['red', false], $parser->substituteFor($byId['e'], 'red'));
+        $this->assertSame('#111', $parser->resolveVariables('var(--fg)'), 'resolveVariables() stays root-only');
+    }
+
+    public function test_host_custom_properties_still_resolve_from_the_root(): void
+    {
+        $this->assertSame(['#0000ff', '#ffffff', false], $this->colors(':host{--brand:#00f} p{color:var(--brand)}', '<p id="t">x</p>'));
+    }
+
+    public function test_conditional_custom_properties_are_approximate(): void
+    {
+        $this->assertSame(['#111111', '#ffffff', true], $this->colors('.x{--fg:#111} @media (min-width: 768px) { .x{--fg:#eee} } p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a heavier conditional declaration may apply');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('@supports (color: red) { .x{--fg:#eee} } .x{--fg:#111} p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a lighter conditional declaration never wins');
+        $this->assertSame(['#111111', '#ffffff', true], $this->colors(':root{--fg:#111} @container (min-width: 1px) { .x{--fg:#eee} } p{color:var(--fg)}', '<div class="x"><p id="t">x</p></div>'), 'a conditional-only declaration keeps the inherited value');
+    }
+
+    public function test_nested_custom_properties_per_element_are_capped(): void
+    {
+        [$parser, $document] = $this->parsed($this->exponentialCustomProperties('p').'}', '<p id="t">x</p>');
+
+        $this->assertSame([null, true], $parser->substituteFor($this->target($document), 'var(--v8)'));
+        $this->assertSame([str_repeat('#111 ', 7).'#111', false], $parser->substituteFor($this->target($document), 'var(--v1)'), 'short values still resolve');
+
+        $chain = '--c0: #111; ';
+
+        for ($level = 1; $level <= 9; $level++) {
+            $chain .= "--c$level: var(--c".($level - 1).'); ';
+        }
+
+        [$parser, $document] = $this->parsed(":root { $chain } p { $chain }", '<p id="t">x</p>');
+
+        $this->assertSame(['#111', false], $parser->substituteFor($this->target($document), 'var(--c8)'));
+        $this->assertSame([null, true], $parser->substituteFor($this->target($document), 'var(--c9)'), 'nesting deeper than 8 is unresolvable');
+        $this->assertSame(['#111', null], [$parser->resolveVariables('var(--c8)'), $parser->resolveVariables('var(--c9)')], 'the same depth as the root-only resolver');
+    }
+
+    #[Group('performance')]
+    public function test_per_element_custom_properties_resolve_within_the_time_budget(): void
+    {
+        [$parser, $document] = $this->parsed($this->exponentialCustomProperties('div').'} p { color: var(--v8, #333); background: var(--v7) }', str_repeat('<div><p>x</p></div>', 300));
+
+        $start = microtime(true);
+
+        foreach ($document->query('//p') as $paragraph) {
+            $parser->resolveColors($paragraph);
+        }
+
+        $this->assertLessThan(PerformanceBudget::seconds(0.2), microtime(true) - $start);
+    }
+
+    /** Opens a rule for $selector with --v0 … --v8, each level referencing the previous one eight times. */
+    private function exponentialCustomProperties(string $selector): string
+    {
+        $css = "$selector { --v0: #111; ";
+
+        for ($level = 1; $level <= 8; $level++) {
+            $css .= "--v$level: ".implode(' ', array_fill(0, 8, 'var(--v'.($level - 1).')')).'; ';
+        }
+
+        return $css;
     }
 
     public function test_match_expressions_bucket_by_the_rightmost_compound(): void

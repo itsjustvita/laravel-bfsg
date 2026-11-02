@@ -19,6 +19,9 @@ class CssParser
     /** Upper bound of indexed rules; only rules carrying one of INDEXED_PROPERTIES count. */
     public const MAX_INDEXED_RULES = 2000;
 
+    /** Upper bound of rules indexed only for their custom properties (no INDEXED_PROPERTIES); a separate budget, so they never push colour rules out. */
+    public const MAX_CUSTOM_PROPERTY_RULES = 4000;
+
     /** Colour and font properties (spec §6.1) plus display/visibility for CSS-hidden detection. */
     public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font-size', 'font-weight', 'display', 'visibility'];
 
@@ -38,8 +41,14 @@ class CssParser
     /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
     protected array $rules = [];
 
-    /** @var array<string, list<int>> node path => indexes into */
+    /** @var array<string, list<int>> node path => positions in rules() of the matching rules that carry one of INDEXED_PROPERTIES */
     protected array $index = [];
+
+    /** @var array<string, list<int>> node path => positions in rules() of the matching rules that carry custom properties but none of INDEXED_PROPERTIES */
+    protected array $customIndex = [];
+
+    /** @var list<int> custom-property-only rules with the selector `*`: they match every element, so they are not indexed per element */
+    private array $universalCustomRules = [];
 
     protected bool $indexed = false;
 
@@ -77,6 +86,24 @@ class CssParser
     /** Substituted values longer than this are given up (approximate): guards against exponential var() nesting. */
     private const MAX_RESOLVED_LENGTH = 4096;
 
+    /** Nesting levels of var() references followed before a value counts as unresolvable. */
+    private const MAX_VAR_DEPTH = 8;
+
+    /** CSS-wide keywords that make a custom property take its parent's value (custom properties inherit). */
+    private const INHERITING_KEYWORDS = ['inherit', 'unset', 'revert', 'revert-layer'];
+
+    /**
+     * @var array<string, array<string, array{0: string|null|false, 1: bool}>> node path => "depth:name" => computed custom
+     *                                                                         property (null: undefined or `initial`, false: unresolvable) and whether it is approximate
+     */
+    private array $customPropertyCache = [];
+
+    /** @var array<string, array<string, array{value: string, important: bool}>> node path => custom properties of its style attribute */
+    private array $inlineCustomProperties = [];
+
+    /** @var array<string, true> "node path\0name" of the custom properties being computed (cycle detection) */
+    private array $computingProperties = [];
+
     /** Selectors whose custom properties are resolved globally (Tailwind v4 and most design systems declare them here). */
     private const ROOT_SELECTORS = [':root', 'html', ':host'];
 
@@ -88,13 +115,14 @@ class CssParser
     {
         $this->document = $document;
         $this->rules = [];
-        $this->index = [];
+        $this->index = $this->customIndex = $this->universalCustomRules = [];
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
+        $this->customPropertyCache = $this->inlineCustomProperties = $this->computingProperties = [];
 
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
             foreach ($this->parseStylesheet($css, count($this->rules)) as $rule) {
@@ -103,15 +131,26 @@ class CssParser
             }
         }
 
-        $indexable = array_filter($this->rules, fn (array $rule) => $this->isIndexable($rule));
-        $this->truncated = count($indexable) > self::MAX_INDEXED_RULES;
+        $counts = ['rule' => 0, 'custom' => 0];
+
+        foreach ($this->rules as $rule) {
+            $kind = $this->indexKind($rule);
+
+            if ($kind !== null) {
+                $counts[$kind]++;
+            }
+        }
+
+        $this->truncated = $counts['rule'] > self::MAX_INDEXED_RULES || $counts['custom'] > self::MAX_CUSTOM_PROPERTY_RULES;
 
         return $this;
     }
 
     /**
-     * Build the element index unless it exists. Stops when the optional deadline (microtime(true) value)
-     * passes or MAX_INDEXED_RULES is reached; either marks the results truncated (approximate).
+     * Build the element index unless it exists. Rules carrying one of INDEXED_PROPERTIES and rules carrying only
+     * custom properties have separate budgets (MAX_INDEXED_RULES, MAX_CUSTOM_PROPERTY_RULES): rules beyond a budget
+     * are skipped, and the build stops when the optional deadline (microtime(true) value) passes. Either marks the
+     * results truncated (approximate).
      */
     public function buildIndex(?float $deadline = null): static
     {
@@ -120,15 +159,24 @@ class CssParser
         }
 
         $this->indexBuilds++;
-        $indexedRules = 0;
+        $counts = ['rule' => 0, 'custom' => 0];
+        $limits = ['rule' => self::MAX_INDEXED_RULES, 'custom' => self::MAX_CUSTOM_PROPERTY_RULES];
         $tokens = null;
 
         foreach ($this->rules as $position => $rule) {
-            if (! $this->isIndexable($rule)) {
+            $kind = $this->indexKind($rule);
+
+            if ($kind === null) {
                 continue;
             }
 
-            if (++$indexedRules > self::MAX_INDEXED_RULES || ($deadline !== null && microtime(true) > $deadline)) {
+            if (++$counts[$kind] > $limits[$kind]) {
+                $this->truncated = true;
+
+                continue;
+            }
+
+            if ($deadline !== null && microtime(true) > $deadline) {
                 $this->truncated = true;
 
                 break;
@@ -140,8 +188,18 @@ class CssParser
                 continue;
             }
 
+            if ($kind === 'custom' && $expression === '//*') {
+                $this->universalCustomRules[] = $position;
+
+                continue;
+            }
+
             foreach ($this->elementsMatching($rule['selector'], $expression, $tokens) as $element) {
-                $this->index[$this->nodeKey($element)][] = $position;
+                if ($kind === 'rule') {
+                    $this->index[$this->nodeKey($element)][] = $position;
+                } else {
+                    $this->customIndex[$this->nodeKey($element)][] = $position;
+                }
             }
         }
 
@@ -172,7 +230,7 @@ class CssParser
         return $this->indexed;
     }
 
-    /** True when more than MAX_INDEXED_RULES colour/font rules exist; results are approximate. */
+    /** True when more than MAX_INDEXED_RULES colour/font rules or MAX_CUSTOM_PROPERTY_RULES custom-property rules exist, or the index build hit its deadline; results are approximate. */
     public function isTruncated(): bool
     {
         return $this->truncated;
@@ -705,10 +763,273 @@ class CssParser
         return $this->customProperties = array_map(fn (array $winner) => $winner['declaration']['value'], $winners);
     }
 
-    /** @param  array{properties: array<string, array{value: string, important: bool}>}  $rule */
-    private function isIndexable(array $rule): bool
+    /**
+     * Computed value of the custom property $name on the element: the element's cascaded declaration (matching rules,
+     * then its style attribute), else the parent's value, up to the root; :host declarations count for the root.
+     * var() references inside the value are substituted where the winning declaration sits, as in the CSS computed
+     * value. Null when the property is undefined, `initial` (the guaranteed-invalid value) or unresolvable (a cycle,
+     * nesting deeper than 8 levels).
+     */
+    public function customProperty(DOMElement $element, string $name): ?string
     {
-        return array_intersect(array_keys($rule['properties']), self::INDEXED_PROPERTIES) !== [];
+        $value = $this->computedCustomProperty($element, $this->nodeKey($element), $name, 1)[0];
+
+        return is_string($value) ? $value : null;
+    }
+
+    /**
+     * Substitute every var(--name[, fallback]) in a value with the element's custom properties (customProperty()); the
+     * fallback is used when the property is undefined or `initial`. Approximate when a conditional rule (a media
+     * feature, @supports, @container) could override a substituted property. [null, true] when a reference cannot
+     * be resolved: undefined without a fallback, a cycle, nesting deeper than 8 levels, or a result longer than
+     * MAX_RESOLVED_LENGTH.
+     *
+     * @return array{0: ?string, 1: bool}
+     */
+    public function substituteFor(DOMElement $element, string $value): array
+    {
+        return $this->substituteIn($element, $this->nodeKey($element), $value, 0);
+    }
+
+    /**
+     * substituteFor() with the element's node key and the nesting depth of $value.
+     *
+     * @return array{0: ?string, 1: bool}
+     */
+    private function substituteIn(DOMElement $element, string $key, string $value, int $depth): array
+    {
+        if (stripos($value, 'var(') === false) {
+            return [$value, false];
+        }
+
+        if ($depth > self::MAX_VAR_DEPTH) {
+            return [null, true];
+        }
+
+        $resolved = '';
+        $position = 0;
+        $approximate = false;
+
+        while (($start = stripos($value, 'var(', $position)) !== false) {
+            $end = $this->closingParenthesis($value, $start + 3);
+
+            if ($end === null) {
+                return [null, true];
+            }
+
+            $inner = substr($value, $start + 4, $end - $start - 4);
+            $comma = strpos($inner, ',');
+            $name = trim($comma === false ? $inner : substr($inner, 0, $comma));
+            $fallback = $comma === false ? null : trim(substr($inner, $comma + 1));
+
+            if (! str_starts_with($name, '--')) {
+                return [null, true]; // invalid var(): the browser drops the declaration
+            }
+
+            [$replacement, $nested] = $this->computedCustomProperty($element, $key, $name, $depth + 1);
+
+            if ($replacement === null && $fallback !== null) {
+                [$replacement, $fallbackApproximate] = $this->substituteIn($element, $key, $fallback, $depth + 1);
+                $nested = $nested || $fallbackApproximate;
+            }
+
+            if (! is_string($replacement)) {
+                return [null, true];
+            }
+
+            $approximate = $approximate || $nested;
+            $resolved .= substr($value, $position, $start - $position).$replacement;
+            $position = $end + 1;
+
+            if (strlen($resolved) > self::MAX_RESOLVED_LENGTH) {
+                return [null, true];
+            }
+        }
+
+        $resolved .= substr($value, $position);
+
+        return strlen($resolved) > self::MAX_RESOLVED_LENGTH ? [null, true] : [$resolved, $approximate];
+    }
+
+    /**
+     * The custom property $name on the element, its value substituted at nesting depth $depth: walks up to the
+     * closest element that declares it, and caches the result for every element on the way. A conditional
+     * declaration heavier than the unconditional one makes the element and its descendants approximate.
+     *
+     * @return array{0: string|null|false, 1: bool} value (null: undefined or `initial`, false: unresolvable) and approximate
+     */
+    private function computedCustomProperty(DOMElement $element, string $key, string $name, int $depth): array
+    {
+        $slot = $depth.':'.$name;
+
+        if (isset($this->customPropertyCache[$key][$slot])) {
+            return $this->customPropertyCache[$key][$slot];
+        }
+
+        $this->buildIndex();
+        $chain = [];
+        $node = $element;
+        $nodeKey = $key;
+
+        while (true) {
+            [$raw, $conditional] = $this->ownCustomProperty($node, $nodeKey, $name);
+            $keyword = $raw === null ? null : strtolower(trim($raw));
+
+            if ($raw !== null && ! in_array($keyword, self::INHERITING_KEYWORDS, true)) {
+                $chain[] = [$nodeKey, $conditional];
+                $result = $keyword === 'initial' ? [null, false] : $this->declaredCustomProperty($node, $nodeKey, $nodeKey."\0".$name, $raw, $depth);
+
+                break;
+            }
+
+            $chain[] = [$nodeKey, $conditional || $keyword === 'revert-layer'];
+            $parent = $node->parentNode;
+
+            if (! $parent instanceof DOMElement) {
+                $result = $this->rootCustomProperty($node, $nodeKey, $name, $depth);
+
+                break;
+            }
+
+            $node = $parent;
+            $nodeKey = $this->nodeKey($parent);
+
+            if (isset($this->customPropertyCache[$nodeKey][$slot])) {
+                $result = $this->customPropertyCache[$nodeKey][$slot];
+
+                break;
+            }
+        }
+
+        [$value, $approximate] = $result;
+
+        for ($i = count($chain) - 1; $i >= 0; $i--) {
+            $approximate = $approximate || $chain[$i][1];
+            $this->customPropertyCache[$chain[$i][0]][$slot] = [$value, $approximate];
+        }
+
+        return $this->customPropertyCache[$key][$slot];
+    }
+
+    /**
+     * The element's own cascaded declaration of $name among the unconditional rules and the style attribute, and
+     * whether a conditional rule declares it with more weight.
+     *
+     * @return array{0: ?string, 1: bool}
+     */
+    private function ownCustomProperty(DOMElement $element, string $key, string $name): array
+    {
+        $value = $weight = $conditional = null;
+
+        foreach ([$this->index[$key] ?? [], $this->customIndex[$key] ?? [], $this->universalCustomRules] as $positions) {
+            foreach ($positions as $position) {
+                $rule = $this->rules[$position];
+
+                if (! isset($rule['properties'][$name])) {
+                    continue;
+                }
+
+                $declaration = $rule['properties'][$name];
+                $candidate = [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']];
+
+                if ($rule['conditional'] ?? false) {
+                    $conditional = $conditional === null || $candidate > $conditional ? $candidate : $conditional;
+                } elseif ($weight === null || $candidate > $weight) {
+                    [$value, $weight] = [$declaration['value'], $candidate];
+                }
+            }
+        }
+
+        $inline = $this->inlineCustomProperties($element, $key)[$name] ?? null;
+
+        if ($inline !== null) {
+            $candidate = [$inline['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX];
+
+            if ($weight === null || $candidate > $weight) {
+                [$value, $weight] = [$inline['value'], $candidate];
+            }
+        }
+
+        return [$value, $conditional !== null && ($weight === null || $conditional > $weight)];
+    }
+
+    /** @return array<string, array{value: string, important: bool}> custom properties of the element's style attribute */
+    private function inlineCustomProperties(DOMElement $element, string $key): array
+    {
+        if (isset($this->inlineCustomProperties[$key])) {
+            return $this->inlineCustomProperties[$key];
+        }
+
+        $style = $element->getAttribute('style');
+
+        if (! str_contains($style, '--')) {
+            return [];
+        }
+
+        return $this->inlineCustomProperties[$key] = array_filter(
+            $this->parseProperties($style),
+            fn (string $name): bool => str_starts_with($name, '--'),
+            ARRAY_FILTER_USE_KEY,
+        );
+    }
+
+    /**
+     * A declared custom property value with its var() references substituted in the declaring element's context;
+     * $guard identifies the declaration while it is being computed.
+     *
+     * @return array{0: string|false, 1: bool}
+     */
+    private function declaredCustomProperty(DOMElement $element, string $key, string $guard, string $raw, int $depth): array
+    {
+        if (isset($this->computingProperties[$guard])) {
+            return [false, true]; // a cycle: invalid at computed-value time
+        }
+
+        $this->computingProperties[$guard] = true;
+        [$value, $approximate] = $this->substituteIn($element, $key, $raw, $depth);
+        unset($this->computingProperties[$guard]);
+
+        return [$value ?? false, $approximate];
+    }
+
+    /**
+     * $name on the root element when no element declares it: the root custom properties (customProperties()), which add
+     * :host declarations and :root rules beyond the index budget.
+     *
+     * @return array{0: string|null|false, 1: bool}
+     */
+    private function rootCustomProperty(DOMElement $root, string $key, string $name, int $depth): array
+    {
+        $raw = $this->customProperties()[$name] ?? null;
+        $keyword = $raw === null ? null : strtolower(trim($raw));
+
+        if ($raw === null || $keyword === 'initial' || in_array($keyword, self::INHERITING_KEYWORDS, true)) {
+            return [null, false];
+        }
+
+        return $this->declaredCustomProperty($root, $key, "\0root\0".$name, $raw, $depth);
+    }
+
+    /**
+     * Which index a rule belongs to: 'rule' when it carries one of INDEXED_PROPERTIES, 'custom' when it carries
+     * custom properties but none of them, null when it is not indexed.
+     *
+     * @param  array{properties: array<string, array{value: string, important: bool}>}  $rule
+     * @return 'rule'|'custom'|null
+     */
+    private function indexKind(array $rule): ?string
+    {
+        $custom = false;
+
+        foreach ($rule['properties'] as $name => $declaration) {
+            if (str_starts_with((string) $name, '--')) {
+                $custom = true;
+            } elseif (in_array($name, self::INDEXED_PROPERTIES, true)) {
+                return 'rule';
+            }
+        }
+
+        return $custom ? 'custom' : null;
     }
 
     /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
@@ -750,7 +1071,7 @@ class CssParser
             return $this->backgroundCache[$key] = [$parent, $approximate];
         }
 
-        [$value, $variablesApproximate] = $this->substitute($value);
+        [$value, $variablesApproximate] = $this->substituteIn($element, $key, $value, 0);
 
         if ($value === null) {
             return $this->backgroundCache[$key] = [$parent, true];
@@ -785,7 +1106,7 @@ class CssParser
             return $this->foregroundCache[$key] = [$parent, $approximate];
         }
 
-        [$value, $variablesApproximate] = $this->substitute($value);
+        [$value, $variablesApproximate] = $this->substituteIn($element, $key, $value, 0);
         $own = $value === null || Color::isUnresolvable($value) ? null : Color::parse($value);
 
         if ($own === null) {

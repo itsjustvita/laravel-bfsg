@@ -90,6 +90,55 @@ class CssIndexBudgetTest extends TestCase
         $this->assertSame('#0001e5', $document->cssParser()->declarationsFor($paragraph)['color']['value']);
     }
 
+    /**
+     * Tailwind-shaped page: a universal --tw-* reset, 250 root tokens, 2000 colour utilities through a custom property,
+     * 3000 rules that only declare custom properties, and ~3000 elements reading them.
+     */
+    private function customPropertyPage(): string
+    {
+        $css = '*, ::before, ::after {'.implode('', array_map(fn (int $i) => "--tw-p$i: initial;", range(1, 40))).'}';
+        $css .= ':root {'.implode('', array_map(fn (int $i) => sprintf('--color-%d: #%06x;', $i, $i * 4111), range(1, 250))).'}';
+
+        for ($i = 0; $i < 2000; $i++) {
+            $css .= sprintf('.c%d { --tw-text-opacity: 1; color: rgb(%d %d %d / var(--tw-text-opacity)) } ', $i, $i % 200, $i % 150, $i % 100);
+        }
+
+        for ($i = 0; $i < 3000; $i++) {
+            $css .= sprintf('.v%d { --v%d: var(--color-%d) } ', $i, $i, $i % 250 + 1);
+        }
+
+        $body = '';
+
+        for ($i = 0; $i < 1000; $i++) {
+            $body .= sprintf('<div class="v%d"><p class="c%d">Text %d</p><span style="color: var(--v%d)">More</span></div>', $i, ($i + 1000) % 2000, $i, $i);
+        }
+
+        return '<html lang="en"><head><title>Large</title><style>'.$css.'</style></head><body><main>'.$body.'</main></body></html>';
+    }
+
+    public function test_custom_property_rules_have_their_own_budget(): void
+    {
+        $document = HtmlDocument::fromHtml($this->customPropertyPage());
+        $parser = $document->cssParser()->buildIndex();
+        $span = $document->query('//div[@class="v7"]/span')[0];
+
+        $this->assertFalse($parser->isTruncated(), 'custom-property rules do not count against MAX_INDEXED_RULES');
+        $this->assertSame('#008078', $parser->resolveColors($span)['foreground']->toHex(), 'var(--v7) → var(--color-8) inherited from the card');
+        $this->assertSame('#0e720e', $parser->resolveColors($document->query('//p[@class="c1014"]')[0])['foreground']->toHex());
+    }
+
+    #[Group('performance')]
+    public function test_custom_property_page_is_analyzed_within_the_time_budget(): void
+    {
+        $html = $this->customPropertyPage();
+
+        $start = microtime(true);
+        app(Bfsg::class)->analyze($html);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('analyze took %.2f s', $elapsed));
+    }
+
     #[Group('performance')]
     public function test_descendant_selector_index_is_built_within_the_time_budget(): void
     {
