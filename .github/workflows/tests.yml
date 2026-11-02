@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -26,12 +26,14 @@ jobs:
         php: ['8.2', '8.3', '8.4', '8.5']
         laravel: ['12.*', '13.*']
         stability: [prefer-stable]
+        os: [ubuntu-latest]
         include:
           - laravel: '12.*'
             testbench: '^10.0'
           - laravel: '13.*'
             testbench: '^11.0'
-          - php: '8.4'
+          - os: ubuntu-latest
+            php: '8.4'
             laravel: '12.*'
             testbench: '^10.0'
             stability: prefer-lowest
@@ -44,7 +46,7 @@ jobs:
         exclude:
           - php: '8.2'
             laravel: '13.*'
-    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }} - ${{ matrix.os || 'ubuntu-latest' }}
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }} - ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - name: Setup PHP
@@ -57,7 +59,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.composer/cache
-          key: ${{ matrix.os || 'ubuntu-latest' }}-php${{ matrix.php }}-l${{ matrix.laravel }}-${{ matrix.stability }}-${{ hashFiles('composer.json') }}
+          key: ${{ matrix.os }}-php${{ matrix.php }}-l${{ matrix.laravel }}-${{ matrix.stability }}-${{ hashFiles('composer.json') }}
       - name: Show libxml version
         run: php -r 'echo LIBXML_DOTTED_VERSION, PHP_EOL;'
       - name: Validate composer.json
@@ -69,7 +71,7 @@ jobs:
       - name: Execute tests
         run: vendor/bin/phpunit -c phpunit.xml.dist
       - name: Execute performance tests
-        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable' && !matrix.os
+        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable' && matrix.os == 'ubuntu-latest'
         # Wall-clock budgets, scaled for shared runners.
         run: BFSG_PERF_FACTOR=3 vendor/bin/phpunit -c phpunit.xml.dist --group performance
 
