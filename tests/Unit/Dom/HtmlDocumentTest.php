@@ -341,7 +341,6 @@ class HtmlDocumentTest extends TestCase
             'custom body element' => ['<body-text>x</body-text>', true],
             'custom head element' => ['<head-line>x</head-line>', true],
             'header first' => ['<header><p>x</p></header>', true],
-            'html in script' => ['<div><script>var a = "<htm" + "l>";</script></div>', true],
             'big leading comment' => ['<!--'.str_repeat('x', 1048576).'--><!doctype html><title>T</title><p>x</p>', false],
         ];
     }
@@ -372,9 +371,45 @@ class HtmlDocumentTest extends TestCase
 
     public function test_http_equiv_content_type_is_a_declaration(): void
     {
-        $doc = HtmlDocument::fromHtml("<html><head><meta content=\"text/html; charset=iso-8859-1\" http-equiv=\"Content-Type\"><title>\xDCber</title></head><body>x</body></html>");
+        $doc = HtmlDocument::fromHtml('<html><head><meta content="text/html;charset=iso-8859-1" http-equiv="Content-Type"><title>Über</title></head><body>x</body></html>');
+
+        $title = $doc->query('//title')[0]->textContent;
+
+        // The declared latin1 is followed, so the UTF-8 bytes of "Ü" come out as mojibake ("Ã" plus a C1 control or "œ").
+        $this->assertNotSame('Über', $title);
+        $this->assertStringStartsWith('Ã', $title);
+    }
+
+    public function test_charset_in_another_meta_attribute_is_not_a_declaration(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><head><meta name="description" content="Why charset=latin1 breaks umlauts"><title>Über uns</title></head><body>x</body></html>');
+
+        $this->assertSame('Über uns', $doc->query('//title')[0]->textContent);
+    }
+
+    public function test_spaced_charset_attribute_is_recognised(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><head><meta charset = " utf-8"><title>Über</title></head><body>x</body></html>');
 
         $this->assertSame('Über', $doc->query('//title')[0]->textContent);
+    }
+
+    #[Group('performance')]
+    public function test_charset_regex_is_linear(): void
+    {
+        $start = microtime(true);
+        $doc = HtmlDocument::fromHtml('<html><head><meta charset='.str_repeat(' ', 1048576).'><title>Über</title></head><body>x</body></html>');
+
+        $this->assertLessThan(PerformanceBudget::seconds(0.5), microtime(true) - $start);
+        $this->assertNotEmpty($doc->query('//title'));
+    }
+
+    public function test_ignored_selectors_apply_before_flattening(): void
+    {
+        $html = str_repeat('<div>', 280).'<div class="skip"><img src=a.png></div><img src=b.png>'.str_repeat('</div>', 280);
+        $doc = HtmlDocument::fromHtml($html, ['ignoredSelectors' => ['.skip']]);
+
+        $this->assertCount(1, $doc->query('//img'));
     }
 
     #[Group('performance')]

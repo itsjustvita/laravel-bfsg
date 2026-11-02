@@ -108,10 +108,12 @@ class BfsgTest extends TestCase
         $result = app(Bfsg::class)->analyze($html);
 
         // libxml >= 2.14 stops parsing at 2048 levels and reports it; older versions keep the image.
-        $keys = array_map(fn ($v) => $v->key, $result->forAnalyzer('images'));
-        $this->assertTrue(
-            in_array('images.missing_alt', $keys, true)
-            || in_array('The document is nested too deeply for the parser; content after that point was not analyzed.', HtmlDocument::fromHtml($html)->warnings(), true),
-        );
+        $tooDeep = in_array('The document is nested too deeply for the parser; content after that point was not analyzed.', HtmlDocument::fromHtml($html)->warnings(), true);
+
+        if ($tooDeep) {
+            $this->assertGreaterThanOrEqual(21400, LIBXML_VERSION);
+        } else {
+            $this->assertContains('images.missing_alt', array_map(fn ($v) => $v->key, $result->forAnalyzer('images')));
+        }
     }
 }

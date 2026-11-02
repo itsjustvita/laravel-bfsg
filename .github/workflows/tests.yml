@@ -71,7 +71,7 @@ jobs:
       - name: Execute tests
         run: vendor/bin/phpunit -c phpunit.xml.dist
       - name: Execute performance tests
-        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable' && matrix.os == 'ubuntu-latest'
+        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
         # Wall-clock budgets, scaled for shared runners.
         run: BFSG_PERF_FACTOR=3 vendor/bin/phpunit -c phpunit.xml.dist --group performance
 

@@ -95,14 +95,14 @@ final class HtmlDocument
             self::removeEncodingHint($dom);
         }
 
-        if (self::flattenDeepNesting($dom)) {
-            array_unshift($warnings, 'Nesting deeper than '.self::MAX_DEPTH.' levels was flattened; the structure below that depth is approximate.');
-        }
-
         $document = new self($dom, $fragment, false, $warnings);
 
         if (! empty($options['ignoredSelectors'])) {
             $document->removeMatching($options['ignoredSelectors']);
+        }
+
+        if (self::flattenDeepNesting($dom)) {
+            array_unshift($document->warnings, 'Nesting deeper than '.self::MAX_DEPTH.' levels was flattened; the structure below that depth is approximate.');
         }
 
         return $document;
@@ -509,20 +509,40 @@ final class HtmlDocument
 
         $head = substr($html, 0, strspn($html, implode('', array_map('chr', range(0, 127)))));
 
-        if (preg_match_all('/<meta\s[^>]*>/i', $head, $tags) < 1) {
-            return true;
-        }
+        $offset = 0;
 
-        foreach ($tags[0] as $tag) {
-            $declared = preg_match('/http-equiv\s*=\s*["\']?content-type/i', $tag) === 1
-                ? preg_match('/charset\s*=\s*["\']?\s*([\w:.-]+)/i', $tag, $m)
-                : preg_match('/\scharset\s*=\s*["\']?\s*([\w:.-]+)/i', $tag, $m);
+        while (($start = stripos($head, '<meta', $offset)) !== false && ($end = strpos($head, '>', $start)) !== false) {
+            $offset = $end + 1;
+            $charset = self::metaCharset(substr($head, $start + 5, $end - $start - 5));
 
-            if ($declared === 1) {
-                return preg_match('/^utf-?8$/i', $m[1]) === 1;
+            if ($charset !== null) {
+                return preg_match('/^utf-?8$/i', $charset) === 1;
             }
         }
 
         return true;
+    }
+
+    /** The charset a meta tag declares: its charset attribute, or the content of an http-equiv="content-type" one. */
+    private static function metaCharset(string $attributes): ?string
+    {
+        preg_match_all('~([^\s"\'<>/=]++)(?:\s*+=\s*+(?:"([^"]*+)"|\'([^\']*+)\'|([^\s"\'>]++)))?~', $attributes, $m, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+
+        $values = [];
+
+        foreach ($m as $attribute) {
+            $values[strtolower($attribute[1])] ??= trim($attribute[2] ?? $attribute[3] ?? $attribute[4] ?? '');
+        }
+
+        if (($values['charset'] ?? '') !== '') {
+            return $values['charset'];
+        }
+
+        if (strtolower($values['http-equiv'] ?? '') === 'content-type'
+            && preg_match('/charset\s*+=\s*+["\']?+\s*+([\w:.-]++)/i', $values['content'] ?? '', $c) === 1) {
+            return $c[1];
+        }
+
+        return null;
     }
 }
