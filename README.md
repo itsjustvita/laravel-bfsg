@@ -35,7 +35,7 @@ Upgrading from 2.x? Read [UPGRADE.md](UPGRADE.md).
 
 ## Requirements
 
-- PHP 8.2 or higher with the `dom`, `libxml` and `mbstring` extensions
+- PHP 8.2–8.5 with the `dom`, `libxml` and `mbstring` extensions
 - Laravel 12 or 13
 - Optional: `laravel/mcp` (`^0.6.4 || ^1.0`) for the MCP server
 - Optional: `barryvdh/laravel-dompdf` (`^3.0`) for PDF reports

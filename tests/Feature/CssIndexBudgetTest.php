@@ -6,7 +6,9 @@ use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 class CssIndexBudgetTest extends TestCase
 {
@@ -29,7 +31,8 @@ class CssIndexBudgetTest extends TestCase
         return '<html lang="en"><head><title>Large</title><style>'.$css.'</style></head><body>'.$body.'<button class="btn">Go</button></main></body></html>';
     }
 
-    public function test_large_page_is_analyzed_within_the_time_guard(): void
+    #[Group('performance')]
+    public function test_large_page_is_analyzed_within_the_time_budget(): void
     {
         $html = $this->largePage();
 
@@ -37,7 +40,7 @@ class CssIndexBudgetTest extends TestCase
         app(Bfsg::class)->analyze($html);
         $elapsed = microtime(true) - $start;
 
-        $this->assertLessThan(3.0, $elapsed, sprintf('analyze took %.2f s', $elapsed));
+        $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('analyze took %.2f s', $elapsed));
     }
 
     public function test_the_css_index_is_built_once_per_analyze(): void
@@ -61,7 +64,7 @@ class CssIndexBudgetTest extends TestCase
         $this->assertSame(0, $document->cssParser()->indexBuilds());
     }
 
-    public function test_descendant_selectors_are_bucketed_by_their_rightmost_compound(): void
+    private function descendantPage(): HtmlDocument
     {
         $css = '';
 
@@ -75,15 +78,27 @@ class CssIndexBudgetTest extends TestCase
             $body .= sprintf('<div class="w%d"><p class="t%d">Text %d</p><span class="t%d">More</span></div>', $i % 400, $i, $i, ($i * 7) % 2000);
         }
 
-        $document = HtmlDocument::fromHtml('<html lang="en"><head><title>Large</title><style>'.$css.'</style></head><body><main>'.$body.'</main></body></html>');
+        return HtmlDocument::fromHtml('<html lang="en"><head><title>Large</title><style>'.$css.'</style></head><body><main>'.$body.'</main></body></html>');
+    }
+
+    public function test_descendant_selectors_are_bucketed_by_their_rightmost_compound(): void
+    {
+        $document = $this->descendantPage();
+        $document->cssParser()->buildIndex();
+
+        $paragraph = $document->query('//div[@class="w5"]/p[@class="t5"]')[0];
+        $this->assertSame('#0001e5', $document->cssParser()->declarationsFor($paragraph)['color']['value']);
+    }
+
+    #[Group('performance')]
+    public function test_descendant_selector_index_is_built_within_the_time_budget(): void
+    {
+        $document = $this->descendantPage();
 
         $start = microtime(true);
         $document->cssParser()->buildIndex();
         $elapsed = microtime(true) - $start;
 
-        $this->assertLessThan(1.0, $elapsed, sprintf('index build took %.2f s', $elapsed));
-
-        $paragraph = $document->query('//div[@class="w5"]/p[@class="t5"]')[0];
-        $this->assertSame('#0001e5', $document->cssParser()->declarationsFor($paragraph)['color']['value']);
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('index build took %.2f s', $elapsed));
     }
 }

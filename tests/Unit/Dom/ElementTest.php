@@ -6,7 +6,9 @@ use DOMElement;
 use ItsJustVita\LaravelBfsg\Dom\Element;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Dom\Text;
+use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 class ElementTest extends TestCase
 {
@@ -133,14 +135,24 @@ class ElementTest extends TestCase
         $document = HtmlDocument::fromHtml('<html lang="en"><body class="page">'.str_repeat('<div class="row"><p>Paragraph text</p></div>', 60000).'</body></html>');
         $body = $document->body();
 
-        $start = microtime(true);
         $snippet = Element::snippet($body);
-        $elapsed = microtime(true) - $start;
 
-        $this->assertLessThan(0.05, $elapsed, sprintf('snippet took %.3f s', $elapsed));
         $this->assertStringStartsWith('<body class="page"><div class="row"><p>Paragraph text</p></div>', $snippet);
         $this->assertSame(120, mb_strlen($snippet));
         $this->assertSame(Text::truncate(Text::normalize((string) $document->dom()->saveHTML($body)), 120), $snippet);
+    }
+
+    #[Group('performance')]
+    public function test_snippet_of_a_large_subtree_stays_within_the_time_budget(): void
+    {
+        $document = HtmlDocument::fromHtml('<html lang="en"><body class="page">'.str_repeat('<div class="row"><p>Paragraph text</p></div>', 60000).'</body></html>');
+        $body = $document->body();
+
+        $start = microtime(true);
+        Element::snippet($body);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(0.05), $elapsed, sprintf('snippet took %.3f s', $elapsed));
     }
 
     public function test_a_cut_snippet_ends_with_an_ellipsis_and_closes_nothing_after_the_cut(): void

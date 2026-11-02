@@ -5,7 +5,9 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit\Css;
 use DOMElement;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\Group;
 
 class CssParserTest extends TestCase
 {
@@ -339,10 +341,24 @@ class CssParserTest extends TestCase
 
         [$parser] = $this->parsed($css.'}', '<p id="t">x</p>');
 
-        $start = microtime(true);
         $this->assertNull($parser->resolveVariables('var(--v8)'));
-        $this->assertLessThan(0.1, microtime(true) - $start);
         $this->assertSame(str_repeat('#111 ', 7).'#111', $parser->resolveVariables('var(--v1)'), 'short values still resolve');
+    }
+
+    #[Group('performance')]
+    public function test_nested_custom_properties_resolve_within_the_time_budget(): void
+    {
+        $css = ':root { --v0: #111; ';
+
+        for ($level = 1; $level <= 8; $level++) {
+            $css .= "--v$level: ".implode(' ', array_fill(0, 8, 'var(--v'.($level - 1).')')).'; ';
+        }
+
+        [$parser] = $this->parsed($css.'}', '<p id="t">x</p>');
+
+        $start = microtime(true);
+        $parser->resolveVariables('var(--v8)');
+        $this->assertLessThan(PerformanceBudget::seconds(0.1), microtime(true) - $start);
     }
 
     public function test_custom_properties_overridden_outside_the_root_are_approximate(): void
