@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -35,10 +35,16 @@ jobs:
             laravel: '12.*'
             testbench: '^10.0'
             stability: prefer-lowest
+          # Older runner image, so libxml2 2.9.x is covered next to the ubuntu-latest one.
+          - os: ubuntu-24.04
+            php: '8.4'
+            laravel: '13.*'
+            testbench: '^11.0'
+            stability: prefer-stable
         exclude:
           - php: '8.2'
             laravel: '13.*'
-    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }}
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }} - ${{ matrix.stability }} - ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
       - name: Setup PHP
@@ -51,7 +57,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.composer/cache
-          key: ${{ runner.os }}-php${{ matrix.php }}-l${{ matrix.laravel }}-${{ matrix.stability }}-${{ hashFiles('composer.json') }}
+          key: ${{ matrix.os || 'ubuntu-latest' }}-php${{ matrix.php }}-l${{ matrix.laravel }}-${{ matrix.stability }}-${{ hashFiles('composer.json') }}
+      - name: Show libxml version
+        run: php -r 'echo LIBXML_DOTTED_VERSION, PHP_EOL;'
       - name: Validate composer.json
         run: composer validate --strict --no-check-lock
       - name: Install dependencies
@@ -61,7 +69,7 @@ jobs:
       - name: Execute tests
         run: vendor/bin/phpunit -c phpunit.xml.dist
       - name: Execute performance tests
-        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
+        if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable' && !matrix.os
         # Wall-clock budgets, scaled for shared runners.
         run: BFSG_PERF_FACTOR=3 vendor/bin/phpunit -c phpunit.xml.dist --group performance
 
@@ -81,7 +89,9 @@ jobs:
       - run: vendor/bin/pint --test
 
   live:
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.60 has no chromium build for ubuntu 26.04 (what ubuntu-latest now is).
+    # Move to ubuntu-latest together with a deliberate Playwright bump.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     name: Live smoke test (fresh Laravel app, PHP 8.5)
     env:
