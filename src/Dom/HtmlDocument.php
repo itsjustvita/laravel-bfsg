@@ -14,13 +14,6 @@ final class HtmlDocument
 {
     private const ENCODING_HINT = '<?xml encoding="UTF-8">';
 
-    /**
-     * HTML5 void elements unknown to libxml's HTML parser: without an end tag they swallow their following siblings.
-     * Comments and raw-text elements (script, style, textarea, title, xmp) are matched first and kept verbatim, so
-     * a "<source" inside JavaScript, CSS or a comment is never touched.
-     */
-    private const UNKNOWN_VOID_ELEMENTS = '~<!--.*?-->|<(script|style|textarea|title|xmp)(?![\w-])[^>]*>.*?</\1\s*>|<(track|source|wbr|embed|keygen)(?![\w-])(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\2\s*>)~is';
-
     /** The first markup of a document (after whitespace, comments and processing instructions) is a doctype, html, head or body tag. */
     private const DOCUMENT_START = '~\G<(?:!doctype|html|head|body)(?![\w-])~i';
 
@@ -68,7 +61,7 @@ final class HtmlDocument
         }
 
         $fragment = $options['fragment'] ?? ! (self::startsLikeDocument($html) || preg_match('/<html[\s>]/i', $html) === 1);
-        $html = self::closeUnknownVoidElements($html);
+        $html = MarkupScanner::normalize($html);
         $hinted = self::needsEncodingHint($html);
 
         if ($hinted) {
@@ -364,16 +357,6 @@ final class HtmlDocument
         }
 
         return "concat('".str_replace("'", "', \"'\", '", $value)."')";
-    }
-
-    private static function closeUnknownVoidElements(string $html): string
-    {
-        return preg_replace_callback(
-            self::UNKNOWN_VOID_ELEMENTS,
-            fn (array $m) => ($m[2] ?? null) === null ? $m[0] : $m[0].'</'.$m[2].'>',
-            $html,
-            flags: PREG_UNMATCHED_AS_NULL,
-        ) ?? $html;
     }
 
     private static function hitDepthLimit(): bool
