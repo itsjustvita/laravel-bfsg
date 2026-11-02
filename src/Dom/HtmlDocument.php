@@ -7,6 +7,7 @@ use DOMElement;
 use DOMNode;
 use DOMXPath;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
+use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use Symfony\Component\CssSelector\CssSelectorConverter;
 use Throwable;
 
@@ -23,6 +24,14 @@ final class HtmlDocument
 
     /** A document starts, after whitespace, comments and processing instructions, with a doctype, html, head or body tag. */
     private const DOCUMENT_START = '~\A(?:\s++|<!--.*?-->|<\?.*?\?>)*+<(?:!doctype|html|head|body)\b~is';
+
+    /** LIBXML_PARSEHUGE lifts libxml's safety limits, so it is only used for inputs up to the size the fetcher accepts. */
+    public const MAX_HUGE_PARSE_BYTES = UrlFetcher::MAX_PAGE_BYTES;
+
+    /** libxml >= 2.14 still stops at 2048 levels with PARSEHUGE; deeper nesting is flattened to this depth. */
+    private const FLATTEN_DEPTH = 1500;
+
+    private const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', 'keygen'];
 
     private ?DOMXPath $xpath = null;
 
@@ -66,11 +75,17 @@ final class HtmlDocument
             $html = self::ENCODING_HINT.$html;
         }
 
-        $flags = LIBXML_HTML_NODEFDTD | LIBXML_PARSEHUGE | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
+        $bounded = strlen($html) <= self::MAX_HUGE_PARSE_BYTES;
+        $flags = LIBXML_HTML_NODEFDTD | ($bounded ? LIBXML_PARSEHUGE : 0) | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
         $previous = libxml_use_internal_errors(true);
 
         try {
             $dom->loadHTML($html, $flags);
+
+            if ($bounded && self::hitDepthLimit()) {
+                $dom = new DOMDocument;
+                $dom->loadHTML(self::flattenDeepNesting($html), $flags);
+            }
         } finally {
             libxml_clear_errors();
             libxml_use_internal_errors($previous);
@@ -348,6 +363,56 @@ final class HtmlDocument
             fn (array $m) => ($m[2] ?? null) === null ? $m[0] : $m[0].'</'.$m[2].'>',
             $html,
             flags: PREG_UNMATCHED_AS_NULL,
+        ) ?? $html;
+    }
+
+    private static function hitDepthLimit(): bool
+    {
+        foreach (libxml_get_errors() as $error) {
+            if (str_contains($error->message, 'Excessive depth')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Drops the tags that would nest deeper than FLATTEN_DEPTH (and their end tags), keeping their content. */
+    private static function flattenDeepNesting(string $html): string
+    {
+        $stack = [];
+        $depth = 0;
+
+        return preg_replace_callback(
+            '~<(/?)([a-zA-Z][\w:-]*)(?:[^>"\']|"[^"]*"|\'[^\']*\')*>~',
+            function (array $m) use (&$stack, &$depth) {
+                $name = strtolower($m[2]);
+
+                if (in_array($name, self::VOID_TAGS, true) || str_ends_with($m[0], '/>')) {
+                    return $m[0];
+                }
+
+                if ($m[1] === '') {
+                    $drop = $depth >= self::FLATTEN_DEPTH;
+                    $stack[] = $drop;
+                    $drop ? null : $depth++;
+
+                    return $drop ? '' : $m[0];
+                }
+
+                if ($stack === []) {
+                    return $m[0];
+                }
+
+                if (array_pop($stack)) {
+                    return '';
+                }
+
+                $depth--;
+
+                return $m[0];
+            },
+            $html,
         ) ?? $html;
     }
 

@@ -283,4 +283,15 @@ class HtmlDocumentTest extends TestCase
         $this->assertSame(' mine ', $comments->item(0)->data);
         $this->assertSame(0, $doc->xpath()->query('//processing-instruction()')->length);
     }
+
+    public function test_parse_huge_only_applies_to_bounded_input(): void
+    {
+        $deep = str_repeat('<div>', 300).'<img src=a.png>'.str_repeat('</div>', 300).'<img src=b.png>';
+
+        $this->assertCount(2, HtmlDocument::fromHtml($deep)->query('//img'));
+
+        $oversized = '<!--'.str_repeat('x', HtmlDocument::MAX_HUGE_PARSE_BYTES).'-->'.$deep;
+
+        $this->assertCount(0, HtmlDocument::fromHtml($oversized)->query('//img'));
+    }
 }
