@@ -146,6 +146,8 @@ class ReportGeneratorTest extends TestCase
 
     public function test_pdf_report(): void
     {
+        $this->requireDompdf();
+
         $this->assertStringStartsWith('%PDF', (new ReportGenerator($this->sampleResult()))->format('pdf')->render());
         $this->assertStringStartsWith('%PDF', (new ReportGenerator(new AnalysisResult([], [])))->format('pdf')->render());
     }

@@ -10,6 +10,13 @@ use ReflectionProperty;
 
 class McpServerTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->requireMcp();
+    }
+
     public function test_tools_use_the_documented_snake_case_names(): void
     {
         $tools = (new ReflectionProperty(BfsgMcpServer::class, 'tools'))->getDefaultValue();

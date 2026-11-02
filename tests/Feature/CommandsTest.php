@@ -215,6 +215,8 @@ class CommandsTest extends TestCase
 
     public function test_html_and_pdf_are_written_to_files_and_the_path_goes_to_stderr(): void
     {
+        $this->requireDompdf();
+
         $this->fakeSite(self::ERRORS);
         $directory = sys_get_temp_dir().'/bfsg-cli-'.uniqid();
         config()->set('bfsg.reporting.output_path', $directory);

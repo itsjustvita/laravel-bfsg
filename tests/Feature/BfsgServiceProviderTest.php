@@ -83,6 +83,8 @@ class BfsgServiceProviderTest extends TestCase
 
     public function test_the_mcp_server_command_needs_laravel_mcp(): void
     {
+        $this->requireMcp();
+
         $withoutMcp = new class($this->app) extends BfsgServiceProvider
         {
             protected function mcpAvailable(): bool
@@ -100,6 +102,8 @@ class BfsgServiceProviderTest extends TestCase
     #[RunInSeparateProcess]
     public function test_boost_receives_the_mcp_tools_when_installed(): void
     {
+        $this->requireMcp();
+
         require_once __DIR__.'/../Support/Stubs/BoostServiceProvider.php';
         config()->set('boost.mcp.tools.include', ['App\\Mcp\\ExistingTool']);
 

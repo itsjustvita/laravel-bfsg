@@ -136,6 +136,8 @@ class DocumentationTest extends TestCase
 
     public function test_every_artisan_command_and_option_in_the_docs_exists(): void
     {
+        $this->requireMcp();
+
         $known = $this->commandOptions();
         $calls = $this->docs()->artisanCalls();
         $this->assertGreaterThan(20, count($calls));
@@ -166,6 +168,8 @@ class DocumentationTest extends TestCase
 
     public function test_the_readme_documents_every_option_of_the_commands(): void
     {
+        $this->requireMcp();
+
         $documented = $this->docs()->inlineOptions('README.md');
 
         foreach ($this->commandOptions() as $command => $options) {
@@ -217,6 +221,8 @@ class DocumentationTest extends TestCase
 
     public function test_the_readme_lists_every_analyzer_and_mcp_tool(): void
     {
+        $this->requireMcp();
+
         $readme = $this->docs()->markdown('README.md');
 
         foreach (array_keys(Bfsg::ANALYZERS) as $key) {
@@ -336,6 +342,8 @@ class DocumentationTest extends TestCase
 
     public function test_package_classes_and_methods_named_in_the_prose_exist(): void
     {
+        $this->requireMcp();
+
         $checked = 0;
 
         foreach (DocSamples::FILES as $file) {
@@ -429,6 +437,8 @@ class DocumentationTest extends TestCase
 
     public function test_the_readme_mcp_table_lists_the_arguments_of_every_tool(): void
     {
+        $this->requireMcp();
+
         $readme = $this->docs()->markdown('README.md');
 
         foreach ((new ReflectionClass(BfsgMcpServer::class))->getDefaultProperties()['tools'] as $tool) {

@@ -48,6 +48,8 @@ class McpToolsTest extends TestCase
     {
         parent::setUp();
 
+        $this->requireMcp();
+
         if (! TestResponse::hasMacro('payload')) {
             // The first content item of a tool response, decoded (content() is protected; macros run bound to the response).
             TestResponse::macro('payload', fn () => json_decode($this->content()[0] ?? 'null', true, flags: JSON_THROW_ON_ERROR));

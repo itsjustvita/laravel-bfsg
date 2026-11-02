@@ -32,6 +32,9 @@ jobs:
             testbench: '^10.0'
           - laravel: '13.*'
             testbench: '^11.0'
+          # laravel/mcp 1.x on the prefer-stable legs. The prefer-lowest leg omits the key and keeps resolving 0.6.x.
+          - mcp: '^1.0'
+            stability: prefer-stable
           - os: ubuntu-latest
             php: '8.4'
             laravel: '12.*'
@@ -43,6 +46,7 @@ jobs:
             laravel: '13.*'
             testbench: '^11.0'
             stability: prefer-stable
+            mcp: '^1.0'
         exclude:
           - php: '8.2'
             laravel: '13.*'
@@ -64,6 +68,9 @@ jobs:
         run: php -r 'echo LIBXML_DOTTED_VERSION, PHP_EOL;'
       - name: Validate composer.json
         run: composer validate --strict --no-check-lock
+      - name: Require laravel/mcp 1.x
+        if: matrix.mcp
+        run: composer require --dev "laravel/mcp:${{ matrix.mcp }}" --no-interaction --no-update
       - name: Install dependencies
         run: |
           composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:${{ matrix.testbench }}" --no-interaction --no-update --dev
@@ -74,6 +81,31 @@ jobs:
         if: matrix.php == '8.4' && matrix.laravel == '13.*' && matrix.stability == 'prefer-stable'
         # Wall-clock budgets, scaled for shared runners.
         run: BFSG_PERF_FACTOR=3 vendor/bin/phpunit -c phpunit.xml.dist --group performance
+
+  optional-deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    name: Without the optional packages (PHP 8.4 - Laravel 13)
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite
+          coverage: none
+      - name: Cache Composer downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.composer/cache
+          key: optional-deps-php8.4-l13-${{ hashFiles('composer.json') }}
+      - name: Install dependencies without laravel/mcp and laravel-dompdf
+        run: |
+          composer require "laravel/framework:13.*" "orchestra/testbench:^11.0" --no-interaction --no-update --dev
+          composer remove --dev laravel/mcp barryvdh/laravel-dompdf --no-interaction --no-update
+          composer update --prefer-dist --no-interaction
+      - name: Execute tests
+        run: vendor/bin/phpunit -c phpunit.xml.dist
 
   code-style:
     runs-on: ubuntu-latest

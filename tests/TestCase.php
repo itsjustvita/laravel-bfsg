@@ -6,6 +6,7 @@ use Barryvdh\DomPDF\ServiceProvider;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
 use ItsJustVita\LaravelBfsg\BfsgServiceProvider;
+use Laravel\Mcp\Server;
 use Laravel\Mcp\Server\McpServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
@@ -30,11 +31,26 @@ class TestCase extends Orchestra
         parent::tearDown();
     }
 
+    protected function requireMcp(): void
+    {
+        if (! class_exists(Server::class)) {
+            $this->markTestSkipped('laravel/mcp is not installed.');
+        }
+    }
+
+    protected function requireDompdf(): void
+    {
+        if (! class_exists(ServiceProvider::class)) {
+            $this->markTestSkipped('barryvdh/laravel-dompdf is not installed.');
+        }
+    }
+
     protected function getPackageProviders($app)
     {
         return [
             BfsgServiceProvider::class,
-            ServiceProvider::class,
+            // barryvdh/laravel-dompdf is optional (suggest) as well
+            ...(class_exists(ServiceProvider::class) ? [ServiceProvider::class] : []),
             // laravel/mcp is optional (suggest); its provider resolves the tool Request for the MCP testing API
             ...(class_exists(McpServiceProvider::class) ? [McpServiceProvider::class] : []),
         ];

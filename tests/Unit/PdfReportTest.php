@@ -10,6 +10,13 @@ use ItsJustVita\LaravelBfsg\Violation;
 
 class PdfReportTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->requireDompdf();
+    }
+
     private function sampleResult(): AnalysisResult
     {
         return new AnalysisResult([
