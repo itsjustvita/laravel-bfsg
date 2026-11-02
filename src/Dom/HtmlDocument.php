@@ -7,7 +7,6 @@ use DOMElement;
 use DOMNode;
 use DOMXPath;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
-use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use Symfony\Component\CssSelector\CssSelectorConverter;
 use Throwable;
 
@@ -22,16 +21,14 @@ final class HtmlDocument
      */
     private const UNKNOWN_VOID_ELEMENTS = '~<!--.*?-->|<(script|style|textarea|title|xmp)(?![\w-])[^>]*>.*?</\1\s*>|<(track|source|wbr|embed|keygen)(?![\w-])(?:[^>"\']|"[^"]*"|\'[^\']*\')*>(?!\s*</\2\s*>)~is';
 
-    /** A document starts, after whitespace, comments and processing instructions, with a doctype, html, head or body tag. */
-    private const DOCUMENT_START = '~\A(?:\s++|<!--.*?-->|<\?.*?\?>)*+<(?:!doctype|html|head|body)\b~is';
+    /** The first markup of a document (after whitespace, comments and processing instructions) is a doctype, html, head or body tag. */
+    private const DOCUMENT_START = '~\G<(?:!doctype|html|head|body)(?![\w-])~i';
 
-    /** LIBXML_PARSEHUGE lifts libxml's safety limits, so it is only used for inputs up to the size the fetcher accepts. */
-    public const MAX_HUGE_PARSE_BYTES = UrlFetcher::MAX_PAGE_BYTES;
+    /** LIBXML_PARSEHUGE lifts libxml's safety limits, so it is only used for inputs up to this size. */
+    private const MAX_HUGE_PARSE_BYTES = 1048576;
 
-    /** libxml >= 2.14 still stops at 2048 levels with PARSEHUGE; deeper nesting is flattened to this depth. */
-    private const FLATTEN_DEPTH = 1500;
-
-    private const VOID_TAGS = ['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr', 'keygen'];
+    /** Elements nested deeper than this are unwrapped after parsing, so the recursive analyzers stay bounded. */
+    public const MAX_DEPTH = 256;
 
     private ?DOMXPath $xpath = null;
 
@@ -50,6 +47,8 @@ final class HtmlDocument
         private DOMDocument $dom,
         private bool $fragment,
         private bool $empty,
+        /** @var list<string> */
+        private array $warnings = [],
     ) {}
 
     /**
@@ -58,16 +57,17 @@ final class HtmlDocument
     public static function fromHtml(string $html, array $options = []): self
     {
         $dom = new DOMDocument;
-
-        if (trim($html) === '') {
-            return new self($dom, false, true);
-        }
+        $bounded = strlen($html) <= self::MAX_HUGE_PARSE_BYTES;
 
         if (str_starts_with($html, "\xEF\xBB\xBF")) {
             $html = substr($html, 3);
         }
 
-        $fragment = $options['fragment'] ?? (preg_match(self::DOCUMENT_START, $html) !== 1);
+        if (trim($html) === '') {
+            return new self($dom, false, true);
+        }
+
+        $fragment = $options['fragment'] ?? ! (self::startsLikeDocument($html) || preg_match('/<html[\s>]/i', $html) === 1);
         $html = self::closeUnknownVoidElements($html);
         $hinted = self::needsEncodingHint($html);
 
@@ -75,16 +75,16 @@ final class HtmlDocument
             $html = self::ENCODING_HINT.$html;
         }
 
-        $bounded = strlen($html) <= self::MAX_HUGE_PARSE_BYTES;
         $flags = LIBXML_HTML_NODEFDTD | ($bounded ? LIBXML_PARSEHUGE : 0) | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
         $previous = libxml_use_internal_errors(true);
+        $warnings = [];
 
         try {
+            libxml_clear_errors();
             $dom->loadHTML($html, $flags);
 
-            if ($bounded && self::hitDepthLimit()) {
-                $dom = new DOMDocument;
-                $dom->loadHTML(self::flattenDeepNesting($html), $flags);
+            if (self::hitDepthLimit()) {
+                $warnings[] = 'The document is nested too deeply for the parser; content after that point was not analyzed.';
             }
         } finally {
             libxml_clear_errors();
@@ -95,7 +95,11 @@ final class HtmlDocument
             self::removeEncodingHint($dom);
         }
 
-        $document = new self($dom, $fragment, false);
+        if (self::flattenDeepNesting($dom)) {
+            array_unshift($warnings, 'Nesting deeper than '.self::MAX_DEPTH.' levels was flattened; the structure below that depth is approximate.');
+        }
+
+        $document = new self($dom, $fragment, false, $warnings);
 
         if (! empty($options['ignoredSelectors'])) {
             $document->removeMatching($options['ignoredSelectors']);
@@ -146,6 +150,12 @@ final class HtmlDocument
         }
 
         return $elements;
+    }
+
+    /** @return list<string> Plain-English notes on input the parser could only handle approximately. */
+    public function warnings(): array
+    {
+        return $this->warnings;
     }
 
     public function isFragment(): bool
@@ -377,43 +387,98 @@ final class HtmlDocument
         return false;
     }
 
-    /** Drops the tags that would nest deeper than FLATTEN_DEPTH (and their end tags), keeping their content. */
-    private static function flattenDeepNesting(string $html): string
+    /**
+     * Unwraps container elements nested deeper than MAX_DEPTH into the element at the cap, iteratively and in linear
+     * time. Leaf elements and text are kept in document order; only the container wrappers disappear.
+     */
+    private static function flattenDeepNesting(DOMDocument $dom): bool
     {
-        $stack = [];
-        $depth = 0;
+        $xpath = new DOMXPath($dom);
+        $probe = $xpath->query('/'.implode('/', array_fill(0, self::MAX_DEPTH + 1, '*')));
 
-        return preg_replace_callback(
-            '~<(/?)([a-zA-Z][\w:-]*)(?:[^>"\']|"[^"]*"|\'[^\']*\')*>~',
-            function (array $m) use (&$stack, &$depth) {
-                $name = strtolower($m[2]);
+        if ($probe === false || $probe->length === 0) {
+            return false;
+        }
 
-                if (in_array($name, self::VOID_TAGS, true) || str_ends_with($m[0], '/>')) {
-                    return $m[0];
+        $anchors = $xpath->query('/'.implode('/', array_fill(0, self::MAX_DEPTH - 1, '*')));
+
+        foreach ($anchors === false ? [] : iterator_to_array($anchors) as $anchor) {
+            if (! self::hasContainerChild($anchor)) {
+                continue;
+            }
+
+            $kept = [];
+            $stack = array_reverse(iterator_to_array($anchor->childNodes));
+
+            while ($stack !== []) {
+                $node = array_pop($stack);
+                $children = $node instanceof DOMElement ? iterator_to_array($node->childNodes) : [];
+
+                if (self::hasElement($children)) {
+                    array_push($stack, ...array_reverse($children));
+                } else {
+                    $kept[] = $node;
                 }
+            }
 
-                if ($m[1] === '') {
-                    $drop = $depth >= self::FLATTEN_DEPTH;
-                    $stack[] = $drop;
-                    $drop ? null : $depth++;
+            foreach (iterator_to_array($anchor->childNodes) as $child) {
+                $anchor->removeChild($child);
+            }
 
-                    return $drop ? '' : $m[0];
-                }
+            foreach ($kept as $node) {
+                $anchor->appendChild($node);
+            }
+        }
 
-                if ($stack === []) {
-                    return $m[0];
-                }
+        return true;
+    }
 
-                if (array_pop($stack)) {
-                    return '';
-                }
+    private static function hasContainerChild(DOMNode $node): bool
+    {
+        foreach ($node->childNodes as $child) {
+            if ($child instanceof DOMElement && self::hasElement(iterator_to_array($child->childNodes))) {
+                return true;
+            }
+        }
 
-                $depth--;
+        return false;
+    }
 
-                return $m[0];
-            },
-            $html,
-        ) ?? $html;
+    /** @param  array<int, DOMNode>  $nodes */
+    private static function hasElement(array $nodes): bool
+    {
+        foreach ($nodes as $node) {
+            if ($node instanceof DOMElement) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function startsLikeDocument(string $html): bool
+    {
+        $offset = 0;
+
+        while (true) {
+            $offset += strspn($html, " \t\n\r\f\v", $offset);
+
+            if (substr_compare($html, '<!--', $offset, 4) === 0) {
+                $end = strpos($html, '-->', $offset + 4);
+            } elseif (substr_compare($html, '<?', $offset, 2) === 0) {
+                $end = strpos($html, '?>', $offset + 2);
+            } else {
+                break;
+            }
+
+            if ($end === false) {
+                return false;
+            }
+
+            $offset = $end + ($html[$end] === '-' ? 3 : 2);
+        }
+
+        return preg_match(self::DOCUMENT_START, $html, $m, 0, $offset) === 1;
     }
 
     /** libxml < 2.14 parses the hint as a processing instruction, >= 2.14 as a comment; neither may stay in the DOM. */
@@ -425,14 +490,10 @@ final class HtmlDocument
             }
         }
 
-        $comments = (new DOMXPath($dom))->query('//comment()');
+        $comment = (new DOMXPath($dom))->query('(//comment())[1]')->item(0);
 
-        foreach ($comments === false ? [] : iterator_to_array($comments) as $comment) {
-            if (trim($comment->data) === '?xml encoding="UTF-8"') {
-                $comment->parentNode?->removeChild($comment);
-
-                return;
-            }
+        if ($comment !== null && trim($comment->data) === trim(self::ENCODING_HINT, '<>')) {
+            $comment->parentNode?->removeChild($comment);
         }
     }
 
@@ -446,13 +507,22 @@ final class HtmlDocument
             return false;
         }
 
-        $ascii = strspn($html, implode('', array_map('chr', range(0, 127))));
-        $head = substr($html, 0, $ascii);
+        $head = substr($html, 0, strspn($html, implode('', array_map('chr', range(0, 127)))));
 
-        if (preg_match('/charset\s*=/i', $head) !== 1) {
+        if (preg_match_all('/<meta\s[^>]*>/i', $head, $tags) < 1) {
             return true;
         }
 
-        return preg_match('/charset\s*=\s*["\']?\s*utf-?8\b/i', $head) === 1;
+        foreach ($tags[0] as $tag) {
+            $declared = preg_match('/http-equiv\s*=\s*["\']?content-type/i', $tag) === 1
+                ? preg_match('/charset\s*=\s*["\']?\s*([\w:.-]+)/i', $tag, $m)
+                : preg_match('/\scharset\s*=\s*["\']?\s*([\w:.-]+)/i', $tag, $m);
+
+            if ($declared === 1) {
+                return preg_match('/^utf-?8$/i', $m[1]) === 1;
+            }
+        }
+
+        return true;
     }
 }

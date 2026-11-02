@@ -2,9 +2,12 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Dom;
 
+use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 
 class HtmlDocumentTest extends TestCase
 {
@@ -226,6 +229,27 @@ class HtmlDocumentTest extends TestCase
         $doc = HtmlDocument::fromHtml(str_repeat('<div>', 300).'<img src=a.png>'.str_repeat('</div>', 300).'<img src=b.png>');
 
         $this->assertCount(2, $doc->query('//img'));
+        $this->assertLessThanOrEqual(HtmlDocument::MAX_DEPTH, $this->maxDepth($doc));
+        $this->assertContains('Nesting deeper than 256 levels was flattened; the structure below that depth is approximate.', $doc->warnings());
+    }
+
+    private function maxDepth(HtmlDocument $doc): int
+    {
+        $max = 0;
+        $stack = [[$doc->root(), 1]];
+
+        while ($stack !== []) {
+            [$node, $depth] = array_pop($stack);
+            $max = max($max, $depth);
+
+            foreach ($node->childNodes as $child) {
+                if ($child instanceof \DOMElement) {
+                    $stack[] = [$child, $depth + 1];
+                }
+            }
+        }
+
+        return $max;
     }
 
     public function test_leading_bom_is_ignored(): void
@@ -290,8 +314,85 @@ class HtmlDocumentTest extends TestCase
 
         $this->assertCount(2, HtmlDocument::fromHtml($deep)->query('//img'));
 
-        $oversized = '<!--'.str_repeat('x', HtmlDocument::MAX_HUGE_PARSE_BYTES).'-->'.$deep;
+        $oversized = HtmlDocument::fromHtml('<img src=first.png><!--'.str_repeat('x', 1048576).'-->'.$deep);
 
-        $this->assertCount(0, HtmlDocument::fromHtml($oversized)->query('//img'));
+        $this->assertCount(1, $oversized->query('//img'));
+        $this->assertContains('The document is nested too deeply for the parser; content after that point was not analyzed.', $oversized->warnings());
+    }
+
+    public function test_bom_only_input_is_empty(): void
+    {
+        $this->assertTrue(HtmlDocument::fromHtml("\xEF\xBB\xBF")->isEmpty());
+        $this->assertTrue(HtmlDocument::fromHtml("\xEF\xBB\xBF \n")->isEmpty());
+    }
+
+    public function test_output_before_the_doctype_still_makes_a_document(): void
+    {
+        $doc = HtmlDocument::fromHtml("<br />\n<b>Deprecated</b>: notice <br />\n<!DOCTYPE html><html><head><title>T</title></head><body><p>x</p></body></html>");
+
+        $this->assertFalse($doc->isFragment());
+        $this->assertContains('language.missing_lang', array_map(fn ($v) => $v->key, app(Bfsg::class)->analyze("<br />\n<!DOCTYPE html><html><head><title>T</title></head><body><p>x</p></body></html>")->all()));
+    }
+
+    /** @return array<string, array{string, bool}> */
+    public static function fragmentOrDocument(): array
+    {
+        return [
+            'custom body element' => ['<body-text>x</body-text>', true],
+            'custom head element' => ['<head-line>x</head-line>', true],
+            'header first' => ['<header><p>x</p></header>', true],
+            'html in script' => ['<div><script>var a = "<htm" + "l>";</script></div>', true],
+            'big leading comment' => ['<!--'.str_repeat('x', 1048576).'--><!doctype html><title>T</title><p>x</p>', false],
+        ];
+    }
+
+    #[DataProvider('fragmentOrDocument')]
+    public function test_fragment_detection_edge_cases(string $html, bool $fragment): void
+    {
+        $this->assertSame($fragment, HtmlDocument::fromHtml($html)->isFragment());
+    }
+
+    /** @return array<string, array{string}> */
+    public static function otherCharsetMentions(): array
+    {
+        return [
+            'accept-charset' => ['<form accept-charset="ISO-8859-1"><label>Straße</label></form>'],
+            'script charset' => ['<script src=a.js charset="iso-8859-1"></script><p>Straße</p>'],
+            'js string' => ['<script>var s = "charset=ISO-8859-1";</script><p>Straße</p>'],
+        ];
+    }
+
+    #[DataProvider('otherCharsetMentions')]
+    public function test_charset_mentions_that_are_not_declarations_do_not_suppress_utf8(string $html): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body>'.$html.'</body></html>');
+
+        $this->assertStringContainsString('Straße', $doc->body()->textContent);
+    }
+
+    public function test_http_equiv_content_type_is_a_declaration(): void
+    {
+        $doc = HtmlDocument::fromHtml("<html><head><meta content=\"text/html; charset=iso-8859-1\" http-equiv=\"Content-Type\"><title>\xDCber</title></head><body>x</body></html>");
+
+        $this->assertSame('Über', $doc->query('//title')[0]->textContent);
+    }
+
+    #[Group('performance')]
+    public function test_deep_chains_stay_within_twice_the_time_of_shallow_ones(): void
+    {
+        $chain = fn (int $depth) => str_repeat('<div>', $depth).'<img src=a.png>'.str_repeat('</div>', $depth);
+        $deep = str_repeat($chain(5000), 4);
+        $shallow = str_repeat($chain(200), 100);
+        $bfsg = app(Bfsg::class);
+
+        $start = microtime(true);
+        $bfsg->analyze($shallow);
+        $shallowTime = microtime(true) - $start;
+
+        $start = microtime(true);
+        $bfsg->analyze($deep);
+        $deepTime = microtime(true) - $start;
+
+        $this->assertLessThan(max(PerformanceBudget::seconds(2 * $shallowTime), PerformanceBudget::seconds(0.5)), $deepTime);
     }
 }

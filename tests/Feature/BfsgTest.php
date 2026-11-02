@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class BfsgTest extends TestCase
@@ -103,8 +104,14 @@ class BfsgTest extends TestCase
 
     public function test_very_deep_document_analyzes_without_error(): void
     {
-        $result = app(Bfsg::class)->analyze(str_repeat('<div>', 5000).'<img src=a.png>'.str_repeat('</div>', 5000));
+        $html = str_repeat('<div>', 5000).'<img src=a.png>'.str_repeat('</div>', 5000);
+        $result = app(Bfsg::class)->analyze($html);
 
-        $this->assertContains('images.missing_alt', collect($result->forAnalyzer('images'))->map(fn ($v) => $v->key)->all());
+        // libxml >= 2.14 stops parsing at 2048 levels and reports it; older versions keep the image.
+        $keys = array_map(fn ($v) => $v->key, $result->forAnalyzer('images'));
+        $this->assertTrue(
+            in_array('images.missing_alt', $keys, true)
+            || in_array('The document is nested too deeply for the parser; content after that point was not analyzed.', HtmlDocument::fromHtml($html)->warnings(), true),
+        );
     }
 }
