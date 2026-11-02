@@ -160,8 +160,8 @@ class CssIndexBudgetTest extends TestCase
         $chain = '<!doctype html><html lang="en"><head><title>x</title><style>*{--x:#777} div,p{--x:inherit} p{color:#767676 '.str_repeat('var(--x) ', 64).'}</style></head><body>'
             .str_repeat('<div>', 200).str_repeat('<p>Some text</p>', 300).str_repeat('</div>', 200).'</body></html>';
 
-        // 4 KB values cached per element: a universal rule whose names chain to a 4000-character token, read through invalid names.
-        $values = '--a:'.str_repeat('A', 4000).';';
+        // Values just under 4 KB cached per element: a universal rule whose names chain to a 4085-character token, read through invalid names.
+        $values = '--a:'.str_repeat('A', 4085).';';
         $invalid = '';
 
         for ($i = 0; $i < 64; $i++) {
@@ -229,6 +229,59 @@ class CssIndexBudgetTest extends TestCase
         $elapsed = microtime(true) - $start;
 
         $this->assertLessThan(PerformanceBudget::seconds(3.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+    }
+
+    /** 4000 custom-property rules on the type selector `p` and 3000 paragraphs reading 64 of the names: 12M possible index entries. */
+    private function typeFanOutPage(string $extra = ''): string
+    {
+        $css = '';
+        $references = '';
+
+        for ($i = 0; $i < 4000; $i++) {
+            $css .= "p{--z$i:1}";
+        }
+
+        for ($i = 0; $i < 64; $i++) {
+            $references .= " var(--z$i)";
+        }
+
+        return '<!doctype html><html lang="en"><head><title>x</title><style>'.$css.":root{--q:1} p{color:#767676$references;background:#fff$references}</style></head><body><main>"
+            .str_repeat('<p>Some text</p>', 3000).'</main>'.$extra.'</body></html>';
+    }
+
+    public function test_custom_property_index_entries_are_capped(): void
+    {
+        $document = HtmlDocument::fromHtml($this->typeFanOutPage());
+
+        $violations = (new ContrastAnalyzer)->analyze($document);
+
+        $truncated = array_values(array_filter($violations, fn ($violation) => $violation->key === 'contrast.analysis_truncated'));
+        $this->assertGreaterThan(0, $truncated[0]->params['limit'] ?? ContrastAnalyzer::MAX_MEASURED, 'the index build leaves time to measure');
+        $this->assertTrue($document->cssParser()->isTruncated(), 'rules beyond the entry cap are skipped');
+    }
+
+    public function test_an_index_build_without_a_deadline_stays_bounded(): void
+    {
+        $html = $this->typeFanOutPage('<div aria-hidden="true"><a href="#">x</a></div>');
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+
+        $result = app(Bfsg::class)->except(['contrast'])->analyze($html);
+
+        $this->assertLessThan(64 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.0f MB', (memory_get_peak_usage(true) - $before) / 1048576));
+        $this->assertContains('aria.hidden_focusable', array_map(fn ($violation) => $violation->key, $result->forAnalyzer('aria')), 'the aria-hidden link is still reported');
+    }
+
+    #[Group('performance')]
+    public function test_an_index_build_without_a_deadline_finishes_within_the_time_budget(): void
+    {
+        $html = $this->typeFanOutPage('<div aria-hidden="true"><a href="#">x</a></div>');
+
+        $start = microtime(true);
+        app(Bfsg::class)->except(['contrast'])->analyze($html);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(6.0), $elapsed, sprintf('analyze took %.2f s', $elapsed));
     }
 
     #[Group('performance')]

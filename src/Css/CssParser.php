@@ -25,6 +25,18 @@ class CssParser
     /** var() references followed per value; a value with more is unresolvable (approximate). */
     public const MAX_VAR_REFERENCES = 64;
 
+    /** Seconds an index build may take when the caller passes no deadline; ContrastAnalyzer uses the same budget. */
+    public const INDEX_TIME_BUDGET_SECONDS = 5.0;
+
+    /** Index entries (matched element × rule) of custom-property-only rules and maybe rules; beyond it they are skipped (truncated). */
+    private const MAX_CUSTOM_INDEX_ENTRIES = 200000;
+
+    /** User-action pseudo-classes: a selector that needs one outside parentheses never matches the base state that is measured. */
+    private const USER_ACTION_STATE = '/:(?:hover|focus-visible|focus-within|focus|active|visited)(?![\w-])/Ai';
+
+    /** Functional pseudo-classes whose selector-list arguments a maybe rule's reduction looks into. */
+    private const MATCHES_ANY = ['is', 'where', 'matches', '-webkit-any', '-moz-any'];
+
     /** Colour and font properties (spec §6.1) plus display/visibility for CSS-hidden detection. */
     public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font-size', 'font-weight', 'display', 'visibility'];
 
@@ -67,6 +79,9 @@ class CssParser
 
     /** @var list<int> maybe rules whose reduced rightmost compound is empty: they may match every element */
     private array $universalMaybeRules = [];
+
+    /** Entries in customIndex and maybeIndex, counted against MAX_CUSTOM_INDEX_ENTRIES. */
+    private int $customIndexEntries = 0;
 
     protected bool $indexed = false;
 
@@ -182,6 +197,7 @@ class CssParser
         $this->document = $document;
         $this->rules = [];
         $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = [];
+        $this->customIndexEntries = 0;
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
@@ -218,9 +234,10 @@ class CssParser
 
     /**
      * Build the element index unless it exists. Rules carrying one of INDEXED_PROPERTIES and rules carrying only
-     * custom properties have separate budgets (MAX_INDEXED_RULES, MAX_CUSTOM_PROPERTY_RULES): rules beyond a budget
-     * are skipped, and the build stops when the optional deadline (microtime(true) value) passes. Either marks the
-     * results truncated (approximate).
+     * custom properties have separate budgets (MAX_INDEXED_RULES, MAX_CUSTOM_PROPERTY_RULES), and custom-property and
+     * maybe rules together index at most MAX_CUSTOM_INDEX_ENTRIES matches: rules beyond a budget are skipped. The build
+     * stops when the deadline (microtime(true) value; INDEX_TIME_BUDGET_SECONDS from the call when none is given)
+     * passes. Each of these marks the results truncated (approximate).
      */
     public function buildIndex(?float $deadline = null): static
     {
@@ -229,9 +246,11 @@ class CssParser
         }
 
         $this->indexBuilds++;
+        $deadline ??= microtime(true) + self::INDEX_TIME_BUDGET_SECONDS;
         $counts = ['rule' => 0, 'custom' => 0];
         $limits = ['rule' => self::MAX_INDEXED_RULES, 'custom' => self::MAX_CUSTOM_PROPERTY_RULES];
         $tokens = null;
+        $keys = []; // spl_object_id => [element, node path] of the elements custom-property and maybe rules matched
 
         // The two indexes are the one cascade that declarationsFor() and the custom properties share.
         foreach ($this->rules as $position => $rule) {
@@ -247,18 +266,25 @@ class CssParser
                 continue;
             }
 
-            if ($deadline !== null && microtime(true) > $deadline) {
+            if (microtime(true) > $deadline) {
                 $this->truncated = true;
 
                 break;
             }
 
-            $expression = $this->document === null ? null : $this->simpleSelectorToXpath($rule['selector']);
             $custom = $kind === 'custom' || $this->declaresCustomProperties($rule);
+
+            if ($kind === 'custom' && $this->customIndexEntries >= self::MAX_CUSTOM_INDEX_ENTRIES) {
+                $this->truncated = true; // the custom-property index is full: skip without matching
+
+                continue;
+            }
+
+            $expression = $this->document === null ? null : $this->simpleSelectorToXpath($rule['selector']);
 
             if ($expression === null) {
                 if ($custom) {
-                    $this->indexMaybeRule($position, $rule, $tokens);
+                    $this->indexMaybeRule($position, $rule, $tokens, $keys);
                 }
 
                 continue;
@@ -276,14 +302,15 @@ class CssParser
                 $custom = false; // every element declares these: no element is their owner
             }
 
+            if ($kind === 'custom') {
+                $this->indexCustomMatches('customIndex', $position, $this->elementsMatching($rule['selector'], $expression, $tokens), $keys);
+
+                continue;
+            }
+
             foreach ($this->elementsMatching($rule['selector'], $expression, $tokens) as $element) {
                 $key = $this->nodeKey($element);
-
-                if ($kind === 'rule') {
-                    $this->index[$key][] = $position;
-                } else {
-                    $this->customIndex[$key][] = $position;
-                }
+                $this->index[$key][] = $position;
 
                 if ($custom) {
                     $this->customOwners[$key] = true;
@@ -1164,7 +1191,9 @@ class CssParser
     /** Store a cache entry within MAX_CACHED_CUSTOM_PROPERTIES and MAX_CACHED_CUSTOM_PROPERTY_BYTES; false when it does not fit. */
     private function remember(string $slot, string|null|false $value, bool $approximate): bool
     {
-        $bytes = strlen($slot) + (is_string($value) ? strlen($value) : 0) + self::CACHE_ENTRY_BYTES;
+        $length = is_string($value) ? strlen($value) : 0;
+        // A string longer than 2048 bytes takes whole 4 KB allocator pages, its 24-byte header and terminator included.
+        $bytes = strlen($slot) + ($length > 2048 ? (int) ceil(($length + 25) / 4096) * 4096 : $length) + self::CACHE_ENTRY_BYTES;
 
         if (count($this->customPropertyCache) >= self::MAX_CACHED_CUSTOM_PROPERTIES || $this->cachedBytes + $bytes > self::MAX_CACHED_CUSTOM_PROPERTY_BYTES) {
             return false;
@@ -1348,46 +1377,81 @@ class CssParser
     }
 
     /**
+     * Index the matches of a custom-property-only or maybe rule within MAX_CUSTOM_INDEX_ENTRIES; a rule that does not fit
+     * is skipped and marks the index truncated. Node paths are computed once per element ($keys keeps the element alive,
+     * so its object id stays unique).
+     *
+     * @param  'customIndex'|'maybeIndex'  $map
+     * @param  list<DOMElement>  $elements
+     * @param  array<int, array{0: DOMElement, 1: string}>  $keys
+     */
+    private function indexCustomMatches(string $map, int $position, array $elements, array &$keys): void
+    {
+        if ($this->customIndexEntries + count($elements) > self::MAX_CUSTOM_INDEX_ENTRIES) {
+            $this->truncated = true;
+
+            return;
+        }
+
+        $this->customIndexEntries += count($elements);
+
+        foreach ($elements as $element) {
+            $key = ($keys[spl_object_id($element)] ??= [$element, $this->nodeKey($element)])[1];
+            $this->{$map}[$key][] = $position;
+            $this->customOwners[$key] = true;
+        }
+    }
+
+    /**
      * Index a rule with custom properties whose selector cannot be evaluated as a "maybe" rule: it covers the elements
-     * matched by the supported simple selectors of its rightmost compound (every element when none is left). Left out:
-     * pseudo-element rules, which never style the element itself; selectors whose only unsupported parts are
-     * user-action states outside :not() (:hover, :focus, …), which do not apply to the base state that is measured;
-     * and :host, which resolves through the root custom properties.
+     * matched by the supported simple selectors of its rightmost compound, looking into :is() and :where() arguments
+     * (every element when nothing is left). Left out: pseudo-element rules, which never style the element itself;
+     * selectors with a user-action state outside parentheses (:hover, :focus, …), which never match the base state that
+     * is measured; and :host, which resolves through the root custom properties.
      *
      * @param  array{selector: string, properties: array<string, array{value: string, important: bool}>}  $rule
      * @param  array{class: array<string, list<DOMElement>>, id: array<string, list<DOMElement>>}|null  $tokens
+     * @param  array<int, array{0: DOMElement, 1: string}>  $keys
      */
-    private function indexMaybeRule(int $position, array $rule, ?array &$tokens): void
+    private function indexMaybeRule(int $position, array $rule, ?array &$tokens, array &$keys): void
     {
         $selector = $rule['selector'];
 
         if (in_array(strtolower($selector), self::ROOT_SELECTORS, true)
             || str_contains($selector, '::')
             || preg_match('/:(?:before|after|first-line|first-letter)(?![\w-])/i', $selector) === 1
-            || $this->onlyUserActionStates($selector)) {
+            || $this->hasUserActionState($selector)) {
             return;
         }
 
-        $compound = $this->reducedRightmostCompound($selector);
-        $expression = $compound === '' ? null : $this->simpleSelectorToXpath($compound);
-
-        if ($expression === null || $expression === '//*') {
-            $this->universalMaybeRules[] = $position;
+        if ($this->customIndexEntries >= self::MAX_CUSTOM_INDEX_ENTRIES) {
+            $this->truncated = true;
 
             return;
         }
 
-        foreach ($this->elementsMatching($compound, $expression, $tokens) as $element) {
-            $key = $this->nodeKey($element);
-            $this->maybeIndex[$key][] = $position;
-            $this->customOwners[$key] = true;
+        $elements = [];
+
+        foreach ($this->reducedRightmostCompound($selector) as $compound) {
+            $expression = $compound === '' ? null : $this->simpleSelectorToXpath($compound);
+
+            if ($expression === null || $expression === '//*') {
+                $this->universalMaybeRules[] = $position;
+
+                return;
+            }
+
+            foreach ($this->elementsMatching($compound, $expression, $tokens) as $element) {
+                $elements[spl_object_id($element)] = $element;
+            }
         }
+
+        $this->indexCustomMatches('maybeIndex', $position, array_values($elements), $keys);
     }
 
-    /** Whether the selector becomes supported once its user-action states outside parentheses and brackets are neutralised. */
-    private function onlyUserActionStates(string $selector): bool
+    /** Whether the selector needs a user-action state outside parentheses and brackets (it never matches at rest). */
+    private function hasUserActionState(string $selector): bool
     {
-        $base = '';
         $depth = 0;
         $length = strlen($selector);
 
@@ -1395,33 +1459,28 @@ class CssParser
             $char = $selector[$i];
 
             if ($char === '\\') {
-                $base .= substr($selector, $i++, 2);
-
-                continue;
-            }
-
-            if ($char === '(' || $char === '[') {
+                $i++;
+            } elseif ($char === '(' || $char === '[') {
                 $depth++;
             } elseif ($char === ')' || $char === ']') {
                 $depth = max(0, $depth - 1);
-            } elseif ($char === ':' && $depth === 0 && preg_match('/:(?:hover|focus-visible|focus-within|focus|active|visited)(?![\w-])/Ai', $selector, $m, 0, $i) === 1) {
-                $base .= '[_]';
-                $i += strlen($m[0]) - 1;
-
-                continue;
+            } elseif ($char === ':' && $depth === 0 && preg_match(self::USER_ACTION_STATE, $selector, $m, 0, $i) === 1) {
+                return true;
             }
-
-            $base .= $char;
         }
 
-        return $base !== $selector && $this->simpleSelectorToXpath($base) !== null;
+        return false;
     }
 
     /**
      * The rightmost compound of a selector reduced to the simple selectors the parser supports (type, class, id,
-     * attribute, :root, :first-child, :last-child, :link, :not(compound)); '' when none is left.
+     * attribute, :root, :first-child, :last-child, :link, :not(compound)), as alternatives: :is() and :where()
+     * contribute the reduced rightmost compound of each argument. [''] (every element) when an alternative is empty,
+     * the nesting is deeper than 4 levels or there would be more than 16 alternatives; [] when none can match at rest.
+     *
+     * @return list<string>
      */
-    private function reducedRightmostCompound(string $selector): string
+    private function reducedRightmostCompound(string $selector, int $nesting = 0): array
     {
         $start = 0;
         $depth = 0;
@@ -1452,19 +1511,20 @@ class CssParser
 
         $compound = substr($selector, $start);
         $length = strlen($compound);
-        $kept = preg_match('/[a-zA-Z][a-zA-Z0-9-]*|\*/A', $compound, $m) === 1 ? $m[0] : '';
-        $position = strlen($kept);
-        $kept = $kept === '*' ? '' : $kept;
+        $type = preg_match('/[a-zA-Z][a-zA-Z0-9-]*|\*/A', $compound, $m) === 1 ? $m[0] : '';
+        $position = strlen($type);
+        $alternatives = [[$type === '*' ? '' : strtolower($type), '']]; // [type, simple selectors]
 
         while ($position < $length) {
             $begin = $position;
             $char = $compound[$position];
+            $arguments = null;
 
             if (($char === '.' || $char === '#') && preg_match('/'.self::IDENTIFIER.'/A', $compound, $m, 0, $position + 1) === 1) {
                 $position += 1 + strlen($m[0]);
             } elseif ($char === '[' && ($end = $this->closingBracket($compound, $position)) !== null) {
                 $position = $end + 1;
-            } elseif ($char === ':' && preg_match('/::?-?[\w-]+/A', $compound, $m, 0, $position) === 1) {
+            } elseif ($char === ':' && preg_match('/::?(-?[\w-]+)/A', $compound, $m, 0, $position) === 1) {
                 $position += strlen($m[0]);
 
                 if (($compound[$position] ?? '') === '(') {
@@ -1474,17 +1534,60 @@ class CssParser
                         break;
                     }
 
+                    if (in_array(strtolower($m[1]), self::MATCHES_ANY, true)) {
+                        $arguments = $this->splitTopLevel(substr($compound, $position + 1, $end - $position - 1), ',');
+                    }
+
                     $position = $end + 1;
                 }
             } else {
                 break;
             }
 
-            $token = substr($compound, $begin, $position - $begin);
-            $kept .= $this->simpleSelectorToXpath('*'.$token) === null ? '' : $token;
+            if ($arguments === null) {
+                $token = substr($compound, $begin, $position - $begin);
+
+                foreach ($alternatives as $index => $alternative) {
+                    $alternatives[$index][1] .= $this->simpleSelectorToXpath('*'.$token) === null ? '' : $token;
+                }
+
+                continue;
+            }
+
+            if ($nesting >= 4) {
+                return [''];
+            }
+
+            $combined = [];
+
+            foreach ($arguments as $argument) {
+                if ($this->hasUserActionState($argument)) {
+                    continue; // this argument never matches at rest
+                }
+
+                foreach ($this->reducedRightmostCompound($argument, $nesting + 1) as $reduced) {
+                    preg_match('/[a-zA-Z][a-zA-Z0-9-]*/A', $reduced, $m);
+                    $reducedType = strtolower($m[0] ?? '');
+                    $rest = substr($reduced, strlen($m[0] ?? ''));
+
+                    foreach ($alternatives as [$alternativeType, $simple]) {
+                        if ($alternativeType === '' || $reducedType === '' || $alternativeType === $reducedType) {
+                            $combined[] = [$alternativeType === '' ? $reducedType : $alternativeType, $simple.$rest];
+                        }
+                    }
+                }
+            }
+
+            $alternatives = array_values(array_unique($combined, SORT_REGULAR));
+
+            if (count($alternatives) > 16) {
+                return [''];
+            }
         }
 
-        return $kept;
+        $compounds = array_map(fn (array $alternative): string => $alternative[0].$alternative[1], $alternatives);
+
+        return in_array('', $compounds, true) ? [''] : $compounds;
     }
 
     /** Index of the bracket closing the one at $open (quotes respected), or null. */

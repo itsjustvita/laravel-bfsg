@@ -183,6 +183,9 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
             'disabled:' => ['.disabled\\:text-gray-400:disabled{--tw-text-opacity:1;color:rgb(156 163 175 / var(--tw-text-opacity))}'],
             'even:' => ['.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255 / var(--tw-bg-opacity))} .even\\:bg-gray-50:nth-child(even){--tw-bg-opacity:1;background-color:rgb(249 250 251 / var(--tw-bg-opacity))}'],
             'peer-checked:' => ['.peer:checked ~ .peer-checked\\:text-blue-600{--tw-text-opacity:1;color:rgb(37 99 235 / var(--tw-text-opacity))}'],
+            'dark: (class strategy)' => [':is(.dark .dark\\:text-white){--tw-text-opacity:1;color:rgb(255 255 255 / var(--tw-text-opacity))}'],
+            'dark: (nested where)' => [':is(:where(.dark) .dark\\:text-white){--tw-text-opacity:1;color:rgb(255 255 255 / var(--tw-text-opacity))}'],
+            'peer-hover:' => ['.peer:hover ~ .peer-hover\\:text-blue-600{--tw-text-opacity:1;color:rgb(37 99 235 / var(--tw-text-opacity))}'],
         ];
     }
 

@@ -488,7 +488,13 @@ class CssParserTest extends TestCase
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :not(:focus-visible){--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'an empty reduction covers every element');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover{--fg:#111} a:focus-visible{--fg:#222} :active{--fg:#333} .y:hover .z{--fg:#444} p{color:var(--fg)}', '<p id="t" class="x z">x</p>'), 'user-action states are not the base state');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} *, ::before, ::after{--other:1} p::first-line{--fg:#111} p:after{--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'pseudo-element rules never style the element itself');
-        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .x:hover:nth-child(2){--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'an unsupported part besides the state');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover:nth-child(2){--fg:#111} .peer:hover ~ .peer-hover\\:x{--fg:#111} p{color:var(--fg)}', '<p id="t" class="x peer-hover:x">x</p>'), 'a state outside parentheses never matches at rest, whatever else is unsupported');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :is(.dark .dark\\:x){--fg:#111} p{color:var(--fg)}', '<p id="t" class="dark:x">x</p>'), ':is() arguments reduce to their rightmost compound');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} :is(.dark .dark\\:x){--fg:#111} :is(:where(.dark) .dark\\:y, .z){--fg:#111} p{color:var(--fg)}', '<p id="t" class="dark">x</p>'), 'elements without the argument classes stay exact');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :is(:where(.dark) .dark\\:y, .z){--fg:#111} p{color:var(--fg)}', '<p id="t" class="z">x</p>'), 'the union of the arguments');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} p:is(.a, :nth-child(2)){--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'an argument that reduces to nothing leaves the rest of the compound');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} p:is(.a, :nth-child(2)){--fg:#111} div{color:var(--fg)}', '<div id="t">x</div>'), 'whose type still applies');
+        $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} :is(.x:hover){--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'an argument that needs a state never matches at rest');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .disabled\\:x:disabled{--fg:#111} .peer:checked ~ .peer-checked\\:x{--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), 'variant classes the element does not carry');
     }
 

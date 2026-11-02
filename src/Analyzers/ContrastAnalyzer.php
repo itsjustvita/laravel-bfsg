@@ -12,8 +12,8 @@ class ContrastAnalyzer extends BaseAnalyzer
     /** Hard cap of measured text elements per document. */
     public const MAX_MEASURED = 500;
 
-    /** Wall-clock budget per document, in seconds. */
-    public const TIME_BUDGET_SECONDS = 5.0;
+    /** Wall-clock budget per document, in seconds (the same as an index build without a deadline). */
+    public const TIME_BUDGET_SECONDS = CssParser::INDEX_TIME_BUDGET_SECONDS;
 
     /** [normal, large] thresholds per level. */
     private const THRESHOLDS = ['AA' => [4.5, 3.0], 'AAA' => [7.0, 4.5]];
