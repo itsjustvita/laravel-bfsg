@@ -69,7 +69,7 @@ class ColorTest extends TestCase
 
     public function test_unresolvable_values(): void
     {
-        foreach (['inherit', 'initial', 'unset', 'currentColor', 'var(--fg)', 'calc(1px)', 'color-mix(in srgb, red, blue)'] as $value) {
+        foreach (['inherit', 'initial', 'unset', 'currentColor', 'var(--fg)', 'calc(1px)', 'color-mix(in hsl, red, blue)', 'light-dark(#000, #fff)', 'canvastext'] as $value) {
             $this->assertTrue(Color::isUnresolvable($value), $value);
         }
 
@@ -109,5 +109,59 @@ class ColorTest extends TestCase
         [$color, $approximate] = Color::fromBackground('oklch(98.5% 0.002 247.839) url(x.png)');
         $this->assertSame('#f9fafb', $color->toHex());
         $this->assertFalse($approximate);
+    }
+
+    public function test_hue_units(): void
+    {
+        foreach (['hsl(0.5turn 100% 50%)', 'hsl(200grad 100% 50%)', 'hsl(3.14159265rad 100% 50%)', 'hsl(180deg 100% 50%)'] as $v) {
+            $this->assertSame('#00ffff', Color::parse($v)->toHex(), $v);
+        }
+    }
+
+    public function test_lab_lch_hwb_and_color_functions_are_dark_enough(): void
+    {
+        $white = new Color(255, 255, 255);
+        foreach (['lab(10% 0 0)', 'lch(10% 0 0)', 'hwb(0 0% 95%)', 'color(srgb .05 .05 .05)', 'color(display-p3 .05 .05 .05)'] as $v) {
+            $this->assertGreaterThan(14.0, Color::parse($v)->contrastRatio($white), $v);
+        }
+        $this->assertSame('#0d0d0d', Color::parse('color(srgb .05 .05 .05)')->toHex());
+    }
+
+    public function test_color_mix(): void
+    {
+        $badge = Color::evaluate('color-mix(in oklab, #101828 5%, transparent)');
+        $this->assertFalse($badge['approximate']);
+        $this->assertEqualsWithDelta(0.05, $badge['color']->a, 0.001);
+        $this->assertSame('#101828', $badge['color']->toHex());
+
+        $this->assertSame('#808080', Color::parse('color-mix(in srgb, #000 50%, #fff)')->toHex());
+        $this->assertEqualsWithDelta(0.6, Color::evaluate('color-mix(in srgb, red 30%, blue 30%)')['color']->a, 0.001);
+
+        $hsl = Color::evaluate('color-mix(in hsl, red, blue)');
+        $this->assertTrue($hsl['approximate']);
+        $this->assertSame('#ff0000', $hsl['color']->toHex());
+    }
+
+    public function test_unparsed_functions_and_system_colours_are_approximate(): void
+    {
+        foreach (['light-dark(#000, #fff)', 'rgb(from red r g b)', 'color(rec2020 0 0 0)', 'canvastext', 'foo(1)'] as $v) {
+            $this->assertSame(['color' => null, 'approximate' => true], Color::evaluate($v), $v);
+        }
+        $this->assertSame([null, true], Color::fromBackground('light-dark(#000, #fff)'));
+        $this->assertFalse(Color::fromBackground('lab(10% 0 0)')[1]);
+    }
+
+    public function test_known_conversions(): void
+    {
+        $this->assertSame('#ff0000', Color::parse('lab(54.29% 80.8 69.89)')->toHex());
+        $this->assertSame('#ffffff', Color::parse('lab(100% 0 0)')->toHex());
+        $this->assertSame('#ff0000', Color::parse('hwb(0 0% 0%)')->toHex());
+        $this->assertSame('#808080', Color::parse('hwb(0 50% 50%)')->toHex());
+        $this->assertSame('#ffffff', Color::parse('color(display-p3 1 1 1)')->toHex());
+        $this->assertSame('#bcbcbc', Color::parse('color(srgb-linear .5 .5 .5)')->toHex());
+        $this->assertSame('#ff0000', Color::parse('color(display-p3 1 0 0)')->toHex(), 'clamped to the sRGB gamut');
+        $this->assertSame('#800080', Color::parse('color-mix(in oklch, #800080 50%, #800080)')->toHex());
+        $this->assertNull(Color::parse('rgb(var(--x) 0 0)'));
+        $this->assertSame([null, true], Color::fromBackground('foo(1)'));
     }
 }
