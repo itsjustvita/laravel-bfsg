@@ -40,7 +40,7 @@ class CheckContrast extends Tool
         $surface = Color::parse($background);
 
         if ($text === null || $surface === null) {
-            return Response::error('Could not parse the colours. Use hex, rgb(), hsl(), oklch(), oklab() or a named colour.');
+            return Response::error('Could not parse the colours. Use hex, rgb(), hsl(), hwb(), lab(), lch(), oklab(), oklch(), color(), color-mix() with literal colours, or a named colour.');
         }
 
         if ($text->a < 1) {

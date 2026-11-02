@@ -3,7 +3,10 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Css;
 
 use ItsJustVita\LaravelBfsg\Css\Color;
+use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 
 class ColorTest extends TestCase
 {
@@ -163,5 +166,59 @@ class ColorTest extends TestCase
         $this->assertSame('#800080', Color::parse('color-mix(in oklch, #800080 50%, #800080)')->toHex());
         $this->assertNull(Color::parse('rgb(var(--x) 0 0)'));
         $this->assertSame([null, true], Color::fromBackground('foo(1)'));
+    }
+
+    #[Group('performance')]
+    public function test_gradient_scan_is_linear(): void
+    {
+        $start = microtime(true);
+        Color::fromBackground(str_repeat('linear-gradient(', 50000));
+        Color::fromBackground(str_repeat("url('", 100000));
+
+        $this->assertLessThan(PerformanceBudget::seconds(0.2), microtime(true) - $start);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function nonFiniteValues(): array
+    {
+        return [
+            'hwb' => ['hwb(0 1e999% 0%)'],
+            'oklab' => ['oklab(-1e999 0 0)'],
+            'lab' => ['lab(50 1e999 0)'],
+            'rgb' => ['rgb(1e999 0 0)'],
+        ];
+    }
+
+    #[DataProvider('nonFiniteValues')]
+    public function test_non_finite_numbers_are_approximate(string $value): void
+    {
+        $this->assertSame(['color' => null, 'approximate' => true], Color::evaluate($value));
+    }
+
+    public function test_vendor_prefixed_image_functions_match_unprefixed(): void
+    {
+        $this->assertSame(Color::fromBackground('image-set(red 1x)'), Color::fromBackground('-webkit-image-set(red 1x)'));
+        $this->assertSame([null, false], Color::fromBackground('-webkit-image-set(red 1x)'));
+        $this->assertSame('#00ff00', Color::fromBackground('-webkit-image-set(red 1x) #0f0')[0]->toHex());
+    }
+
+    public function test_pinned_mix_and_conversion_values(): void
+    {
+        $this->assertSame('#ba00c2', Color::parse('color-mix(in oklch, red, blue)')->toHex());
+        $this->assertSame('#009300', Color::parse('color-mix(in oklch longer hue, red, blue)')->toHex());
+
+        $mix = Color::evaluate('color-mix(in srgb, rgb(100% 0% 0% / .7) 25%, rgb(0% 100% 0% / .2))');
+        $this->assertFalse($mix['approximate']);
+        $this->assertEqualsWithDelta(0.325, $mix['color']->a, 0.0001);
+        $this->assertEqualsWithDelta(0.5385 * 255, $mix['color']->r, 0.01);
+        $this->assertEqualsWithDelta(0.4615 * 255, $mix['color']->g, 0.01);
+        $this->assertEqualsWithDelta(0.0, $mix['color']->b, 0.01);
+
+        $this->assertSame('#80ff00', Color::parse('hwb(0.25turn 0% 0%)')->toHex());
+        $this->assertSame(Color::parse('lch(50% 40 90deg)')->toHex(), Color::parse('lch(50% 40 0.25turn)')->toHex());
+        $this->assertSame('#86762f', Color::parse('lch(50% 40 0.25turn)')->toHex());
+
+        $long = 'color-mix(in srgb, red, '.str_repeat(' ', 1100).'blue)';
+        $this->assertSame(['color' => null, 'approximate' => true], Color::evaluate($long));
     }
 }

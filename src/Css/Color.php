@@ -153,6 +153,10 @@ final class Color
             default => null,
         };
 
+        if ($color !== null && ! (is_finite($color->r) && is_finite($color->g) && is_finite($color->b) && is_finite($color->a))) {
+            $color = null;
+        }
+
         return ['color' => $color, 'approximate' => $color === null];
     }
 
@@ -176,16 +180,28 @@ final class Color
     public static function fromBackground(string $value): array
     {
         $value = strtolower(trim($value));
-        $value = trim(preg_replace('/url\((?:[^()\'"]|\'[^\']*\'|"[^"]*")*\)/', ' ', $value) ?? $value);
+        $value = trim(preg_replace('/url\((?:[^()\'"]|\'[^\']*\'|"[^"]*")*+\)/', ' ', $value) ?? $value);
 
         if ($value === '' || $value === 'none') {
             return [null, false];
         }
 
-        $gradient = preg_match('/(?:repeating-)?(?:linear|radial|conic)-gradient\((.*)\)/', $value, $m) === 1;
+        $haystack = $value;
+        $gradient = false;
+
+        if (preg_match('/(?:repeating-)?(?:linear|radial|conic)-gradient\(/', $value, $m, PREG_OFFSET_CAPTURE) === 1) {
+            $start = $m[0][1] + strlen($m[0][0]);
+            $end = strrpos($value, ')');
+
+            if ($end !== false && $end >= $start) {
+                $gradient = true;
+                $haystack = substr($value, $start, $end - $start);
+            }
+        }
+
         $unresolved = false;
 
-        foreach (self::tokens($gradient ? $m[1] : $value) as $token) {
+        foreach (self::tokens($haystack) as $token) {
             if (str_contains($token, '(') && preg_match(self::IMAGE_FUNCTION, substr($token, 0, (int) strpos($token, '('))) === 1) {
                 continue;
             }
@@ -228,7 +244,7 @@ final class Color
                 continue;
             }
 
-            if (! ctype_alpha($c)) {
+            if (! ctype_alpha($c) && ! ($c === '-' && $i + 1 < $length && ctype_alpha($text[$i + 1]))) {
                 $i++;
 
                 continue;
@@ -543,7 +559,8 @@ final class Color
     private static function isChannel(string $token): bool
     {
         return $token === 'none' || (strlen($token) <= 32
-            && preg_match('/^[+-]?+(?:\d++(?:\.\d*+)?|\.\d++)(?:e[+-]?+\d++)?+(?:%|deg|rad|grad|turn)?+$/D', $token) === 1);
+            && preg_match('/^[+-]?+(?:\d++(?:\.\d*+)?|\.\d++)(?:e[+-]?+\d++)?+(?:%|deg|rad|grad|turn)?+$/D', $token) === 1
+            && is_finite((float) $token));
     }
 
     /**
@@ -637,8 +654,8 @@ final class Color
         }
 
         [$p, $alpha] = $tokens;
-        $white = max(0.0, self::number($p[1], 100) / 100);
-        $black = max(0.0, self::number($p[2], 100) / 100);
+        $white = self::clamp(self::number($p[1], 100) / 100, 0.0, 1.0);
+        $black = self::clamp(self::number($p[2], 100) / 100, 0.0, 1.0);
         $alpha = self::alpha($alpha);
 
         if ($white + $black >= 1) {
