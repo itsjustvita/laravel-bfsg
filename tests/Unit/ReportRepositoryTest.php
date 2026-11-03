@@ -28,6 +28,17 @@ class ReportRepositoryTest extends TestCase
         ], ['images', 'links'], 'https://example.com/', 'de');
     }
 
+    public function test_normalize_url_canonicalises_scheme_host_and_default_port(): void
+    {
+        config(['app.url' => 'https://App.test']);
+
+        $this->assertSame('https://app.test/x', ReportRepository::normalizeUrl('/x?a=1#f'));
+        $this->assertSame('http://example.com/A/', ReportRepository::normalizeUrl('HTTP://Example.COM:80/A/'));
+        $this->assertSame('https://example.com/', ReportRepository::normalizeUrl('https://u:p@EXAMPLE.com:443/'));
+        $this->assertSame('http://example.com:443/', ReportRepository::normalizeUrl('http://example.com:443/'));
+        $this->assertSame('', ReportRepository::normalizeUrl(''));
+    }
+
     public function test_programmatic_store_strips_credentials_query_and_fragment_from_the_url(): void
     {
         $result = new AnalysisResult([], ['images'], 'https://deploy:s3cret@staging.example.com/page?token=t#top', 'en');

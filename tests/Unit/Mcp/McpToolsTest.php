@@ -237,6 +237,16 @@ class McpToolsTest extends TestCase
         $this->assertSame(['https://a.example/page'], array_column($reports, 'url'));
     }
 
+    public function test_get_history_accepts_paths(): void
+    {
+        config(['app.url' => 'http://localhost']);
+        BfsgReport::create(['url' => 'http://localhost/contact', 'total_violations' => 1, 'score' => 90, 'grade' => 'A']);
+
+        $reports = BfsgMcpServer::tool(GetHistory::class, ['url' => '/contact'])->assertOk()->payload()['reports'];
+
+        $this->assertSame(['http://localhost/contact'], array_column($reports, 'url'));
+    }
+
     public function test_get_report_returns_findings_with_key_fingerprint_and_context(): void
     {
         $violation = BfsgViolation::factory()->create();

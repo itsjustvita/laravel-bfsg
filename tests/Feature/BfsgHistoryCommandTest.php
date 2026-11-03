@@ -6,6 +6,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class BfsgHistoryCommandTest extends TestCase
 {
@@ -31,7 +32,7 @@ class BfsgHistoryCommandTest extends TestCase
         foreach ([[], ['--trend' => true, '--url' => 'https://example.com'], ['--cleanup' => true]] as $options) {
             $this->artisan('bfsg:history', $options)
                 ->expectsOutputToContain('php artisan migrate')
-                ->assertExitCode(1);
+                ->assertExitCode(2);
         }
     }
 
@@ -163,5 +164,49 @@ class BfsgHistoryCommandTest extends TestCase
             ->expectsOutputToContain('Deleted 2 reports older than 50 days.');
 
         $this->assertSame(1, BfsgReport::query()->count());
+    }
+
+    /** @return array<string, array{string}> */
+    public static function invalidCounts(): array
+    {
+        return ['word' => ['thirty'], 'negative' => ['-5'], 'zero' => ['0'], 'decimal' => ['1.5']];
+    }
+
+    #[DataProvider('invalidCounts')]
+    public function test_cleanup_rejects_invalid_days(string $days): void
+    {
+        foreach (range(1, 3) as $i) {
+            BfsgReport::create(['url' => "https://example.com/{$i}", 'total_violations' => 1, 'score' => 90, 'grade' => 'A'])
+                ->forceFill(['created_at' => now()->subHour()])->save();
+        }
+
+        $this->artisan('bfsg:history', ['--cleanup' => true, '--days' => $days])->assertExitCode(2);
+
+        $this->assertSame(3, BfsgReport::count());
+    }
+
+    public function test_limit_must_be_a_positive_integer(): void
+    {
+        $this->artisan('bfsg:history', ['--limit' => 'abc'])->assertExitCode(2);
+    }
+
+    public function test_missing_table_exits_2(): void
+    {
+        Schema::drop('bfsg_violations');
+        Schema::drop('bfsg_reports');
+
+        $this->artisan('bfsg:history')->assertExitCode(2);
+    }
+
+    public function test_url_filter_is_normalised(): void
+    {
+        config(['app.url' => 'http://localhost']);
+        BfsgReport::create(['url' => 'http://localhost/contact', 'total_violations' => 1, 'score' => 90, 'grade' => 'A']);
+
+        foreach (['/contact', 'HTTP://LOCALHOST/contact', 'http://localhost:80/contact'] as $url) {
+            $this->artisan('bfsg:history', ['--url' => $url])->expectsOutputToContain('http://localhost/contact')->assertSuccessful();
+        }
+
+        $this->artisan('bfsg:history', ['--url' => 'http://localhost/contact/'])->expectsOutputToContain('No reports found')->assertSuccessful();
     }
 }

@@ -23,7 +23,7 @@ class GetHistory extends Tool
     public function schema(JsonSchema $schema): array
     {
         return [
-            'url' => $schema->string()->description('Only reports of this URL (compared without query string, fragment and credentials)'),
+            'url' => $schema->string()->description('Only reports of this URL (a path such as /contact is resolved against app.url; compared without query string, fragment, credentials and default port)'),
             'limit' => $schema->integer()->description('Maximum number of reports, 1-100 (default: 20)'),
         ];
     }

@@ -51,10 +51,10 @@ class BfsgReport extends BfsgModel
         return $this->hasMany(BfsgViolation::class, 'report_id');
     }
 
-    /** Reports of $url, compared in its stored form (ReportRepository::storedUrl()), so a pasted URL with query string, fragment or credentials matches. */
+    /** Reports of $url, compared in its stored form (ReportRepository::normalizeUrl()), so a path, a differently cased host, a default port or a pasted URL with query string, fragment or credentials matches. */
     public function scopeForUrl($query, string $url)
     {
-        return $query->where('url_hash', self::urlHash(ReportRepository::storedUrl($url)));
+        return $query->where('url_hash', self::urlHash(ReportRepository::normalizeUrl($url)));
     }
 
     public function scopeRecent($query, int $days = 30)

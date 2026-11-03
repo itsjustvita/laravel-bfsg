@@ -56,7 +56,42 @@ final class ReportRepository
     /** $url as stored: without credentials (`user:pass@`), query string and fragment, at most URL_LENGTH characters. */
     public static function storedUrl(string $url): string
     {
-        return mb_substr(UrlFetcher::redact(explode('#', explode('?', $url, 2)[0], 2)[0]), 0, self::URL_LENGTH);
+        return self::normalizeUrl($url);
+    }
+
+    /**
+     * The canonical form of $url for storing and comparing: a relative path is resolved against app.url, scheme and
+     * host are lowercased, the default port (:80 for http, :443 for https) is dropped, then credentials, query string
+     * and fragment are removed and the length is capped. The trailing slash is kept. Anything that is not a URL or
+     * path (empty, invalid) is only redacted, stripped and capped.
+     */
+    public static function normalizeUrl(string $url): string
+    {
+        $url = trim($url);
+        $url = explode('#', explode('?', $url, 2)[0], 2)[0];
+
+        if ($url !== '' && (str_starts_with($url, '/') && ! str_starts_with($url, '//'))) {
+            try {
+                $url = app(UrlFetcher::class)->absolute($url);
+            } catch (Throwable) {
+                // not resolvable: keep the path as given
+            }
+        }
+
+        $url = UrlFetcher::redact($url);
+
+        if (preg_match('~^([a-z][a-z0-9+.\-]*)://([^/]*)(.*)$~is', $url, $m) === 1) {
+            $scheme = strtolower($m[1]);
+            $authority = strtolower($m[2]);
+
+            if (($scheme === 'http' && str_ends_with($authority, ':80')) || ($scheme === 'https' && str_ends_with($authority, ':443'))) {
+                $authority = substr($authority, 0, (int) strrpos($authority, ':'));
+            }
+
+            $url = $scheme.'://'.$authority.$m[3];
+        }
+
+        return mb_substr($url, 0, self::URL_LENGTH);
     }
 
     /** Whether the tables exist with the v3 columns (`php artisan migrate` has run). */

@@ -3,12 +3,16 @@
 namespace ItsJustVita\LaravelBfsg\Commands;
 
 use Illuminate\Console\Command;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 
 class BfsgHistoryCommand extends Command
 {
+    /** Invalid options, a missing table or a database error (1 stays free for findings-style failures). */
+    public const OPERATIONAL_ERROR = 2;
+
     protected $signature = 'bfsg:history
                             {--url= : Filter by URL}
                             {--limit=20 : Number of reports to show}
@@ -23,9 +27,28 @@ class BfsgHistoryCommand extends Command
         if (! $repository->isMigrated()) {
             $this->error('The bfsg tables with the v3 columns are missing: run php artisan migrate');
 
-            return Command::FAILURE;
+            return self::OPERATIONAL_ERROR;
         }
 
+        $name = $this->option('cleanup') ? 'days' : 'limit';
+
+        if (! preg_match('/^[1-9][0-9]*$/', (string) $this->option($name))) {
+            $this->error("The --{$name} option must be a positive integer, got: ".(string) $this->option($name));
+
+            return self::OPERATIONAL_ERROR;
+        }
+
+        try {
+            return $this->dispatch();
+        } catch (QueryException $e) {
+            $this->error('Database error: '.$e->getMessage());
+
+            return self::OPERATIONAL_ERROR;
+        }
+    }
+
+    private function dispatch(): int
+    {
         if ($this->option('cleanup')) {
             return $this->cleanup();
         }
@@ -77,7 +100,7 @@ class BfsgHistoryCommand extends Command
         if (! $url) {
             $this->error('The --url option is required when using --trend');
 
-            return Command::FAILURE;
+            return self::OPERATIONAL_ERROR;
         }
 
         // The latest N reports, shown oldest first so the trend reads left to right.

@@ -261,9 +261,11 @@ php artisan bfsg:history --url=https://example.com/pricing --trend
 php artisan bfsg:history --cleanup --days=90               # delete reports older than 90 days
 ```
 
+`--limit` and `--days` must be positive integers (`--cleanup --days=abc` deletes nothing). Exit codes: `0` success, `2` operational error (invalid option, missing `--url` with `--trend`, tables not migrated, database error).
+
 | Option | Default | Description |
 |---|---|---|
-| `--url=` | | Only reports of this URL. It is compared in its stored form (without query string, fragment and credentials), so you can paste the URL you checked |
+| `--url=` | | Only reports of this URL. It is compared in its stored form (without query string, fragment and credentials), so you can paste the URL you checked. A path such as `/contact` is resolved against `app.url`; scheme and host are case-insensitive and a default port (`:80`, `:443`) is ignored; the trailing slash matters |
 | `--limit=` | `20` | Number of reports |
 | `--trend` | | The latest reports of `--url` in chronological order, with the score change |
 | `--cleanup` | | Delete reports older than `--days` |
