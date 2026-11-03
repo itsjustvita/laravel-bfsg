@@ -70,6 +70,10 @@ return [
             'message' => 'Insufficient text contrast :ratio:1 (required :required:1): :foreground on :background',
             'suggestion' => 'Increase the contrast between text and background colour to at least :required:1',
         ],
+        'unverifiable' => [
+            'message' => 'Contrast cannot be verified statically (estimated :foreground on :background)',
+            'suggestion' => 'Check the contrast against the actual background (image, gradient or computed colour) with a browser-based tool',
+        ],
         'analysis_truncated' => [
             'message' => 'Contrast analysis stopped after :limit text elements',
             'suggestion' => 'Check the remaining text with a browser-based contrast tool, or analyze smaller pages',

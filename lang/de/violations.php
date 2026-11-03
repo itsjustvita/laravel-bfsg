@@ -70,6 +70,10 @@ return [
             'message' => 'Unzureichender Textkontrast :ratio:1 (erforderlich :required:1): :foreground auf :background',
             'suggestion' => 'Kontrast zwischen Text- und Hintergrundfarbe auf mindestens :required:1 erhöhen',
         ],
+        'unverifiable' => [
+            'message' => 'Kontrast statisch nicht prüfbar (geschätzt :foreground auf :background)',
+            'suggestion' => 'Kontrast gegen den tatsächlichen Hintergrund (Bild, Verlauf oder berechnete Farbe) mit einem browserbasierten Werkzeug prüfen',
+        ],
         'analysis_truncated' => [
             'message' => 'Kontrastprüfung nach :limit Textelementen abgebrochen',
             'suggestion' => 'Übrige Texte mit einem browserbasierten Kontrastwerkzeug prüfen oder kleinere Seiten analysieren',

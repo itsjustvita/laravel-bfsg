@@ -4,6 +4,7 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
 use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
@@ -69,9 +70,9 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($violations, 'contrast.insufficient', element: 'small.muted');
     }
 
-    public function test_hidden_and_non_rendered_text_is_skipped(): void
+    public function test_non_rendered_text_is_skipped(): void
     {
-        $html = $this->page('.muted { color: #bbb }', '<p class="muted" hidden>a</p><div aria-hidden="true"><p class="muted">b</p></div><noscript><p class="muted">c</p></noscript><template><p class="muted">d</p></template>');
+        $html = $this->page('.muted { color: #bbb }', '<p class="muted" hidden>a</p><noscript><p class="muted">c</p></noscript><template><p class="muted">d</p></template>');
 
         $this->assertSame([], $this->analyze($html));
     }
@@ -319,5 +320,159 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.meta', severity: Severity::Error);
         $this->assertSame('#bbbbbb', $violation->params['foreground']);
         $this->assertFalse($violation->meta['approximate']);
+    }
+
+    /** @return array<string, array{0: string, 1: string}> AN1: text over a hero image (CSS with the text colour as %s, body) */
+    public static function heroImages(): array
+    {
+        return [
+            'background-image' => ['.hero{background-image:url(/hero.jpg)} .t{color:%s}', '<div class="hero"><h1 class="t">Welcome</h1></div>'],
+            'background shorthand' => ['.hero{background:url(/hero.jpg) center/cover} .t{color:%s}', '<div class="hero"><h1 class="t">Welcome</h1></div>'],
+            'covering img' => [
+                '.relative{position:relative} .absolute{position:absolute;inset:0} .t{color:%s}',
+                '<div class="relative"><img class="absolute" src="/hero.jpg" alt=""><div class="relative"><p class="t">Welcome</p></div></div>',
+            ],
+        ];
+    }
+
+    #[DataProvider('heroImages')]
+    public function test_white_text_on_hero_image_is_warning(string $css, string $body): void
+    {
+        $violations = $this->analyze($this->page(sprintf($css, '#fff'), $body));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Warning);
+        $this->assertContains('approximate', $violation->tags);
+        $this->assertTrue($violation->meta['approximate']);
+        $this->assertSame([], array_filter($violations, fn ($violation) => $violation->severity === Severity::Error));
+    }
+
+    #[DataProvider('heroImages')]
+    public function test_black_text_on_hero_image_is_unverifiable(string $css, string $body): void
+    {
+        $violations = $this->analyze($this->page(sprintf($css, '#000'), $body));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.unverifiable', severity: Severity::Notice);
+        $this->assertSame('1.4.3', $violation->rule);
+        $this->assertSame(['approximate'], $violation->tags);
+        $this->assertSame(['foreground' => '#000000', 'background' => '#ffffff'], $violation->params);
+        $this->assertSame(['approximate', 'ratio', 'large'], array_keys($violation->meta));
+        $this->assertTrue($violation->meta['approximate']);
+        $this->assertSame(21.0, $violation->meta['ratio']);
+        $this->assertNoViolation($violations, 'contrast.insufficient');
+    }
+
+    /** @return array<string, array{0: string}> AN2: forms of a Tailwind v4 rule (sprintf: selector, declaration) */
+    public static function tailwindV4Forms(): array
+    {
+        return [
+            'plain' => ['%1$s{%2$s}'],
+            'top-level @supports' => ['@supports (color: color-mix(in lab, red, red)){%1$s{%2$s}}'],
+            'nested @supports' => ['%1$s{@supports (color: color-mix(in lab, red, red)){%2$s}}'],
+        ];
+    }
+
+    #[DataProvider('tailwindV4Forms')]
+    public function test_tailwind_v4_opacity_badge_passes(string $form): void
+    {
+        $css = sprintf($form, '.bg-gray-900\/5', 'background-color:color-mix(in oklab, #101828 5%, transparent)').' .text-gray-900{color:#101828}';
+
+        $this->assertNoViolation($this->analyze($this->page($css, '<span class="bg-gray-900/5 text-gray-900">B</span>')), 'contrast.insufficient');
+    }
+
+    #[DataProvider('tailwindV4Forms')]
+    public function test_tailwind_v4_translucent_black_is_flagged(string $form): void
+    {
+        $css = sprintf($form, '.bg-black\/50', 'background-color:color-mix(in oklab, #000 50%, transparent)').' .text-white{color:#fff}';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<span class="bg-black/50 text-white">B</span>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertGreaterThanOrEqual(3.9, (float) $violation->params['ratio']);
+        $this->assertLessThanOrEqual(4.0, (float) $violation->params['ratio']);
+    }
+
+    // D2: an unknown size matters only between the thresholds (#aaa is 2.32:1, #8a8a8a 3.45:1 on white).
+    public function test_unknown_size_below_large_threshold_is_error(): void
+    {
+        $violation = $this->assertHasViolation($this->analyze($this->page('.t{font-size:5vw;color:#aaa}', '<p class="t">x</p>')), 'contrast.insufficient', severity: Severity::Error);
+
+        $this->assertSame([], $violation->tags);
+        $this->assertFalse($violation->meta['approximate']);
+        $this->assertNull($violation->meta['large']);
+    }
+
+    public function test_unknown_size_between_thresholds_is_warning(): void
+    {
+        $violation = $this->assertHasViolation($this->analyze($this->page('.t{font-size:5vw;color:#8a8a8a}', '<p class="t">x</p>')), 'contrast.insufficient', severity: Severity::Warning);
+
+        $this->assertSame(['approximate'], $violation->tags);
+        $this->assertSame(4.5, $violation->params['required']);
+        $this->assertTrue($violation->meta['approximate']);
+        $this->assertNull($violation->meta['large']);
+    }
+
+    // R25: 20px is large only when bold, and revert-layer leaves the weight unknown.
+    public function test_unknown_weight_at_a_bold_large_size_is_warning(): void
+    {
+        $violation = $this->assertHasViolation($this->analyze($this->page('.t{font-size:20px;font-weight:revert-layer;color:#8a8a8a}', '<p class="t">x</p>')), 'contrast.insufficient', severity: Severity::Warning);
+
+        $this->assertSame(['approximate'], $violation->tags);
+    }
+
+    public function test_inactive_components_are_exempt(): void
+    {
+        $css = '.btn{color:#bbb;background:#fff}';
+
+        foreach ([
+            '<button disabled class="btn">x</button>',
+            '<fieldset disabled><label for="a" class="btn">L</label><input id="a"></fieldset>',
+            '<div aria-disabled="true"><span class="btn">x</span></div>',
+            '<label for="b" class="btn">L</label><input id="b" disabled>',
+            '<label class="btn">L <input disabled></label>',
+        ] as $body) {
+            $this->assertNoViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient');
+        }
+
+        foreach (['<button class="btn">x</button>', '<label for="c" class="btn">L</label><input id="c">'] as $body) {
+            $this->assertHasViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient', severity: Severity::Error);
+        }
+    }
+
+    public function test_visible_aria_hidden_text_is_measured(): void
+    {
+        $this->assertHasViolation($this->analyze('<p aria-hidden="true" style="color:#eee">x</p>'), 'contrast.insufficient', severity: Severity::Error);
+    }
+
+    public function test_zero_opacity_text_is_skipped(): void
+    {
+        $this->assertSame([], $this->analyze('<p style="opacity:0;color:#eee">x</p>'));
+        $this->assertSame([], $this->analyze('<div style="opacity:0"><p style="color:#eee">x</p></div>'));
+    }
+
+    public function test_truncated_index_passing_estimate_is_silent(): void
+    {
+        $css = '';
+
+        for ($i = 0; $i <= CssParser::MAX_INDEXED_RULES; $i++) {
+            $css .= ".u{$i} { color: #111 } .n{$i} { margin: 0 } ";
+        }
+
+        $this->assertSame([], $this->analyze($this->page($css, '<p class="u1">x</p>')));
+
+        // A failing estimate stays a warning.
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<p class="u1" style="color:#ccc">x</p>')), 'contrast.insufficient', severity: Severity::Warning);
+        $this->assertSame(['approximate'], $violation->tags);
+    }
+
+    // AAA keeps its notice on top of the AA verdict: #767676 is 4.54:1, an AA pass and an AAA failure.
+    public function test_aaa_notice_is_added_to_an_unverifiable_estimate(): void
+    {
+        $document = HtmlDocument::fromHtml($this->page('.hero{background-image:url(/hero.jpg)}', '<div class="hero"><p style="color:#767676">x</p></div>'));
+
+        $violations = (new ContrastAnalyzer(level: 'AAA'))->analyze($document);
+
+        $this->assertHasViolation($violations, 'contrast.unverifiable', severity: Severity::Notice);
+        $aaa = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Notice);
+        $this->assertSame('1.4.6', $aaa->rule);
+        $this->assertSame(['aaa', 'approximate'], $aaa->tags);
+        $this->assertViolationCount($violations, 'contrast.insufficient', 1);
     }
 }

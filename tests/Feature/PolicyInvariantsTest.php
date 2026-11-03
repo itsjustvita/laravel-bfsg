@@ -47,10 +47,15 @@ class PolicyInvariantsTest extends TestCase
             .'<div style="color: red; visibility:hidden">'.self::DEFECTS.'</div>'
             .'<template>'.self::DEFECTS.'</template>'
             .'<noscript>'.self::INERT_DEFECTS.'</noscript>'
-            .'<div aria-hidden="true">'.self::INERT_DEFECTS.'</div>'
         );
 
         $this->assertSame([], $this->keys($html));
+
+        // amended in 3.1 (spec D16): aria-hidden text is still visible, so contrast measures it; every other check skips it
+        $ariaHidden = $this->keys($this->shell('<div aria-hidden="true">'.self::INERT_DEFECTS.'</div>'));
+
+        $this->assertContains('contrast.insufficient', $ariaHidden);
+        $this->assertSame([], array_values(array_filter($ariaHidden, fn (string $key) => ! str_starts_with($key, 'contrast.'))));
     }
 
     public function test_fragments_skip_document_level_checks(): void

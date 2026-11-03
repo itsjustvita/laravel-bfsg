@@ -629,7 +629,11 @@ Severity policy: **error** is a definite AA failure detectable in the markup, **
 
 - The analysis works on HTML and CSS, not on a rendered page: layout, JavaScript behaviour, focus order at runtime and screen-reader output are not tested. `--browser` adds the JavaScript-built DOM, not interaction.
 - The accessible-name computation covers the common cases (`aria-labelledby`, `aria-label`, native labels, alt texts, subtree text, `title`); it is not a complete implementation of the W3C algorithm.
-- Contrast is measured from inline styles, `<style>` elements and inlined same-origin stylesheets with a documented CSS subset (no `:hover`, `:nth-child`, pseudo-elements). Background images, gradients and unresolved custom properties make a measurement approximate: such failures are warnings with the tag `approximate`.
+- Contrast is measured from inline styles, `<style>` elements and inlined same-origin stylesheets with a documented CSS subset (no `:hover`, `:nth-child`, pseudo-elements). An uncertain measurement is never an error, and an unknown background is never silent:
+  - **Unknown colour** (a background image or gradient, an image or video positioned behind the text, a colour function or custom property that cannot be resolved): a failing estimate is a warning tagged `approximate`; a passing one is the notice `contrast.unverifiable`, which asks you to check that text with a browser-based tool.
+  - **Unknown font size** (no guaranteed lower bound, as with `font-size: 5vw`, or 18.66px to 24px with an unknown weight): below 3:1 is an error, below 4.5:1 a warning tagged `approximate`, and 4.5:1 or more a pass.
+  - **Truncated style index** (very large stylesheets): a failing estimate is a warning tagged `approximate`; a passing one is silent.
+- Text of inactive components is exempt from contrast checks, as WCAG 1.4.3 allows: disabled controls, the content of a `fieldset[disabled]`, `[aria-disabled="true"]` subtrees, and labels of disabled controls. Text hidden only with `aria-hidden` is still visible and is measured; text with `opacity: 0` is not.
 
 ## Development
 
