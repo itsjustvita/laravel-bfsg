@@ -1044,6 +1044,15 @@ class CssParserTest extends TestCase
                 $this->assertSame($element->parentNode->getNodePath(), (fn () => $this->parentKey($key, $element->parentNode))->call($parser), $key);
                 $checked++;
             }
+
+            foreach ($document->query('//*[*]') as $parent) {
+                $children = (fn () => iterator_to_array($this->elementChildren($parent, $parent->getNodePath())))->call($parser);
+
+                foreach ($children as [$child, $key]) {
+                    $this->assertSame($child->getNodePath(), $key, 'derived child key');
+                    $checked++;
+                }
+            }
         }
 
         $this->assertGreaterThan(100, $checked);
