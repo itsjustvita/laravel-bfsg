@@ -1004,6 +1004,22 @@ class CssParserTest extends TestCase
         $this->assertSame([], $this->resolved($css, '<div><div class="absolute"><span>badge</span><svg></svg></div><p>x</p></div>', '//p')['uncertainty'], 'an icon inside does not count');
     }
 
+    public function test_only_out_of_flow_image_layers_without_text_cover(): void
+    {
+        $header = '<header style="position:fixed"><img src="logo.svg" alt="Logo"><nav><a href="/">Home</a></nav></header>';
+
+        $this->assertNotContains('backdrop', $this->resolved('', $header.'<main><p style="color:#fff;background:#000">x</p></main>', '//p')['uncertainty'], 'a fixed header with a logo and a navigation');
+        $this->assertSame([], $this->resolved('', $header.'<main><p style="color:#000">x</p></main>', '//p')['uncertainty'], 'also where the range reaches the header\'s sibling');
+        $this->assertSame([], $this->resolved('', '<aside style="position:absolute"><img src="logo.svg" alt=""><span>Menu</span></aside><main><p>x</p></main>', '//p')['uncertainty'], 'absolute alike');
+        $this->assertSame(['backdrop'], $this->resolved('.absolute{position:absolute}', '<div class="relative"><div class="absolute inset-0"><img src="h.jpg" alt=""></div><div class="relative"><p style="color:#fff">Hi</p></div></div>', '//p')['uncertainty'], 'the hero image layer');
+        $this->assertSame(['backdrop'], $this->resolved('', '<div style="position:absolute"> <picture><img src="h.jpg" alt=""></picture> <script>var hero = 1;</script></div><p>x</p>', '//p')['uncertainty'], 'whitespace and scripts are no text');
+        $this->assertSame(['backdrop'], $this->resolved('', '<img style="position:absolute" src="h.jpg" alt="Hero"><p>x</p>', '//p')['uncertainty'], 'a direct media sibling is unchanged');
+
+        $spans = str_repeat('<span></span>', 1100);
+        $this->assertSame(['backdrop'], $this->resolved('', '<div style="position:absolute">'.$spans.'<img src="h.jpg" alt=""></div><p>x</p>', '//p')['uncertainty'], 'no text within the node cap: it may cover');
+        $this->assertSame([], $this->resolved('', '<div style="position:absolute"><span>Menu</span>'.$spans.'<img src="h.jpg" alt=""></div><p>x</p>', '//p')['uncertainty'], 'text within the node cap');
+    }
+
     public function test_opacity_over_a_painted_background_is_colour_uncertainty(): void
     {
         $this->assertContains('colour', $this->resolved('body{background:#000} .card{opacity:.5;background:#fff;color:#000}', '<div class="card"><p>x</p></div>', '//p')['uncertainty'], 'a white card at half opacity on a black page');

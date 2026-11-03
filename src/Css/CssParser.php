@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Css;
 
 use DOMElement;
+use DOMText;
 use ItsJustVita\LaravelBfsg\Dom\Element;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use Throwable;
@@ -77,8 +78,11 @@ class CssParser
     /** Candidate siblings of one element that are looked up (see coveringSiblingIndex()); the next one counts as covering (never silent). */
     private const MAX_EXAMINED_SIBLINGS = 64;
 
-    /** Nodes of an out-of-flow sibling searched for contained media; a larger subtree counts as containing media (never silent). */
+    /** Nodes of an out-of-flow sibling searched for media and text (isImageLayer()); beyond them, a sibling without text so far counts (never silent). */
     private const MAX_MEDIA_DESCENDANTS = 1024;
+
+    /** Elements whose content is not rendered text: isImageLayer() does not look into them. */
+    private const UNRENDERED_CONTENT = ['script', 'style', 'template'];
 
     /** A layer whose alpha is at least this paints opaquely: the elements behind it do not show through. */
     private const OPAQUE_ALPHA = 1.0 - 1e-9;
@@ -692,7 +696,8 @@ class CssParser
      * - `backdrop`: from the element up to the element that supplies the opaque background used, a background layer
      *   (`background-image` or `background`) paints an image (IMAGE_FUNCTION: url(), image-set(), *-gradient(), …), or a
      *   rendered previous element sibling of one of these elements is positioned absolute or fixed and is an img,
-     *   picture, video, canvas or svg or contains an img, picture, video or canvas (coveringSiblingIndex()). Gradients
+     *   picture, video, canvas or svg, or an image layer: one that contains an img, picture, video or canvas and no
+     *   text (coveringSiblingIndex()). Gradients
      *   are estimated by their first stop; a url() without a colour by the backdrop behind it;
      * - `colour`: an unresolvable or approximate var() substitution (substituteFor()), or a colour value Color can only
      *   approximate, in the text colour, the background or the opacity; or an element of that range paints its own
@@ -2406,7 +2411,7 @@ class CssParser
     /**
      * Whether a previous sibling may cover the backdrop: it is rendered (its own display is not none and its visibility
      * not hidden or collapse; hiding viewport declarations never win, as in hidesElement()), positioned out of flow
-     * (isOutOfFlow()), and a media element or one that contains an img, picture, video or canvas (R34).
+     * (isOutOfFlow()), and a media element or an image layer (isImageLayer(), R34/R35).
      */
     private function covers(DOMElement $sibling, string $key, bool $media): bool
     {
@@ -2418,13 +2423,19 @@ class CssParser
             return false;
         }
 
-        return $media || $this->containsMedia($sibling);
+        return $media || $this->isImageLayer($sibling);
     }
 
-    /** Whether an img, picture, video or canvas is a descendant, searching at most MAX_MEDIA_DESCENDANTS nodes (more count as containing one). */
-    private function containsMedia(DOMElement $element): bool
+    /**
+     * Whether an element is a decorative image layer (R34, R35): it contains an img, picture, video or canvas and no text
+     * other than whitespace (script, style and template content is not looked into), so a positioned header or sidebar
+     * with a logo is not one. At most MAX_MEDIA_DESCENDANTS nodes are searched; a larger subtree without text among
+     * them counts (never silent).
+     */
+    private function isImageLayer(DOMElement $element): bool
     {
         $budget = self::MAX_MEDIA_DESCENDANTS;
+        $media = false;
         $node = $element->firstChild;
 
         while ($node !== null) {
@@ -2432,12 +2443,17 @@ class CssParser
                 return true;
             }
 
-            if ($node instanceof DOMElement) {
-                if (in_array(Element::tag($node), self::CONTAINED_MEDIA, true)) {
-                    return true;
-                }
+            if ($node instanceof DOMText) {
+                $text = $node->data;
 
-                if ($node->firstChild !== null) {
+                if (strspn($text, " \t\n\r\f") < strlen($text)) {
+                    return false;
+                }
+            } elseif ($node instanceof DOMElement) {
+                $tag = Element::tag($node);
+                $media = $media || in_array($tag, self::CONTAINED_MEDIA, true);
+
+                if ($node->firstChild !== null && ! in_array($tag, self::UNRENDERED_CONTENT, true)) {
                     $node = $node->firstChild;
 
                     continue;
@@ -2448,14 +2464,14 @@ class CssParser
                 $node = $node->parentNode;
 
                 if ($node === null || $node->isSameNode($element)) {
-                    return false;
+                    return $media;
                 }
             }
 
             $node = $node->nextSibling;
         }
 
-        return false;
+        return $media;
     }
 
     /** Whether the element's cascaded position is absolute or fixed, var() substituted; an unresolvable value counts. */
