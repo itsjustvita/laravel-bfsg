@@ -1107,6 +1107,18 @@ class CssParserTest extends TestCase
         $this->assertSame(['backdrop'], $page('<div><img src="a.jpg" alt=""><img class="abs" src="b.jpg" alt=""><img src="c.jpg" alt=""><p>x</p></div>'), 'behind other media');
     }
 
+    public function test_siblings_that_paint_nothing_are_not_backdrop(): void
+    {
+        $page = fn (string $sibling): array => $this->resolved('', '<div>'.$sibling.'<p>x</p></div>', '//p')['uncertainty'];
+
+        $this->assertSame([], $page('<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><symbol id="i"><path d="M0 0h9v9z"/></symbol></svg>'), 'a sprite sheet, 0×0');
+        $this->assertSame([], $page('<svg style="position:absolute"><defs><linearGradient id="g"></linearGradient></defs><title>t</title></svg>'), 'only definitions');
+        $this->assertSame([], $page('<svg style="position:absolute" width="1" height="1"><path d="M0 0h1v1z"/></svg>'), '1×1 by its attributes');
+        $this->assertSame([], $page('<img style="position:absolute;height:1px" src="pixel.gif" alt="">'), 'a tracking pixel');
+        $this->assertSame(['backdrop'], $page('<svg style="position:absolute;inset:0"><path d="M0 0h9v9z"/></svg>'), 'a decorative svg that draws');
+        $this->assertSame(['backdrop'], $page('<svg style="position:absolute" width="2" height="2"><path d="M0 0h1v1z"/></svg>'));
+    }
+
     public function test_out_of_flow_siblings_containing_media_are_backdrop(): void
     {
         $css = '.absolute{position:absolute} .relative{position:relative} .hidden{display:none}';

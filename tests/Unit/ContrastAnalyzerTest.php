@@ -427,6 +427,7 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
             '<div aria-disabled="true"><span class="btn">x</span></div>',
             '<label for="b" class="btn">L</label><input id="b" disabled>',
             '<label class="btn">L <input disabled></label>',
+            '<label for="e" class="btn">L</label><input id="e" aria-disabled="true">',
         ] as $body) {
             $this->assertNoViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient');
         }
@@ -462,17 +463,35 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame(['approximate'], $violation->tags);
     }
 
-    // AAA keeps its notice on top of the AA verdict: #767676 is 4.54:1, an AA pass and an AAA failure.
-    public function test_aaa_notice_is_added_to_an_unverifiable_estimate(): void
+    // R36: an unknown colour that passes AA is only unverifiable, at AAA too (#767676 is 4.54:1, an AAA failure).
+    public function test_aaa_level_reports_only_unverifiable_for_an_unknown_colour(): void
     {
         $document = HtmlDocument::fromHtml($this->page('.hero{background-image:url(/hero.jpg)}', '<div class="hero"><p style="color:#767676">x</p></div>'));
 
         $violations = (new ContrastAnalyzer(level: 'AAA'))->analyze($document);
 
         $this->assertHasViolation($violations, 'contrast.unverifiable', severity: Severity::Notice);
-        $aaa = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Notice);
-        $this->assertSame('1.4.6', $aaa->rule);
-        $this->assertSame(['aaa', 'approximate'], $aaa->tags);
-        $this->assertViolationCount($violations, 'contrast.insufficient', 1);
+        $this->assertNoViolation($violations, 'contrast.insufficient');
+    }
+
+    // R37: a zero from a breakpoint rule, directly or through a custom property, does not hide (#eee is 1.16:1).
+    public function test_viewport_conditional_zero_opacity_text_is_measured(): void
+    {
+        foreach ([
+            ['@media (min-width:768px){.md\\:opacity-0{opacity:0}}', '<p class="md:opacity-0" style="color:#eee">x</p>'],
+            [':root{--o:1} @media (min-width:768px){:root{--o:0}} .x{opacity:var(--o)}', '<p class="x" style="color:#eee">x</p>'],
+        ] as [$css, $body]) {
+            $violation = $this->assertHasViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient', severity: Severity::Error);
+            $this->assertSame('1.16', $violation->params['ratio'], $css);
+        }
+    }
+
+    // R38: an icon sprite sheet paints nothing, so it is no backdrop.
+    public function test_svg_sprite_sheet_is_not_a_backdrop(): void
+    {
+        $sprite = '<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"><symbol id="i"></symbol></svg>';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page('', $sprite.'<main><p style="color:#aaa">x</p></main>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame([], $violation->tags);
     }
 }

@@ -54,28 +54,31 @@ class ContrastAnalyzer extends BaseAnalyzer
             if ($measured >= self::MAX_MEASURED || microtime(true) > $deadline) {
                 $this->report('analysis_truncated', Severity::Notice, '1.4.3', null, ['limit' => $measured]);
 
-                return;
+                break;
             }
 
             $measured++;
             $this->measure($parser, $element, $level);
         }
+
+        $this->inactiveLabels = new SplObjectStorage; // releases the document's labels
     }
 
     /**
      * Text that is not measured: not rendered (aria-hidden text is visible and measured), hidden by the stylesheets, fully
-     * transparent (opacity 0), or part of an inactive user interface component, which 1.4.3 exempts.
+     * transparent (CssParser::isTransparent(): an exact opacity 0 at every viewport), or part of an inactive user
+     * interface component, which 1.4.3 exempts.
      */
     private function isExempt(CssParser $parser, DOMElement $element): bool
     {
-        return Element::isNotRendered($element) || $parser->hidesElement($element) || $parser->opacity($element) <= 0.0 || $this->isInactive($element);
+        return Element::isNotRendered($element) || $parser->hidesElement($element) || $parser->isTransparent($element) || $this->isInactive($element);
     }
 
     /**
      * The verdict (spec D2). A failure is an error when it is definite, else a warning tagged `approximate`: an unknown
      * colour or a truncated index (resolveColors()['uncertainty']), or an unknown size with a ratio that meets the
-     * large-text threshold. A pass with an unknown colour is the notice `unverifiable`. At level AAA, an AA pass that
-     * fails AAA adds the notice tagged `aaa`.
+     * large-text threshold. A pass with an unknown colour is only the notice `unverifiable`, at any level (R36). At level
+     * AAA, any other AA pass that fails AAA is the notice tagged `aaa`.
      */
     protected function measure(CssParser $parser, DOMElement $element, string $level): void
     {
@@ -89,6 +92,8 @@ class ContrastAnalyzer extends BaseAnalyzer
         if ($failure === null) {
             if (array_intersect(self::UNKNOWN_COLOUR, $colors['uncertainty']) !== []) {
                 $this->report('unverifiable', Severity::Notice, '1.4.3', $element, $hex, ['approximate' => true, 'ratio' => round($ratio, 2), 'large' => $large], tags: ['approximate']);
+
+                return;
             }
 
             if ($level !== 'AAA' || ($failure = $this->failure($ratio, $large, 'AAA', $colors['uncertainty'])) === null) {
@@ -157,12 +162,12 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     /**
      * Text of an inactive user interface component, which 1.4.3 exempts: inside a disabled control or fieldset
-     * (Element::isDisabled()), inside an [aria-disabled="true"] subtree, or inside a label whose control is disabled.
+     * (Element::isDisabled()), inside an [aria-disabled="true"] subtree, or inside a label whose control is inactive.
      */
-    private function isInactive(DOMElement $element): bool
+    private function isInactive(DOMElement $element, bool $labels = true): bool
     {
         for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
-            if (Element::enumAttr($node, 'aria-disabled') === 'true' || (Element::tag($node) === 'label' && $this->labelsDisabledControl($node))) {
+            if (Element::enumAttr($node, 'aria-disabled') === 'true' || ($labels && Element::tag($node) === 'label' && $this->labelsDisabledControl($node))) {
                 return true;
             }
         }
@@ -170,7 +175,7 @@ class ContrastAnalyzer extends BaseAnalyzer
         return Element::isDisabled($element);
     }
 
-    /** Whether the label's labelled control (its for= target if labelable, else its first labelable descendant) is disabled. */
+    /** Whether the label's labelled control (its for= target if labelable, else its first labelable descendant) is inactive. */
     private function labelsDisabledControl(DOMElement $label): bool
     {
         if (isset($this->inactiveLabels[$label])) {
@@ -192,7 +197,7 @@ class ContrastAnalyzer extends BaseAnalyzer
             }
         }
 
-        return $this->inactiveLabels[$label] = $control !== null && Element::isDisabled($control);
+        return $this->inactiveLabels[$label] = $control !== null && $this->isInactive($control, labels: false);
     }
 
     private function isLabelable(DOMElement $element): bool

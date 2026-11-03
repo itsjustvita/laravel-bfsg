@@ -72,6 +72,9 @@ class CssParser
     /** Elements that may cover a later sibling's backdrop when they are positioned out of flow (absolute or fixed). */
     private const COVERING_MEDIA = ['img', 'picture', 'video', 'canvas', 'svg'];
 
+    /** SVG children that draw nothing themselves: an svg with only these (a sprite sheet) paints nothing (R38). */
+    private const NON_PAINTING_SVG_CHILDREN = ['defs', 'symbol', 'title', 'desc', 'metadata', 'style', 'script', 'lineargradient', 'radialgradient', 'pattern', 'clippath', 'mask', 'filter'];
+
     /** Media that make an out-of-flow element containing them cover a later sibling's backdrop (an icon svg does not). */
     private const CONTAINED_MEDIA = ['img', 'picture', 'video', 'canvas'];
 
@@ -240,7 +243,7 @@ class CssParser
     /** @var array<string, ?float> node path => computed font weight (null: unknown) */
     private array $fontWeightCache = [];
 
-    /** Whether a viewport rule declares display:none or visibility:hidden|collapse (hidesElement() then leaves them out). */
+    /** Whether a viewport rule declares display:none, visibility:hidden|collapse or opacity 0 (hidingDeclarations()). */
     private bool $viewportHiding = false;
 
     /** @var array<string, array<string, array{value: string, important: bool}>> node path => display and visibility without hiding viewport declarations */
@@ -756,7 +759,9 @@ class CssParser
     /**
      * The product of the cascaded `opacity` of the element and its ancestors, clamped to 0..1. Numbers and percentages
      * count, var() substituted; inherit takes the parent's own opacity; initial, unset, revert and revert-layer are 1. Any
-     * other value counts as 1 and makes resolveColors() uncertain (`colour`).
+     * other value counts as 1 and makes resolveColors() uncertain (`colour`). A zero holds only where it holds at every
+     * viewport, like display:none in hidesElement(): a zero from a viewport rule or from var() never wins
+     * (revealingVisibility()), so `md:opacity-0` text is measured.
      */
     public function opacity(DOMElement $element): float
     {
@@ -782,18 +787,57 @@ class CssParser
             return $this->opacityCache[$key] = [$parent, $inherited, 1.0];
         }
 
-        [$value, $approximate] = $this->substituteValue($element, $key, $declared);
-        $value = $value === null || strlen($value) > 64 ? '' : strtolower(trim($value)); // longer is no opacity: unknown
-        $own = match (true) {
-            $value === 'inherit' => $parentOwn,
-            in_array($value, ['initial', 'unset', 'revert', 'revert-layer'], true) => 1.0,
-            preg_match('/^[+-]?+(?:\d++(?:\.\d*+)?+|\.\d++)(?:e[+-]?+\d++)?+(%?+)$/D', $value, $m) === 1 => (float) $value / ($m[1] === '%' ? 100 : 1),
-            default => null,
-        };
-        $uncertainty = $this->uncertainty($inherited, $approximate || $own === null || ! is_finite($own) ? ['colour'] : []);
-        $own = $own === null || ! is_finite($own) ? 1.0 : max(0.0, min(1.0, $own));
+        [$own, $approximate] = $this->ownOpacity($element, $key, $declared, $parentOwn);
+
+        if ($own !== null && $own <= 0.0) {
+            $declared = $this->revealingVisibility($element, $key)['opacity']['value'] ?? null;
+            [$own, $approximate] = $declared === null ? [1.0, false] : $this->ownOpacity($element, $key, $declared, $parentOwn);
+        }
+
+        $uncertainty = $this->uncertainty($inherited, $approximate || $own === null ? ['colour'] : []);
+        $own ??= 1.0;
 
         return $this->opacityCache[$key] = [max(0.0, min(1.0, $parent * $own)), $uncertainty, $own];
+    }
+
+    /**
+     * Whether the element is fully transparent: its opacity() is 0 and certain.
+     */
+    public function isTransparent(DOMElement $element): bool
+    {
+        [$opacity, $uncertainty] = $this->opacityOf($element, $this->nodeKey($element));
+
+        return $opacity <= 0.0 && $uncertainty === [];
+    }
+
+    /**
+     * The element's own opacity from a declared value, var() substituted, clamped to 0..1 (null: not an opacity), and
+     * whether the substitution was approximate.
+     *
+     * @return array{0: ?float, 1: bool}
+     */
+    private function ownOpacity(DOMElement $element, string $key, string $declared, float $parentOwn): array
+    {
+        [$value, $approximate] = $this->substituteValue($element, $key, $declared);
+        $value = $value === null || strlen($value) > 64 ? '' : strtolower(trim($value)); // longer is no opacity: unknown
+
+        return [match (true) {
+            $value === 'inherit' => $parentOwn,
+            in_array($value, ['initial', 'unset', 'revert', 'revert-layer'], true) => 1.0,
+            default => $this->opacityNumber($value),
+        }, $approximate];
+    }
+
+    /** A number or percentage opacity clamped to 0..1; null for anything else (lower-cased, trimmed input). */
+    private function opacityNumber(string $value): ?float
+    {
+        if (preg_match('/^[+-]?+(?:\d++(?:\.\d*+)?+|\.\d++)(?:e[+-]?+\d++)?+(%?+)$/D', $value, $m) !== 1) {
+            return null;
+        }
+
+        $number = (float) $value / ($m[1] === '%' ? 100 : 1);
+
+        return is_finite($number) ? max(0.0, min(1.0, $number)) : null;
     }
 
     /**
@@ -902,7 +946,8 @@ class CssParser
     }
 
     /**
-     * The element's cascaded display and visibility declarations without the hiding declarations of viewport rules.
+     * The element's cascaded display, visibility and opacity declarations without the ones that may hide it only at some
+     * viewports: the hiding declarations of viewport rules (hidingDeclarations()), and an opacity that var() makes 0.
      *
      * @return array<string, array{value: string, important: bool}>
      */
@@ -915,20 +960,24 @@ class CssParser
         }
 
         $winners = [];
+        $revealing = function (array $declarations, bool $viewport) use ($element, $key): array {
+            $declarations = array_intersect_key($declarations, ['display' => true, 'visibility' => true, 'opacity' => true]);
+            $opacity = $declarations['opacity']['value'] ?? '';
 
-        foreach ($this->matchingRules($element, $key) as $rule) {
-            $declarations = array_intersect_key($rule['properties'], ['display' => true, 'visibility' => true]);
-
-            if ($rule['condition'] === 'viewport') {
-                $declarations = array_diff_key($declarations, $this->hidingDeclarations($declarations));
+            if (stripos($opacity, 'var(') !== false && ($this->ownOpacity($element, $key, $opacity, 1.0)[0] ?? 1.0) <= 0.0) {
+                unset($declarations['opacity']);
             }
 
-            foreach ($declarations as $name => $declaration) {
+            return $viewport ? array_diff_key($declarations, $this->hidingDeclarations($declarations)) : $declarations;
+        };
+
+        foreach ($this->matchingRules($element, $key) as $rule) {
+            foreach ($revealing($rule['properties'], $rule['condition'] === 'viewport') as $name => $declaration) {
                 $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']]);
             }
         }
 
-        foreach (array_intersect_key($this->inlineStyle($element), ['display' => true, 'visibility' => true]) as $name => $declaration) {
+        foreach ($revealing($this->inlineStyle($element), false) as $name => $declaration) {
             $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX]);
         }
 
@@ -936,7 +985,8 @@ class CssParser
     }
 
     /**
-     * The hiding declarations among a rule's properties: display:none, visibility:hidden or visibility:collapse.
+     * The hiding declarations among a rule's properties: display:none, visibility:hidden or visibility:collapse, and an
+     * opacity that is literally 0 (or less).
      *
      * @param  array<string, array{value: string, important: bool}>  $properties
      * @return array<string, array{value: string, important: bool}>
@@ -945,10 +995,12 @@ class CssParser
     {
         $display = strtolower(trim($properties['display']['value'] ?? ''));
         $visibility = strtolower(trim($properties['visibility']['value'] ?? ''));
+        $opacity = $this->opacityNumber(strtolower(trim($properties['opacity']['value'] ?? '')));
 
         return array_intersect_key($properties, array_filter([
             'display' => $display === 'none',
             'visibility' => $visibility === 'hidden' || $visibility === 'collapse',
+            'opacity' => $opacity !== null && $opacity <= 0.0,
         ]));
     }
 
@@ -2726,7 +2778,7 @@ class CssParser
     /**
      * Whether a previous sibling may cover the backdrop: it is rendered (its own display is not none and its visibility
      * not hidden or collapse; hiding viewport declarations never win, as in hidesElement()), positioned out of flow
-     * (isOutOfFlow()), and a media element or an image layer (isImageLayer(), R34/R35).
+     * (isOutOfFlow()), paints (paints(), R38), and a media element or an image layer (isImageLayer(), R34/R35).
      */
     private function covers(DOMElement $sibling, string $key, bool $media): bool
     {
@@ -2734,11 +2786,48 @@ class CssParser
 
         if (strtolower(trim($visibility['display']['value'] ?? '')) === 'none'
             || in_array(strtolower(trim($visibility['visibility']['value'] ?? '')), ['hidden', 'collapse'], true)
-            || ! $this->isOutOfFlow($sibling, $key)) {
+            || ! $this->isOutOfFlow($sibling, $key)
+            || ! $this->paints($sibling)) {
             return false;
         }
 
         return $media || $this->isImageLayer($sibling);
+    }
+
+    /**
+     * Whether a covering candidate may paint (R38): not when its width or height attribute or style attribute makes it at
+     * most 1px wide or high (a hidden sprite sheet, a tracking pixel), nor an svg whose element children all draw nothing
+     * (NON_PAINTING_SVG_CHILDREN). An svg without element children still counts.
+     */
+    private function paints(DOMElement $element): bool
+    {
+        $style = $this->inlineStyle($element);
+
+        foreach (['width', 'height'] as $name) {
+            foreach ([$element->getAttribute($name), $style[$name]['value'] ?? ''] as $value) {
+                if (preg_match('/^\s*+(\d++(?:\.\d*+)?+|\.\d++)\s*+(?:px)?+\s*+$/i', $value, $m) === 1 && (float) $m[1] <= 1.0) {
+                    return false;
+                }
+            }
+        }
+
+        if (Element::tag($element) !== 'svg') {
+            return true;
+        }
+
+        $children = 0;
+
+        for ($child = $element->firstChild; $child !== null; $child = $child->nextSibling) {
+            if ($child instanceof DOMElement) {
+                if (! in_array(Element::tag($child), self::NON_PAINTING_SVG_CHILDREN, true)) {
+                    return true;
+                }
+
+                $children++;
+            }
+        }
+
+        return $children === 0;
     }
 
     /**
