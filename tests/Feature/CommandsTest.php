@@ -18,6 +18,7 @@ use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Tests\Support\CapturedOutput;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Component\VarDumper\VarDumper;
 
 class CommandsTest extends TestCase
 {
@@ -819,5 +820,90 @@ class CommandsTest extends TestCase
         } finally {
             @unlink($path);
         }
+    }
+
+    /**
+     * bfsg:check with $parameters, with the process output and the process's dumper (php://stdout in CLI) observed.
+     *
+     * @return array{0: int, 1: CapturedOutput, 2: string, 3: list<mixed>} exit code, output, leaked output, leaked dumps
+     */
+    private function checkObservingStdout(array $parameters): array
+    {
+        $dumped = [];
+        $previous = VarDumper::setHandler(function (mixed $value) use (&$dumped) {
+            $dumped[] = $value;
+        });
+        ob_start();
+
+        try {
+            [$exitCode, $output] = $this->check($parameters);
+        } finally {
+            $leak = (string) ob_get_clean();
+            VarDumper::setHandler($previous);
+        }
+
+        return [$exitCode, $output, $leak, $dumped];
+    }
+
+    /** @return list<string> the finding keys of a JSON report */
+    private static function findingKeys(string $json): array
+    {
+        $report = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+
+        return array_column(array_merge(...array_values($report['violations'])), 'key');
+    }
+
+    public function test_stray_output_does_not_reach_stdout(): void
+    {
+        $this->app['router']->get('/noisy', function () {
+            echo 'STRAY-ECHO';
+            dump('STRAY-DUMP');
+
+            return response('<html lang="en"><title>t</title><main><h1>x</h1></main></html>');
+        });
+
+        [$exitCode, $output, $leak, $dumped] = $this->checkObservingStdout(['url' => '/noisy', '--format' => 'json']);
+
+        $this->assertContains($exitCode, [0, 1], $output->stderr());
+        $this->assertStringNotContainsString('STRAY', $leak);
+        $this->assertSame([], $dumped, 'dump() never reaches the dumper of the process (php://stdout)');
+        $this->assertStringNotContainsString('STRAY', $output->stdout());
+        json_decode($output->stdout(), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertStringContainsString('outside the response', $output->stderr());
+    }
+
+    public function test_streamed_response_with_flush_is_fully_analyzed(): void
+    {
+        $this->app['router']->get('/streamed', fn () => response()->stream(function () {
+            echo '<html lang="en"><head><title>t</title></head><body>';
+            ob_flush();
+            flush();
+            echo '<main><h1>x</h1><img src="a.png"></main></body></html>';
+        }, 200, ['Content-Type' => 'text/html']));
+
+        [$exitCode, $output, $leak] = $this->checkObservingStdout(['url' => '/streamed', '--format' => 'json']);
+
+        $this->assertSame(1, $exitCode, $output->stderr());
+        $this->assertSame('', $leak);
+        $this->assertContains('images.missing_alt', self::findingKeys($output->stdout()));
+        $this->assertNotContains('page_title.missing_title', self::findingKeys($output->stdout()));
+        $this->assertStringNotContainsString('outside the response', $output->stderr());
+    }
+
+    public function test_app_url_with_sub_path(): void
+    {
+        config(['app.url' => 'http://localhost/app']);
+        $hit = false;
+        $this->app['router']->get('/contact', function () use (&$hit) {
+            $hit = true;
+
+            return response(self::ACCESSIBLE);
+        });
+
+        [$exitCode, $output] = $this->check(['url' => '/contact', '--format' => 'json']);
+
+        $this->assertContains($exitCode, [0, 1], $output->stderr());
+        $this->assertTrue($hit, 'the route /contact was reached');
+        $this->assertSame('http://localhost/app/contact', json_decode($output->stdout(), true)['url']);
     }
 }

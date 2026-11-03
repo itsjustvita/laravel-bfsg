@@ -5,6 +5,8 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit\Http;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
+use Illuminate\Log\Context\Repository;
+use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
@@ -15,6 +17,7 @@ use ItsJustVita\LaravelBfsg\Http\InProcessFetcher;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\VarDumper\VarDumper;
 
 class UrlFetcherTest extends TestCase
 {
@@ -541,5 +544,190 @@ class UrlFetcherTest extends TestCase
         $this->failure('/german-broken');
         $this->assertSame('en', app()->getLocale());
         $this->assertSame('en', app('translator')->getLocale());
+    }
+
+    /** Runs $test with a VarDumper handler that records what reaches it (the process's own dumper writes to php://stdout). */
+    private function recordingDumps(\Closure $test): array
+    {
+        $dumped = [];
+        $previous = VarDumper::setHandler(function (mixed $value) use (&$dumped) {
+            $dumped[] = $value;
+        });
+
+        try {
+            $test();
+        } finally {
+            VarDumper::setHandler($previous);
+        }
+
+        return $dumped;
+    }
+
+    public function test_in_process_output_is_captured_and_reported_as_a_warning(): void
+    {
+        $this->app['router']->get('/echo', function () {
+            echo 'STRAY-ECHO';
+
+            return response(self::PAGE);
+        });
+        $this->app['router']->get('/dump', function () {
+            dump('STRAY-DUMP');
+
+            return response(self::PAGE);
+        });
+        $level = ob_get_level();
+
+        $dumped = $this->recordingDumps(function () use (&$echo, &$dump, &$german, &$leak) {
+            ob_start();
+
+            try {
+                $echo = $this->fetcher()->fetch('/echo');
+                $dump = $this->fetcher()->fetch('/dump');
+                app()->setLocale('de');
+                $german = $this->fetcher()->fetch('/echo');
+            } finally {
+                $leak = ob_get_clean();
+                app()->setLocale('en');
+            }
+
+            dump('after the fetches');
+        });
+
+        $this->assertSame('', $leak, 'nothing reaches the output of the calling process');
+        $this->assertSame(['after the fetches'], $dumped, 'dump() inside the page is captured, and the caller\'s dumper is restored');
+        $this->assertSame($level, ob_get_level());
+        $this->assertSame(self::PAGE, $echo->html);
+        $this->assertSame(['The application wrote 10 bytes outside the response; they were discarded.'], $echo->warnings);
+        $this->assertSame(self::PAGE, $dump->html);
+        $this->assertCount(1, $dump->warnings);
+        $this->assertStringContainsString('outside the response', $dump->warnings[0]);
+        $this->assertSame(['Die Anwendung hat 10 Bytes außerhalb der Antwort ausgegeben; sie wurden verworfen.'], $german->warnings);
+    }
+
+    public function test_streamed_bodies_are_captured_even_when_flushed_and_output_buffers_are_left_as_found(): void
+    {
+        $head = '<!DOCTYPE html><html lang="en"><head><title>Page</title></head><body>';
+        $this->app['router']->get('/flushed', fn () => response()->stream(function () use ($head) {
+            echo $head;
+            ob_flush();
+            flush();
+            echo '<main><h1>Hi</h1></main></body></html>';
+        }, 200, ['Content-Type' => 'text/html']));
+        $this->app['router']->get('/noisy-stream', function () {
+            echo 'X';
+
+            return response()->stream(fn () => print (self::PAGE), 200, ['Content-Type' => 'text/html']);
+        });
+        $this->app['router']->get('/unclosed', function () {
+            ob_start();
+            echo '<p>partial';
+
+            throw new \RuntimeException('boom');
+        });
+        $this->app['router']->get('/stream-boom', fn () => response()->stream(function () {
+            ob_start();
+            echo 'half';
+
+            throw new \RuntimeException('stream boom');
+        }, 200, ['Content-Type' => 'text/html']));
+        $level = ob_get_level();
+
+        $dumped = $this->recordingDumps(function () use (&$flushed, &$noisy, &$unclosed, &$broken, &$leak) {
+            ob_start();
+
+            try {
+                $flushed = $this->fetcher()->fetch('/flushed');
+                $noisy = $this->fetcher()->fetch('/noisy-stream');
+                $unclosed = $this->failure('/unclosed');
+                $broken = $this->failure('/stream-boom');
+            } finally {
+                $leak = ob_get_clean();
+            }
+
+            dump('restored after an exception');
+        });
+
+        $this->assertSame('', $leak);
+        $this->assertSame($level, ob_get_level(), 'the output buffer stack is as it was, also after exceptions');
+        $this->assertSame(['restored after an exception'], $dumped);
+        $this->assertSame($head.'<main><h1>Hi</h1></main></body></html>', $flushed->html);
+        $this->assertSame([], $flushed->warnings);
+        $this->assertSame(self::PAGE, $noisy->html, 'output before the stream is not part of the body');
+        $this->assertSame(['The application wrote 1 bytes outside the response; they were discarded.'], $noisy->warnings);
+        $this->assertSame(500, $unclosed->status);
+        $this->assertStringContainsString('stream boom', $broken->getMessage());
+    }
+
+    public function test_scoped_instances_do_not_leak_between_fetches(): void
+    {
+        $this->app->scoped('tenant', fn () => request()->path());
+        $this->app['router']->get('/alpha', fn () => response('<html><body>tenant='.app('tenant').'</body></html>'));
+        $this->app['router']->get('/beta', fn () => response('<html><body>tenant='.app('tenant').'</body></html>'));
+        $caller = app('tenant');
+
+        $this->assertStringContainsString('tenant=alpha', $this->fetcher()->fetch('/alpha')->html);
+        $this->assertStringContainsString('tenant=beta', $this->fetcher()->fetch('/beta')->html);
+        $this->assertSame($caller, app('tenant'), 'the caller keeps its own scoped instance');
+    }
+
+    public function test_context_is_isolated_and_restored(): void
+    {
+        Context::add('seen', 'caller');
+        Context::addHidden('secret', 'caller-secret');
+        $this->app['router']->get('/context', function () {
+            $before = Context::get('seen', 'none').'/'.Context::getHidden('secret', 'none');
+            Context::add('seen', 'route');
+            Context::addHidden('secret', 'route-secret');
+
+            return response('<html><body>before='.$before.'</body></html>');
+        });
+        $this->app['router']->get('/context-boom', function () {
+            Context::add('seen', 'boom');
+
+            throw new \RuntimeException('boom');
+        });
+
+        $this->assertStringContainsString('before=none/none', $this->fetcher()->fetch('/context')->html);
+        $this->assertStringContainsString('before=none/none', $this->fetcher()->fetch('/context')->html, 'nor from the previous page');
+        $this->failure('/context-boom');
+
+        $this->assertSame('caller', Context::get('seen'));
+        $this->assertSame('caller-secret', Context::getHidden('secret'));
+        $this->assertSame(['seen' => 'caller'], app(Repository::class)->all());
+    }
+
+    public function test_an_app_url_with_a_path_is_the_base_path_of_in_process_requests(): void
+    {
+        config()->set('app.url', 'http://localhost/app');
+        $public = sys_get_temp_dir().'/bfsg-public-'.uniqid();
+        mkdir($public.'/css', 0777, true);
+        file_put_contents($public.'/css/app.css', '.muted { color: #999 }');
+        $this->app->usePublicPath($public);
+        $seen = [];
+        $this->app['router']->get('/contact', function (\Illuminate\Http\Request $request) use (&$seen) {
+            $seen[] = [$request->path(), url('/x')];
+
+            return response('<html><head><link rel="stylesheet" href="/app/css/app.css"></head><body></body></html>');
+        });
+        $this->app['router']->get('/', function (\Illuminate\Http\Request $request) use (&$seen) {
+            $seen[] = [$request->path(), url('/x')];
+
+            return response(self::PAGE);
+        });
+
+        try {
+            $contact = $this->fetcher()->fetch('/contact');
+            $this->fetcher()->fetch('http://localhost/app');
+            $this->fetcher()->fetch('/');
+        } finally {
+            unlink($public.'/css/app.css');
+            rmdir($public.'/css');
+            rmdir($public);
+        }
+
+        $this->assertSame('http://localhost/app/contact', $contact->finalUrl);
+        $this->assertSame([['contact', 'http://localhost/app/x'], ['/', 'http://localhost/app/x'], ['/', 'http://localhost/app/x']], $seen);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/app/css/app.css">.muted { color: #999 }</style>', $contact->html);
+        $this->assertSame([], $contact->warnings);
     }
 }

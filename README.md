@@ -636,6 +636,7 @@ Severity policy: **error** is a definite AA failure detectable in the markup, **
   - **Unknown font size** (no guaranteed lower bound, as with `font-size: 5vw`, or 18.66px to 24px with an unknown weight): below 3:1 is an error, below 4.5:1 a warning tagged `approximate`, and 4.5:1 or more a pass.
   - **Truncated style index** (very large stylesheets): a failing estimate is a warning tagged `approximate`; a passing one is silent.
 - Text of inactive components is exempt from contrast checks, as WCAG 1.4.3 allows: disabled controls, the content of a `fieldset[disabled]`, `[aria-disabled="true"]` subtrees, and labels of disabled controls. Text hidden only with `aria-hidden` is still visible and is measured; text with `opacity: 0` is not, unless the zero comes from a breakpoint rule or a custom property.
+- Pages of this application are rendered in-process, in the process that runs `bfsg:check` or the MCP server. Each page starts without the caller's user, session, scoped instances and `Context`, and these are restored afterwards. Output the application writes outside the response (`echo`, `dump()`) is discarded with a warning. Global changes made by app code or middleware are not isolated and carry over to later pages of the same run or MCP session: `config()` calls, static state, and the state of tenancy packages. `dd()` and `exit` in a page end that process.
 
 ## Development
 

@@ -47,6 +47,8 @@ class UrlFetcher
         $client->bindUnboundHeadersTo($requested);
         $redirects = 0;
         $viaKernel = $options->inProcess;
+        // In-process hops report output the application wrote outside the response
+        $warnings = [];
 
         while (true) {
             $this->assertAllowed($current, $options->allowedHosts);
@@ -59,6 +61,8 @@ class UrlFetcher
             } catch (ResponseTooLarge $e) {
                 throw FetchFailed::tooLarge($current, $e->limit);
             }
+
+            $warnings = [...$warnings, ...$response['warnings']];
 
             if ($response['status'] < 300 || $response['status'] >= 400 || $response['location'] === null) {
                 break;
@@ -84,10 +88,10 @@ class UrlFetcher
         }
 
         $html = $response['body'];
-        $warnings = [];
 
         if ($options->inlineStylesheets ?? filter_var(config('bfsg.fetch.inline_stylesheets', true), FILTER_VALIDATE_BOOL)) {
-            [$html, $warnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options, $viaKernel, $current, $pin));
+            [$html, $inlinerWarnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options, $viaKernel, $current, $pin));
+            $warnings = [...$warnings, ...$inlinerWarnings];
         }
 
         return new FetchedPage(
@@ -220,7 +224,7 @@ class UrlFetcher
 
     /**
      * @param  list<string>  $pin  CURLOPT_RESOLVE entries for a remote request
-     * @return array{status: int, location: ?string, contentType: string, body: string}
+     * @return array{status: int, location: ?string, contentType: string, body: string, warnings: list<string>}
      */
     private function request(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, int $maxBytes, array $pin = []): array
     {
@@ -243,6 +247,7 @@ class UrlFetcher
             'location' => $response->header('Location') === '' ? null : $response->header('Location'),
             'contentType' => $response->header('Content-Type'),
             'body' => $response->body(),
+            'warnings' => [],
         ];
     }
 

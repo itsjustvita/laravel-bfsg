@@ -21,6 +21,9 @@ return [
     'score_value' => ':score von 100',
     'no_rule' => 'Kein WCAG-Kriterium',
     'source' => 'laravel-bfsg auf GitHub',
+    'fetch_warnings' => [
+        'stray_output' => 'Die Anwendung hat :bytes Bytes außerhalb der Antwort ausgegeben; sie wurden verworfen.',
+    ],
     'cli' => [
         'checking' => 'Prüfe :url',
         'rendering' => 'Rendere :url mit :engine',
