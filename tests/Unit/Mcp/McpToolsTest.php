@@ -370,6 +370,28 @@ class McpToolsTest extends TestCase
         BfsgMcpServer::tool(GetReport::class, ['report_id' => 'x'])->assertHasErrors(['positive integer']);
     }
 
+    public function test_stored_c1_and_bidi_controls_are_escaped_in_tool_json(): void
+    {
+        $text = "Bild \u{9b}31m fehlt \u{202E}gnp.x";
+        $violation = BfsgViolation::factory()->create(['message' => $text]);
+        BfsgReport::whereKey($violation->report_id)->update(['url' => "https://a.example/\u{9b}\u{202E}"]);
+
+        foreach ([
+            BfsgMcpServer::tool(GetReport::class, ['report_id' => $violation->report_id])->assertOk(),
+            BfsgMcpServer::tool(GetHistory::class)->assertOk(),
+        ] as $response) {
+            $this->assertStringNotContainsString("\xC2\x9B", $response->text());
+            $this->assertStringNotContainsString("\xE2\x80\xAE", $response->text());
+            $this->assertStringContainsString('\u009b', $response->text());
+            $this->assertStringContainsString('\u202e', $response->text());
+        }
+
+        $report = BfsgMcpServer::tool(GetReport::class, ['report_id' => $violation->report_id])->payload();
+        $this->assertSame($text, $report['violations'][0]['message']);
+        $this->assertSame("https://a.example/\u{9b}\u{202E}", $report['report']['url']);
+        $this->assertSame("https://a.example/\u{9b}\u{202E}", BfsgMcpServer::tool(GetHistory::class)->payload()['reports'][0]['url']);
+    }
+
     public function test_generate_report_formats_and_save(): void
     {
         $this->app['router']->get('/mcp-report', fn () => response(self::BROKEN));

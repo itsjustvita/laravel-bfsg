@@ -37,6 +37,20 @@ final class Sanitizer
         return (string) preg_replace(self::MARKDOWN_PUNCTUATION, '\\\\$0', $text);
     }
 
+    /**
+     * json_encode() output with C1 controls (U+009B is a CSI) and bidi overrides/isolates as \uXXXX escapes:
+     * JSON_UNESCAPED_UNICODE keeps text readable but would pass them raw to a terminal, CI log or client. They only
+     * occur inside string literals, so the escape is lossless.
+     */
+    public static function escapeJsonControls(string $json): string
+    {
+        return (string) preg_replace_callback(
+            '/[\x{0080}-\x{009F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u',
+            fn (array $match): string => sprintf('\\u%04x', mb_ord($match[0], 'UTF-8')),
+            $json,
+        );
+    }
+
     /** At most $max code points; a cut text ends in "…" (counted in $max). */
     public static function truncate(string $text, int $max): string
     {

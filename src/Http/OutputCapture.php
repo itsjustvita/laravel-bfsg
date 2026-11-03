@@ -33,7 +33,7 @@ final class OutputCapture
         $this->level = ob_get_level();
         // Chunk size 1: every write reaches write() at once, also what the application flushes with ob_flush()
         ob_start($this->write(...), 1);
-        $this->previousDumper = VarDumper::setHandler(function (mixed $value): void {
+        $this->previousDumper = self::setDumper(function (mixed $value): void {
             $this->stray += strlen((string) (new CliDumper)->dump((new VarCloner)->cloneVar($value), true));
         });
     }
@@ -60,10 +60,30 @@ final class OutputCapture
         try {
             self::endBuffersAbove($this->level);
         } finally {
-            VarDumper::setHandler($this->previousDumper);
+            self::setDumper($this->previousDumper);
         }
 
         return $this->stray;
+    }
+
+    /** VarDumper::setHandler(), which ignores every call while VAR_DUMPER_FORMAT is set: it is lifted for the call. */
+    private static function setDumper(?callable $handler): ?callable
+    {
+        $server = array_key_exists('VAR_DUMPER_FORMAT', $_SERVER) ? [$_SERVER['VAR_DUMPER_FORMAT']] : null;
+        $env = array_key_exists('VAR_DUMPER_FORMAT', $_ENV) ? [$_ENV['VAR_DUMPER_FORMAT']] : null;
+        unset($_SERVER['VAR_DUMPER_FORMAT'], $_ENV['VAR_DUMPER_FORMAT']);
+
+        try {
+            return VarDumper::setHandler($handler);
+        } finally {
+            if ($server !== null) {
+                $_SERVER['VAR_DUMPER_FORMAT'] = $server[0];
+            }
+
+            if ($env !== null) {
+                $_ENV['VAR_DUMPER_FORMAT'] = $env[0];
+            }
+        }
     }
 
     /** Ends every removable output buffer above $level; each passes its content down, the capture buffer to write(). */

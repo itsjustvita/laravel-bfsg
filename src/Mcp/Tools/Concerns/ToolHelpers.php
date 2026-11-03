@@ -58,11 +58,12 @@ trait ToolHelpers
 
     /**
      * Response::json() with invalid UTF-8 replaced by U+FFFD: a stored or page-derived string can never make the
-     * encoding fail, and the JSON-RPC encoder never meets invalid UTF-8 (it would write an empty line instead).
+     * encoding fail, and the JSON-RPC encoder never meets invalid UTF-8 (it would write an empty line instead). C1 and
+     * bidi controls are escaped (Sanitizer::escapeJsonControls).
      */
     protected function toolJson(mixed $content): Response
     {
-        return Response::text(json_encode($content, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR));
+        return Response::text(Sanitizer::escapeJsonControls(json_encode($content, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR)));
     }
 
     /**

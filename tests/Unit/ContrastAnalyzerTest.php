@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit;
 
+use DOMElement;
 use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
@@ -9,6 +10,7 @@ use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 
 class ContrastAnalyzerTest extends AnalyzerTestCase
 {
@@ -601,5 +603,33 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
 
         $this->assertSame(['#999999' => 111, '#aaaaaa' => 89, '#bbbbbb' => 1], $occurrences);
+    }
+
+    public function test_state_of_a_document_whose_analysis_threw_does_not_leak_into_the_next(): void
+    {
+        $analyzer = new class extends ContrastAnalyzer
+        {
+            public bool $throws = true;
+
+            protected function report(string $key, Severity $severity, ?string $rule, ?DOMElement $element = null, array $params = [], array $meta = [], array $related = [], array $tags = [], bool $autoFixable = false): void
+            {
+                if ($this->throws) {
+                    $this->throws = false;
+
+                    throw new RuntimeException('midway');
+                }
+
+                parent::report($key, $severity, $rule, $element, $params, $meta, $related, $tags, $autoFixable);
+            }
+        };
+
+        try {
+            $analyzer->analyze(HtmlDocument::fromHtml($this->page('', '<p style="color:#999;background-color:#fff">Low contrast</p>')));
+            $this->fail('The first analysis should have thrown.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('midway', $e->getMessage());
+        }
+
+        $this->assertSame([], $analyzer->analyze(HtmlDocument::fromHtml($this->page('', '<p style="color:#000;background-color:#fff">Fine</p>'))));
     }
 }

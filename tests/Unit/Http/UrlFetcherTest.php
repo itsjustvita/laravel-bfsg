@@ -625,6 +625,45 @@ class UrlFetcherTest extends TestCase
         $this->assertSame(['Die Anwendung hat 10 Bytes außerhalb der Antwort ausgegeben; sie wurden verworfen.'], $german->warnings);
     }
 
+    public function test_dump_is_captured_even_with_a_var_dumper_format(): void
+    {
+        $this->app['router']->get('/dump', function () {
+            dump('STRAY-DUMP');
+
+            return response(self::PAGE);
+        });
+        $server = $_SERVER['VAR_DUMPER_FORMAT'] ?? null;
+        $env = $_ENV['VAR_DUMPER_FORMAT'] ?? null;
+
+        // VarDumper::setHandler() ignores every call while VAR_DUMPER_FORMAT is set; the recorder stands for the
+        // process's own dumper, which writes to php://stdout.
+        $dumped = $this->recordingDumps(function () use (&$page) {
+            $_SERVER['VAR_DUMPER_FORMAT'] = $_ENV['VAR_DUMPER_FORMAT'] = 'cli';
+
+            try {
+                $page = $this->fetcher()->fetch('/dump');
+                $this->assertSame('cli', $_SERVER['VAR_DUMPER_FORMAT']);
+                $this->assertSame('cli', $_ENV['VAR_DUMPER_FORMAT']);
+                dump('after the fetch');
+            } finally {
+                unset($_SERVER['VAR_DUMPER_FORMAT'], $_ENV['VAR_DUMPER_FORMAT']);
+            }
+        });
+
+        if ($server !== null) {
+            $_SERVER['VAR_DUMPER_FORMAT'] = $server;
+        }
+
+        if ($env !== null) {
+            $_ENV['VAR_DUMPER_FORMAT'] = $env;
+        }
+
+        $this->assertSame(['after the fetch'], $dumped, 'the page\'s dump() is captured, the caller\'s dumper is restored');
+        $this->assertSame(self::PAGE, $page->html);
+        $this->assertCount(1, $page->warnings);
+        $this->assertStringContainsString('outside the response', $page->warnings[0]);
+    }
+
     public function test_streamed_bodies_are_captured_even_when_flushed_and_output_buffers_are_left_as_found(): void
     {
         $head = '<!DOCTYPE html><html lang="en"><head><title>Page</title></head><body>';

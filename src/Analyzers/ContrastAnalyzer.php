@@ -67,12 +67,24 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     protected function inspect(): void
     {
+        // Reset before and after: a throw midway must not leak this document's state into the next one.
+        $this->resetDocumentState();
+
+        try {
+            $this->inspectDocument();
+        } finally {
+            // releases the document's elements
+            $this->resetDocumentState();
+        }
+    }
+
+    private function inspectDocument(): void
+    {
         $deadline = microtime(true) + self::TIME_BUDGET_SECONDS;
         $parser = ($this->cssParser?->parse($this->document) ?? $this->document->cssParser())->buildIndex($deadline);
         $level = $this->level();
         $measured = 0;
         $truncated = false;
-        $this->inactiveLabels = new SplObjectStorage;
 
         foreach ($this->query('//*[text()[normalize-space()]]') as $element) {
             if (in_array(Element::tag($element), self::SKIPPED_TAGS, true) || $this->ownText($element) === '') {
@@ -115,8 +127,10 @@ class ContrastAnalyzer extends BaseAnalyzer
         if ($truncated) {
             $this->report('analysis_truncated', Severity::Notice, '1.4.3', null, ['limit' => $measured]);
         }
+    }
 
-        // releases the document's elements
+    private function resetDocumentState(): void
+    {
         $this->inactiveLabels = new SplObjectStorage;
         $this->chain = $this->depths = $this->verdicts = $this->exemptChains = $this->groups = [];
         $this->selectorAttributes = null;
