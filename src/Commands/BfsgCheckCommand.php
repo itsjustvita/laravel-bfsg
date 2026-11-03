@@ -16,6 +16,7 @@ use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Support\Locale;
+use ItsJustVita\LaravelBfsg\Support\Sanitizer;
 use ItsJustVita\LaravelBfsg\Violation;
 use Symfony\Component\Console\Exception\ExceptionInterface as ConsoleException;
 use Symfony\Component\Console\Formatter\OutputFormatter;
@@ -98,7 +99,7 @@ class BfsgCheckCommand extends Command
             return parent::run($input, $output);
         } catch (ConsoleException $e) {
             $stderr = $output instanceof ConsoleOutputInterface ? $output->getErrorOutput() : $output;
-            $stderr->writeln('<error>'.OutputFormatter::escape($e->getMessage()).'</error>');
+            $stderr->writeln('<error>'.self::escape($e->getMessage()).'</error>');
 
             return self::OPERATIONAL_ERROR;
         }
@@ -144,7 +145,7 @@ class BfsgCheckCommand extends Command
             return $this->thresholdExceeded($result, $report, $failOn, $minScore) ? self::FAILURE : self::SUCCESS;
         } catch (Throwable $e) {
             $message = ($userInfo ?? '') === '' ? $e->getMessage() : str_replace($userInfo.'@', '', $e->getMessage());
-            $this->stderr()->writeln('<error>'.OutputFormatter::escape($message).'</error>');
+            $this->stderr()->writeln('<error>'.self::escape($message).'</error>');
 
             return self::OPERATIONAL_ERROR;
         }
@@ -504,11 +505,11 @@ class BfsgCheckCommand extends Command
         $result = $report->result();
 
         if ($result->count() === 0) {
-            $this->line('<info>'.OutputFormatter::escape($this->trans('no_issues')).'</info>');
+            $this->line('<info>'.self::escape($this->trans('no_issues')).'</info>');
         }
 
         foreach ($result->byAnalyzer() as $analyzer => $violations) {
-            $this->line('<options=bold>'.OutputFormatter::escape($analyzer).'</> ('.count($violations).')');
+            $this->line('<options=bold>'.self::escape($analyzer).'</> ('.count($violations).')');
 
             foreach ($violations as $violation) {
                 $this->printViolation($violation);
@@ -517,7 +518,7 @@ class BfsgCheckCommand extends Command
             $this->newLine();
         }
 
-        $this->line(OutputFormatter::escape($this->summaryLine($report)));
+        $this->line(self::escape($this->summaryLine($report)));
     }
 
     private function printViolation(Violation $violation): void
@@ -528,7 +529,7 @@ class BfsgCheckCommand extends Command
             Severity::Notice => 'fg=cyan',
         };
         $rule = $violation->rule === null ? $this->trans('no_rule') : $this->trans('rule').' '.$violation->rule;
-        $escape = fn (?string $text): string => OutputFormatter::escape((string) $text);
+        $escape = fn (?string $text): string => self::escape((string) $text);
 
         $this->line("  <{$style}>[".$escape($violation->severity->label($this->locale)).']</> '.$escape($rule).' '.$escape($violation->message($this->locale)));
         $this->line('      '.$escape($this->trans('suggestion').': '.$violation->suggestion($this->locale)));
@@ -578,7 +579,13 @@ class BfsgCheckCommand extends Command
 
     private function status(string $message): void
     {
-        $this->stderr()->writeln('<comment>'.OutputFormatter::escape($message).'</comment>');
+        $this->stderr()->writeln('<comment>'.self::escape($message).'</comment>');
+    }
+
+    /** Every printed text may carry page content (messages, URLs, warnings): control characters out, then formatter tags. */
+    private static function escape(string $text): string
+    {
+        return OutputFormatter::escape(Sanitizer::terminal($text));
     }
 
     /** stderr of a console output; the output itself otherwise (tests with a buffered output). */

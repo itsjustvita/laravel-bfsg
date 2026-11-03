@@ -262,6 +262,45 @@ class CommandsTest extends TestCase
         $this->assertStringContainsString('No accessibility issues found.', $output->stdout());
     }
 
+    public function test_page_control_characters_never_reach_the_terminal(): void
+    {
+        $this->app['router']->get('/esc', fn () => response('<!DOCTYPE html><html><head><link rel="stylesheet" href="/missing'."\x1b]0;PWNED\x07".'.css"></head>'
+            ."<body><img src=\"a\x1b]0;PWNED\x07\x1b[2J.png\"></body></html>"));
+
+        $cases = [
+            'cli' => [[], 'a]0;PWNED[2J.png'],
+            'detailed' => [['--detailed' => true], 'a]0;PWNED[2J.png'],
+            'markdown' => [['--format' => 'markdown'], 'a\]0;PWNED\[2J.png'],
+            'json (unchanged: json_encode escapes control characters)' => [['--format' => 'json'], 'a\u001b]0;PWNED\u0007\u001b[2J.png'],
+        ];
+
+        foreach ($cases as $label => [$options, $finding]) {
+            [$exitCode, $output] = $this->check(['url' => '/esc', ...$options]);
+
+            $this->assertSame(1, $exitCode, $label);
+            $this->assertStringContainsString($finding, $output->stdout(), $label.': the finding is still shown');
+            $this->assertStringContainsString('missing]0;PWNED.css', $output->stderr(), $label.': the stylesheet warning is still shown');
+            $this->assertStringNotContainsString("\x1b", $output->stdout(), $label);
+            $this->assertStringNotContainsString("\x1b", $output->stderr(), $label);
+            $this->assertStringNotContainsString("\x07", $output->stdout().$output->stderr(), $label);
+        }
+    }
+
+    public function test_stored_control_characters_never_reach_the_history_output(): void
+    {
+        $url = "https://example.com/\x1b]0;PWNED\x07\x1b[2J<fg=red>x</>";
+        BfsgReport::create(['url' => $url, 'total_violations' => 1, 'score' => 90, 'grade' => 'A']);
+
+        foreach ([[], ['--url' => $url, '--trend' => true]] as $options) {
+            $output = new CapturedOutput;
+            $this->assertSame(0, Artisan::call('bfsg:history', $options, $output));
+
+            $this->assertStringContainsString('https://example.com/]0;PWNED[2J<fg=red>x</>', $output->stdout());
+            $this->assertStringNotContainsString("\x1b", $output->stdout());
+            $this->assertStringNotContainsString("\x07", $output->stdout());
+        }
+    }
+
     public function test_only_and_except_select_analyzers(): void
     {
         $this->fakeSite(self::ERRORS);

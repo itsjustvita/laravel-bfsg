@@ -7,6 +7,8 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
+use ItsJustVita\LaravelBfsg\Support\Sanitizer;
+use Symfony\Component\Console\Formatter\OutputFormatter;
 
 class BfsgHistoryCommand extends Command
 {
@@ -33,7 +35,7 @@ class BfsgHistoryCommand extends Command
         $name = $this->option('cleanup') ? 'days' : 'limit';
 
         if (! preg_match('/^[1-9][0-9]*$/', (string) $this->option($name))) {
-            $this->error("The --{$name} option must be a positive integer, got: ".(string) $this->option($name));
+            $this->error("The --{$name} option must be a positive integer, got: ".self::escape((string) $this->option($name)));
 
             return self::OPERATIONAL_ERROR;
         }
@@ -41,7 +43,7 @@ class BfsgHistoryCommand extends Command
         try {
             return $this->dispatch();
         } catch (QueryException $e) {
-            $this->error('Database error: '.$e->getMessage());
+            $this->error('Database error: '.self::escape($e->getMessage()));
 
             return self::OPERATIONAL_ERROR;
         }
@@ -78,7 +80,7 @@ class BfsgHistoryCommand extends Command
 
         $rows = $reports->map(fn ($r) => [
             $r->id,
-            Str::limit($r->url, 50),
+            self::escape(Str::limit(Sanitizer::terminal((string) $r->url), 50)),
             $r->total_violations,
             $this->score($r->score),
             $r->grade,
@@ -113,12 +115,12 @@ class BfsgHistoryCommand extends Command
             ->values();
 
         if ($reports->isEmpty()) {
-            $this->info("No reports found for: {$url}");
+            $this->info('No reports found for: '.self::escape($url));
 
             return Command::SUCCESS;
         }
 
-        $this->info("Score trend for: {$url}");
+        $this->info('Score trend for: '.self::escape($url));
         $this->newLine();
 
         $rows = $reports->map(fn ($r) => [
@@ -158,6 +160,12 @@ class BfsgHistoryCommand extends Command
         $this->info("Deleted {$deleted} reports older than {$days} days.");
 
         return Command::SUCCESS;
+    }
+
+    /** Stored URLs and options are page or user text: control characters out, then formatter tags. */
+    private static function escape(string $text): string
+    {
+        return OutputFormatter::escape(Sanitizer::terminal($text));
     }
 
     /** Scores are whole numbers (ScoreCalculator); the decimal column may still hold v2 fractions. */

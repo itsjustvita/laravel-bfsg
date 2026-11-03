@@ -10,6 +10,7 @@ use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Support\PackageVersion;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use ItsJustVita\LaravelBfsg\Violation;
+use League\CommonMark\GithubFlavoredMarkdownConverter;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 class ReportGeneratorTest extends TestCase
@@ -118,7 +119,7 @@ class ReportGeneratorTest extends TestCase
         $this->assertStringContainsString('| Compliance score | 93 of 100 |', $markdown);
         $this->assertStringContainsString('### images (1)', $markdown);
         $this->assertStringContainsString('- **Error** · WCAG 1.1.1 · `img.hero`', $markdown);
-        $this->assertStringContainsString('Image without text alternative (hero.jpg)', $markdown);
+        $this->assertStringContainsString('Image without text alternative \(hero.jpg\)', $markdown);
         $this->assertStringContainsString('`<img src="hero.jpg" class="hero">`', $markdown);
         $this->assertStringContainsString('`` <h3>Deep | `tick`</h3> ``', $markdown);
         $this->assertStringContainsString('No WCAG criterion', $markdown);
@@ -138,10 +139,31 @@ class ReportGeneratorTest extends TestCase
 
         $this->assertStringNotContainsString('<script>', $markdown);
         $this->assertStringNotContainsString('<img src=x', $markdown);
-        $this->assertStringContainsString('| URL | https://example.com/&lt;script&gt;alert(1)&lt;/script&gt; |', $markdown);
-        $this->assertStringContainsString('(x.jpg"&gt;&lt;img src=x onerror=alert(1)&gt; # injected)', $markdown, 'newlines collapsed, no heading injected');
+        $this->assertStringContainsString('| URL | https://example.com/&lt;script&gt;alert\(1\)&lt;/script&gt; |', $markdown);
+        $this->assertStringContainsString('\(x.jpg"&gt;&lt;img src=x onerror=alert\(1\)&gt; \# injected\)', $markdown, 'newlines collapsed, no heading injected');
         $this->assertStringContainsString('``` <img src="a``b"> ```', $markdown, 'the fence is longer than any backtick run in the snippet');
         $this->assertStringNotContainsString("\n# injected", $markdown);
+    }
+
+    public function test_markdown_report_escapes_page_text(): void
+    {
+        $payload = 'a.png) **All checks passed** ![ok](https://evil.example/badge.png';
+        $result = new AnalysisResult([
+            'images' => [new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1', ['src' => $payload."\x1b]0;PWNED\x07"], 'img', '/html[1]/body[1]/img[1]', "<img src=\"x\x1b[2J\">")],
+        ], ['images'], "https://example.com/a_b\x1b|c");
+
+        $markdown = (new ReportGenerator($result, 'en'))->format('markdown')->render();
+        $html = (new GithubFlavoredMarkdownConverter)->convert($markdown)->getContent();
+
+        $this->assertStringContainsString('\*\*All checks passed\*\*', $markdown);
+        $this->assertStringContainsString('| URL | https://example.com/a\_b\|c |', $markdown, 'one escape per pipe, the table keeps two columns');
+        $this->assertStringContainsString('`<img src="x[2J">`', $markdown, 'code spans stay literal, without control characters');
+        $this->assertStringNotContainsString("\x1b", $markdown);
+        $this->assertStringNotContainsString("\x07", $markdown);
+        $this->assertStringNotContainsString('All checks passed</strong>', $html);
+        $this->assertStringNotContainsString('<img', $html);
+        $this->assertSame(1, preg_match('#<td>URL</td>\s*<td>(.*?)</td>#s', $html, $cell));
+        $this->assertSame('https://example.com/a_b|c', strip_tags($cell[1]), 'the escaped pipe stays in the URL cell');
     }
 
     public function test_pdf_report(): void
