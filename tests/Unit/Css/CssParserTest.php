@@ -992,6 +992,31 @@ class CssParserTest extends TestCase
         $this->assertSame(['backdrop'], $page('<div><img src="a.jpg" alt=""><img class="abs" src="b.jpg" alt=""><img src="c.jpg" alt=""><p>x</p></div>'), 'behind other media');
     }
 
+    public function test_out_of_flow_siblings_containing_media_are_backdrop(): void
+    {
+        $css = '.absolute{position:absolute} .relative{position:relative} .hidden{display:none}';
+        $hero = fn (string $wrapper): array => $this->resolved($css, '<div class="relative"><div class="'.$wrapper.'"><img src="h.jpg" alt=""></div><div class="relative"><p style="color:#fff">Hi</p></div></div>', '//p')['uncertainty'];
+
+        $this->assertSame(['backdrop'], $hero('absolute inset-0'), 'an absolutely positioned wrapper around the hero image');
+        $this->assertSame([], $hero('inset-0'), 'the same wrapper in flow');
+        $this->assertSame([], $hero('absolute hidden'), 'a hidden wrapper is not rendered');
+        $this->assertSame(['backdrop'], $this->resolved($css, '<div><div class="absolute"><span><picture><img src="h.jpg" alt=""></picture></span></div><p>x</p></div>', '//p')['uncertainty'], 'media deeper inside');
+        $this->assertSame([], $this->resolved($css, '<div><div class="absolute"><span>badge</span><svg></svg></div><p>x</p></div>', '//p')['uncertainty'], 'an icon inside does not count');
+    }
+
+    public function test_opacity_over_a_painted_background_is_colour_uncertainty(): void
+    {
+        $this->assertContains('colour', $this->resolved('body{background:#000} .card{opacity:.5;background:#fff;color:#000}', '<div class="card"><p>x</p></div>', '//p')['uncertainty'], 'a white card at half opacity on a black page');
+        $this->assertContains('colour', $this->resolved('.card{opacity:.5;background:#000;color:#fff}', '<div class="card"><p>x</p></div>', '//p')['uncertainty'], 'a black card at half opacity on a white page');
+        $this->assertContains('colour', $this->resolved('p{opacity:.5;background:#000;color:#fff}', '<p>x</p>', '//p')['uncertainty'], 'opacity and background on the text element');
+        $this->assertContains('colour', $this->resolved('.group{opacity:.5} .card{background:#000;color:#fff}', '<div class="group"><div class="card"><p>x</p></div></div>', '//p')['uncertainty'], 'a background painted inside an ancestor\'s opacity group');
+
+        $plain = $this->resolved('body{background:#000} .card{opacity:.5;color:#fff}', '<div class="card"><p>x</p></div>', '//p');
+        $this->assertSame([], $plain['uncertainty'], 'opacity without a painted background stays exact');
+        $this->assertSame('#808080', $plain['foreground']->toHex());
+        $this->assertSame([], $this->resolved('.card{opacity:.5} .inner{background:#fff}', '<div class="inner"><div class="card"><p>x</p></div></div>', '//p')['uncertainty'], 'a background behind the opacity group');
+    }
+
     public function test_media_siblings_beyond_the_examined_ones_may_cover(): void
     {
         $static = str_repeat('<img src="a.jpg" alt="">', 64);
@@ -1062,6 +1087,33 @@ class CssParserTest extends TestCase
         $this->assertSame(['#ffffff backdrop' => true], $results);
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('%.3f s', $elapsed));
         $this->assertLessThan(32 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.1f MB', (memory_get_peak_usage(true) - $before) / 1048576));
+        unset($document, $parser);
+
+        // Media siblings at every level of a 250-deep chain: 900 fillers, 32 out-of-flow siblings without media and 32
+        // in-flow images per level (64 examined, none covering), so every level is looked up in full. The siblings are
+        // positioned by their style attribute: an indexed rule matching thousands of deep elements costs a node path each
+        // in the index build, whatever it declares.
+        $level = str_repeat('<i></i>', 900).str_repeat('<i style="position:absolute"><b></b></i>', 32).str_repeat('<img>', 32);
+        $body = str_repeat($level.'<div>', 250).'<p>x</p>'.str_repeat('</div>', 250);
+        $this->assertLessThan(2 * 1048576, strlen($body));
+        $document = HtmlDocument::fromHtml('<html><head><style>.abs{position:absolute}</style></head><body>'.$body.'</body></html>');
+        $this->assertCount(250, $document->query('//div'));
+
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+        $start = microtime(true);
+        $parser = (new CssParser)->parse($document);
+        $results = [];
+
+        foreach ([...$document->query('//div'), ...$document->query('//p')] as $element) {
+            $results[implode(',', $parser->resolveColors($element)['uncertainty'])] = true;
+        }
+
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(['' => true], $results);
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('media at every level: %.3f s', $elapsed));
+        $this->assertLessThan(32 * 1048576, memory_get_peak_usage(true) - $before, sprintf('media at every level: peak grew by %.1f MB', (memory_get_peak_usage(true) - $before) / 1048576));
     }
 
     public function test_custom_properties_resolve_from_the_root_with_fallbacks(): void

@@ -69,10 +69,16 @@ class CssParser
     private const GRADIENT_FUNCTION = '/(?<![\w-])(?:-[a-z]++-)?(?:[a-z]++-)*+gradient\(/i';
 
     /** Elements that may cover a later sibling's backdrop when they are positioned out of flow (absolute or fixed). */
-    private const COVERING_MEDIA = 'self::img or self::picture or self::video or self::canvas or self::svg';
+    private const COVERING_MEDIA = ['img', 'picture', 'video', 'canvas', 'svg'];
 
-    /** Media children of one element whose position is looked up; the one after them counts as covering (never silent). */
-    private const MAX_EXAMINED_MEDIA = 64;
+    /** Media that make an out-of-flow element containing them cover a later sibling's backdrop (an icon svg does not). */
+    private const CONTAINED_MEDIA = ['img', 'picture', 'video', 'canvas'];
+
+    /** Candidate siblings of one element that are looked up (see coveringSiblingIndex()); the next one counts as covering (never silent). */
+    private const MAX_EXAMINED_SIBLINGS = 64;
+
+    /** Nodes of an out-of-flow sibling searched for contained media; a larger subtree counts as containing media (never silent). */
+    private const MAX_MEDIA_DESCENDANTS = 1024;
 
     /** A layer whose alpha is at least this paints opaquely: the elements behind it do not show through. */
     private const OPAQUE_ALPHA = 1.0 - 1e-9;
@@ -190,8 +196,11 @@ class CssParser
     /** @var array<string, array{0: float, 1: list<string>, 2: float}> node path => opacity product, its uncertainty, the element's own opacity */
     private array $opacityCache = [];
 
-    /** @var array<string, ?int> node path of a parent => element-child index of its first covering media child (see coveringMediaIndex()) */
+    /** @var array<string, ?int> node path of a parent => element-child index of its first covering child (see coveringSiblingIndex()) */
     private array $coveringMedia = [];
+
+    /** @var array<string, true> node path => true for the elements an indexed rule declaring `position` matches */
+    private array $positioned = [];
 
     /** @var array<string, array<'image'|'colour'|'final', array{0: mixed, 1: mixed}>> background value => its analysis (see layers()) */
     private array $layerCache = [];
@@ -309,7 +318,7 @@ class CssParser
     {
         $this->document = $document;
         $this->rules = [];
-        $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = [];
+        $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = $this->positioned = [];
         $this->customIndexEntries = 0;
         $this->indexed = false;
         $this->indexBuilds = 0;
@@ -433,12 +442,18 @@ class CssParser
                 continue;
             }
 
+            $positioning = isset($rule['properties']['position']);
+
             foreach ($this->elementsMatching($rule['selector'], $expression, $tokens) as $element) {
                 $key = $this->nodeKey($element);
                 $this->index[$key][] = $position;
 
                 if ($custom) {
                     $this->customOwners[$key] = true;
+                }
+
+                if ($positioning) {
+                    $this->positioned[$key] = true;
                 }
             }
         }
@@ -675,12 +690,13 @@ class CssParser
      * Effective text and background colour of an element. The text colour's alpha is scaled by opacity() before it is
      * composited over the background. `uncertainty` lists why the measurement is not exact, in this order:
      * - `backdrop`: from the element up to the element that supplies the opaque background used, a background layer
-     *   (`background-image` or `background`) paints an image (IMAGE_FUNCTION: url(), image-set(), *-gradient(), …), or an
-     *   img, picture, video, canvas or svg positioned absolute or fixed is a previous element sibling of one of these
-     *   elements (beyond MAX_EXAMINED_MEDIA media siblings an unexamined one counts as well). Gradients are estimated by
-     *   their first stop; a url() without a colour by the backdrop behind it;
+     *   (`background-image` or `background`) paints an image (IMAGE_FUNCTION: url(), image-set(), *-gradient(), …), or a
+     *   rendered previous element sibling of one of these elements is positioned absolute or fixed and is an img,
+     *   picture, video, canvas or svg or contains an img, picture, video or canvas (coveringSiblingIndex()). Gradients
+     *   are estimated by their first stop; a url() without a colour by the backdrop behind it;
      * - `colour`: an unresolvable or approximate var() substitution (substituteFor()), or a colour value Color can only
-     *   approximate, in the text colour, the background or the opacity;
+     *   approximate, in the text colour, the background or the opacity; or an element of that range paints its own
+     *   background inside an opacity group (opacity() below 1), whose compositing is not modelled;
      * - `limit`: the index is truncated (isTruncated()).
      * `approximate` is true exactly when `uncertainty` is not empty.
      *
@@ -864,9 +880,9 @@ class CssParser
      *
      * @return array<string, array{value: string, important: bool}>
      */
-    private function revealingVisibility(DOMElement $element): array
+    private function revealingVisibility(DOMElement $element, ?string $key = null): array
     {
-        $key = $this->nodeKey($element);
+        $key ??= $this->nodeKey($element);
 
         if (isset($this->visibilityCache[$key])) {
             return $this->visibilityCache[$key];
@@ -874,7 +890,7 @@ class CssParser
 
         $winners = [];
 
-        foreach ($this->matchingRules($element) as $rule) {
+        foreach ($this->matchingRules($element, $key) as $rule) {
             $declarations = array_intersect_key($rule['properties'], ['display' => true, 'visibility' => true]);
 
             if ($rule['condition'] === 'viewport') {
@@ -2116,6 +2132,11 @@ class CssParser
             $paint = $paint === null ? $image[1] : $image[1]->over($paint);
         }
 
+        // Paint inside an opacity group is composited with the group (not modelled): only the text alpha is scaled (R33).
+        if ($paint !== null && $this->opacityOf($element, $key)[0] < 1) {
+            $uncertainty = $this->uncertainty($uncertainty, ['colour']);
+        }
+
         if ($paint === null || $paint->a < self::OPAQUE_ALPHA) {
             $paint = $paint === null ? $parent : $paint->over($parent);
             $uncertainty = $this->uncertainty($uncertainty, $parentUncertainty);
@@ -2303,9 +2324,8 @@ class CssParser
     }
 
     /**
-     * Whether an img, picture, video, canvas or svg positioned absolute or fixed is a previous element sibling of the
-     * element; a media sibling beyond the MAX_EXAMINED_MEDIA that coveringMediaIndex() looks up counts as well. The
-     * parent's media children are looked up once; the positional step then stops after that index.
+     * Whether a previous element sibling of the element may cover its backdrop (see coveringSiblingIndex()). The parent's
+     * children are looked up once; the positional step then stops after that index.
      */
     private function hasCoveringSibling(DOMElement $element, string $key): bool
     {
@@ -2318,7 +2338,7 @@ class CssParser
         $parentKey = $this->parentKey($key, $parent);
 
         if (! array_key_exists($parentKey, $this->coveringMedia)) {
-            $this->coveringMedia[$parentKey] = $this->coveringMediaIndex($parent);
+            $this->coveringMedia[$parentKey] = $this->coveringSiblingIndex($parent, $parentKey);
         }
 
         $index = $this->coveringMedia[$parentKey];
@@ -2327,33 +2347,127 @@ class CssParser
     }
 
     /**
-     * Element-child index of the parent's first media child (COVERING_MEDIA) positioned out of flow (isOutOfFlow()); after
-     * MAX_EXAMINED_MEDIA media children without one, the index of the next media child (it may cover: never silent).
-     * Null when there is none.
+     * Element-child index of the parent's first child that covers (covers()), in one pass over its children; null when
+     * none does. The candidates are the media children (COVERING_MEDIA) and the children an indexed `position` rule or
+     * their style attribute may position; after MAX_EXAMINED_SIBLINGS candidates the next one counts as covering.
      */
-    private function coveringMediaIndex(DOMElement $parent): ?int
+    private function coveringSiblingIndex(DOMElement $parent, string $parentKey): ?int
     {
-        $media = $this->document?->query('*['.self::COVERING_MEDIA.'][position() <= '.(self::MAX_EXAMINED_MEDIA + 1).']', $parent) ?? [];
+        $examined = 0;
 
-        foreach ($media as $examined => $child) {
-            if ($examined >= self::MAX_EXAMINED_MEDIA || $this->isOutOfFlow($child)) {
-                return (int) $this->document?->xpath()->evaluate('count(preceding-sibling::*)', $child);
+        foreach ($this->elementChildren($parent, $parentKey) as $index => [$child, $key]) {
+            $media = in_array(Element::tag($child), self::COVERING_MEDIA, true);
+
+            if (! $media && ! isset($this->positioned[$key]) && stripos($child->getAttribute('style'), 'position') === false) {
+                continue;
+            }
+
+            if (++$examined > self::MAX_EXAMINED_SIBLINGS || $this->covers($child, $key, $media)) {
+                return $index;
             }
         }
 
         return null;
     }
 
-    /** Whether the element's cascaded position is absolute or fixed, var() substituted; an unresolvable value counts. */
-    private function isOutOfFlow(DOMElement $element): bool
+    /**
+     * The element children of an element with their node keys, in order. The names are counted in a first pass, so each
+     * key is the parent's node path plus the child's name, with `[n]` when the name occurs more than once: the format of
+     * getNodePath(), at O(children) for all of them. Without a node path for the parent, or with namespaced children,
+     * every key is nodeKey().
+     *
+     * @return \Generator<int, array{0: DOMElement, 1: string}>
+     */
+    private function elementChildren(DOMElement $parent, string $parentKey): \Generator
     {
-        $declared = $this->declarationsFor($element)['position']['value'] ?? null;
+        $derived = $parentKey !== '' && $parentKey[0] === '/';
+        $names = [];
+
+        for ($node = $parent->firstChild; $node !== null; $node = $node->nextSibling) {
+            if ($node instanceof DOMElement) {
+                $derived = $derived && $node->namespaceURI === null;
+                $names[$node->nodeName] = ($names[$node->nodeName] ?? 0) + 1;
+            }
+        }
+
+        $seen = [];
+        $index = 0;
+
+        for ($node = $parent->firstChild; $node !== null; $node = $node->nextSibling) {
+            if ($node instanceof DOMElement) {
+                $name = $node->nodeName;
+                $seen[$name] = ($seen[$name] ?? 0) + 1;
+
+                yield $index++ => [$node, $derived ? $parentKey.'/'.$name.($names[$name] > 1 ? '['.$seen[$name].']' : '') : $this->nodeKey($node)];
+            }
+        }
+    }
+
+    /**
+     * Whether a previous sibling may cover the backdrop: it is rendered (its own display is not none and its visibility
+     * not hidden or collapse; hiding viewport declarations never win, as in hidesElement()), positioned out of flow
+     * (isOutOfFlow()), and a media element or one that contains an img, picture, video or canvas (R34).
+     */
+    private function covers(DOMElement $sibling, string $key, bool $media): bool
+    {
+        $visibility = $this->revealingVisibility($sibling, $key);
+
+        if (strtolower(trim($visibility['display']['value'] ?? '')) === 'none'
+            || in_array(strtolower(trim($visibility['visibility']['value'] ?? '')), ['hidden', 'collapse'], true)
+            || ! $this->isOutOfFlow($sibling, $key)) {
+            return false;
+        }
+
+        return $media || $this->containsMedia($sibling);
+    }
+
+    /** Whether an img, picture, video or canvas is a descendant, searching at most MAX_MEDIA_DESCENDANTS nodes (more count as containing one). */
+    private function containsMedia(DOMElement $element): bool
+    {
+        $budget = self::MAX_MEDIA_DESCENDANTS;
+        $node = $element->firstChild;
+
+        while ($node !== null) {
+            if (--$budget < 0) {
+                return true;
+            }
+
+            if ($node instanceof DOMElement) {
+                if (in_array(Element::tag($node), self::CONTAINED_MEDIA, true)) {
+                    return true;
+                }
+
+                if ($node->firstChild !== null) {
+                    $node = $node->firstChild;
+
+                    continue;
+                }
+            }
+
+            while ($node->nextSibling === null) {
+                $node = $node->parentNode;
+
+                if ($node === null || $node->isSameNode($element)) {
+                    return false;
+                }
+            }
+
+            $node = $node->nextSibling;
+        }
+
+        return false;
+    }
+
+    /** Whether the element's cascaded position is absolute or fixed, var() substituted; an unresolvable value counts. */
+    private function isOutOfFlow(DOMElement $element, string $key): bool
+    {
+        $declared = $this->declarations($element, $key)['position']['value'] ?? null;
 
         if ($declared === null) {
             return false;
         }
 
-        $value = $this->substituteFor($element, $declared)[0];
+        $value = $this->substituteValue($element, $key, $declared)[0];
 
         return $value === null || (strlen($value) <= 64 && in_array(strtolower(trim($value)), ['absolute', 'fixed'], true));
     }
