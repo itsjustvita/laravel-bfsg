@@ -115,6 +115,13 @@ class FocusAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($violations, 'focus.outline_removed');
     }
 
+    public function test_nested_focus_rule_is_seen(): void
+    {
+        $violations = $this->analyze($this->styled('.x{&:focus{outline:none}}', '<a class="x" href="#">l</a>'));
+
+        $this->assertHasViolation($violations, 'focus.outline_removed');
+    }
+
     public function test_no_issues_without_focus_problems(): void
     {
         $this->assertSame([], $this->analyze($this->styled('a:focus { outline: 2px solid #005fcc } a { color: #00f }')));

@@ -105,8 +105,24 @@ class CssParser
         'inverted-colors' => 'none', 'prefers-reduced-transparency' => 'no-preference',
     ];
 
-    /** Nesting levels of @media and unwrapped at-rules followed; deeper blocks are dropped and the results marked truncated. */
+    /** Nesting levels of @media, unwrapped at-rules and nested style rules followed (one count); deeper blocks are dropped and the results marked truncated. */
     private const MAX_AT_RULE_DEPTH = 16;
+
+    /** Selectors a nested style rule may expand to (each `&` once per parent selector); a rule with more is skipped (truncated). */
+    public const MAX_NESTED_SELECTOR_COMBINATIONS = 32;
+
+    /** Longest selector a nested style rule may expand to; a rule with a longer one is skipped (truncated). */
+    private const MAX_NESTED_SELECTOR_BYTES = 4096;
+
+    /**
+     * What nesting may add per parse: the bytes of the selectors nested style rules expand to, and per rule entry of a
+     * nested block (or of declarations after one, which repeat each selector of their rule) its selector bytes plus
+     * NESTED_ENTRY_BYTES. A block that does not fit fills the budget; it and every later nested block are skipped (truncated).
+     */
+    private const MAX_NESTED_RULE_BYTES = 16 * 1024 * 1024;
+
+    /** Memory of one rule entry besides its selector: the rule and specificity arrays and its properties (measured about 1.7 KB with one declaration). */
+    private const NESTED_ENTRY_BYTES = 2048;
 
     private const FONT_KEYWORDS = [
         'xx-small' => 9.0, 'x-small' => 10.0, 'small' => 13.0, 'medium' => 16.0,
@@ -181,6 +197,9 @@ class CssParser
 
     /** Entries in customIndex and maybeIndex, counted against MAX_CUSTOM_INDEX_ENTRIES. */
     private int $customIndexEntries = 0;
+
+    /** Bytes counted for the rule entries nesting added, against MAX_NESTED_RULE_BYTES. */
+    private int $nestedRuleBytes = 0;
 
     protected bool $indexed = false;
 
@@ -323,7 +342,7 @@ class CssParser
         $this->document = $document;
         $this->rules = [];
         $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = $this->positioned = [];
-        $this->customIndexEntries = 0;
+        $this->customIndexEntries = $this->nestedRuleBytes = 0;
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
@@ -498,8 +517,9 @@ class CssParser
     /**
      * Tokenize one stylesheet into qualified rules. Comments are stripped; @media is kept for
      * all/screen only; @layer, @supports, @container are unwrapped; every other at-rule is dropped.
+     * Nested style rules are flattened (see parseRuleBody()).
      * $condition is the condition of the whole sheet (its media attribute, see HtmlDocument::mediaCondition());
-     * at-rules nested more than MAX_AT_RULE_DEPTH levels deep are dropped and mark the parser truncated.
+     * blocks nested more than MAX_AT_RULE_DEPTH levels deep are dropped and mark the parser truncated.
      *
      * @param  'preference'|'viewport'|null  $condition
      * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>
@@ -507,7 +527,8 @@ class CssParser
     public function parseStylesheet(string $css, int $orderOffset = 0, ?string $condition = null): array
     {
         $rules = [];
-        $this->parseBlock(self::stripComments($css), $rules, $orderOffset, $condition !== null, $condition);
+        $position = 0;
+        $this->parseBlock(self::stripComments($css), $position, $rules, $orderOffset, $condition !== null, $condition);
 
         return $rules;
     }
@@ -1026,87 +1047,381 @@ class CssParser
     }
 
     /**
+     * Parse the rules from $position to the end of $css or, inside a group rule ($depth > 0), through its closing brace.
+     * One pass: every block is read by the level that parses it (or skips it), so nesting adds no re-reading.
+     *
      * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
      * @param  'preference'|'viewport'|null  $condition
      */
-    private function parseBlock(string $css, array &$rules, int $orderOffset, bool $conditional = false, ?string $condition = null, int $depth = 0): void
+    private function parseBlock(string $css, int &$position, array &$rules, int $orderOffset, bool $conditional = false, ?string $condition = null, int $depth = 0): void
     {
-        $position = 0;
         $length = strlen($css);
 
-        while ($position < $length) {
+        while (true) {
             $this->skipWhitespace($css, $position);
 
             if ($position >= $length) {
-                break;
+                return;
+            }
+
+            if ($depth > 0 && $css[$position] === '}') {
+                $position++;
+
+                return;
             }
 
             if ($css[$position] === '@') {
-                preg_match('/@([\w-]++)/A', $css, $m, 0, $position);
-                $name = strtolower($m[1] ?? '');
-                $position += strlen($m[0] ?? '@');
-                [$prelude, $terminator] = $this->readUntil($css, $position, ['{', ';']);
+                $group = $this->groupRule($css, $position, $conditional, $condition, $depth, $depth > 0);
 
-                if ($terminator !== '{') {
-                    continue; // statement at-rule: @charset, @import, @layer a, b; @namespace
+                if ($group !== null) {
+                    $this->parseBlock($css, $position, $rules, $orderOffset, $group[0], $group[1], $depth + 1);
                 }
-
-                $body = $this->readBlock($css, $position);
-                $media = $name === 'media' ? HtmlDocument::mediaCondition($prelude) : false;
-
-                if ($media === false && ! in_array($name, self::UNWRAPPED_AT_RULES, true)) {
-                    continue; // @font-face, @keyframes, @page, @property, print media, …
-                }
-
-                if ($depth >= self::MAX_AT_RULE_DEPTH) {
-                    $this->truncated = true; // every nesting level re-reads its body: deeper blocks are dropped
-
-                    continue;
-                }
-
-                // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
-                // features and container queries also put a condition on them (see the class description).
-                $inner = match (true) {
-                    $name === 'media' => $this->strongerCondition($condition, $media),
-                    $name === 'container' => $this->strongerCondition($condition, 'viewport'),
-                    default => $condition,
-                };
-                $innerConditional = $conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true));
-                $this->parseBlock($body, $rules, $orderOffset, $innerConditional, $inner, $depth + 1);
 
                 continue;
             }
 
-            [$prelude, $terminator] = $this->readUntil($css, $position, ['{']);
+            [$prelude, $terminator] = $this->readUntil($css, $position, $depth > 0 ? ['{', '}'] : ['{']);
 
             if ($terminator !== '{') {
-                break;
+                return; // the end of the input or of the group rule
             }
 
-            $properties = $this->parseProperties($this->readBlock($css, $position));
+            $this->parseRuleBody($css, $position, $prelude, $rules, $orderOffset, $conditional, $condition, $depth, false);
+        }
+    }
 
-            if ($properties === []) {
+    /**
+     * Read the at-rule at $position. A group rule whose rules apply (@media for all/screen, UNWRAPPED_AT_RULES) leaves
+     * $position inside its block and returns its [conditional, condition]; any other at-rule is skipped, and so is a group
+     * rule nested MAX_AT_RULE_DEPTH levels deep (truncated). Inside a block ($inBlock) a prelude ends at its closing brace,
+     * which is left for the block's parser.
+     *
+     * @param  'preference'|'viewport'|null  $condition
+     * @return array{0: bool, 1: 'preference'|'viewport'|null}|null
+     */
+    private function groupRule(string $css, int &$position, bool $conditional, ?string $condition, int $depth, bool $inBlock): ?array
+    {
+        preg_match('/@([\w-]++)/A', $css, $m, 0, $position);
+        $name = strtolower($m[1] ?? '');
+        $position += strlen($m[0] ?? '@');
+        [$prelude, $terminator] = $this->readUntil($css, $position, $inBlock ? ['{', ';', '}'] : ['{', ';']);
+
+        if ($terminator === '}') {
+            $position--;
+        }
+
+        if ($terminator !== '{') {
+            return null; // statement at-rule: @charset, @import, @layer a, b; @namespace
+        }
+
+        $media = $name === 'media' ? HtmlDocument::mediaCondition($prelude) : false;
+
+        if ($media === false && ! in_array($name, self::UNWRAPPED_AT_RULES, true)) {
+            $this->skipBlock($css, $position);
+
+            return null; // @font-face, @keyframes, @page, @property, @starting-style, print media, …
+        }
+
+        if ($depth >= self::MAX_AT_RULE_DEPTH) {
+            $this->truncated = true;
+            $this->skipBlock($css, $position);
+
+            return null;
+        }
+
+        // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
+        // features and container queries also put a condition on them (see the class description).
+        $inner = match (true) {
+            $name === 'media' => $this->strongerCondition($condition, $media),
+            $name === 'container' => $this->strongerCondition($condition, 'viewport'),
+            default => $condition,
+        };
+
+        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner];
+    }
+
+    /**
+     * Parse a style rule's block from $position (after its opening brace) through its closing brace. Its declarations
+     * apply to $selectors (a prelude is split only when they are used); a nested style rule applies to nestedSelectors(),
+     * the declarations in a nested group rule (@media, @supports, …) to $selectors under the group's condition, and
+     * declarations after a nested block form a later rule, as in browsers. The entries of nested blocks ($nested) and of
+     * declarations after a nested block count against MAX_NESTED_RULE_BYTES.
+     *
+     * @param  list<string>|string  $selectors
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
+     * @param  'preference'|'viewport'|null  $condition
+     */
+    private function parseRuleBody(string $css, int &$position, array|string $selectors, array &$rules, int $orderOffset, bool $conditional, ?string $condition, int $depth, bool $nested): void
+    {
+        $length = strlen($css);
+        $stop = $position + strcspn($css, '{}"\'', $position);
+
+        if ($stop >= $length || $css[$stop] === '}') { // declarations only
+            $this->addRules(substr($css, $position, $stop - $position), $selectors, $rules, $orderOffset, $conditional, $condition, $nested);
+            $position = min($stop + 1, $length);
+
+            return;
+        }
+
+        $selectors = is_string($selectors) ? $this->selectorList($selectors) : $selectors;
+        $segment = $position; // the declarations not added yet start here
+
+        while (true) {
+            $this->skipWhitespace($css, $position);
+            $begin = $position;
+
+            if (($css[$position] ?? '') === '@') {
+                $group = $this->groupRule($css, $position, $conditional, $condition, $depth, true);
+
+                if ($group === null) {
+                    continue; // a statement at-rule (parseProperties() ignores it) or a skipped block
+                }
+
+                $this->addRules(substr($css, $segment, $begin - $segment), $selectors, $rules, $orderOffset, $conditional, $condition, $nested);
+                $nested = true;
+
+                if ($this->nestedRuleBytes >= self::MAX_NESTED_RULE_BYTES) {
+                    $this->truncated = true;
+                    $this->skipBlock($css, $position);
+                } else {
+                    $this->parseRuleBody($css, $position, $selectors, $rules, $orderOffset, $group[0], $group[1], $depth + 1, true);
+                }
+
+                $segment = $position;
+
                 continue;
             }
 
-            foreach ($this->splitTopLevel($prelude, ',') as $selector) {
-                $selector = trim(preg_replace('/\s+/', ' ', $selector) ?? $selector);
+            [$prelude, $terminator] = $this->readUntil($css, $position, ['{', ';', '}']);
 
-                if ($selector === '') {
-                    continue;
+            if ($terminator === ';') {
+                continue;
+            }
+
+            if ($terminator !== '{') { // the closing brace or the end of the input
+                $end = $terminator === '}' ? $position - 1 : $position;
+                $this->addRules(substr($css, $segment, $end - $segment), $selectors, $rules, $orderOffset, $conditional, $condition, $nested);
+
+                return;
+            }
+
+            $this->addRules(substr($css, $segment, $begin - $segment), $selectors, $rules, $orderOffset, $conditional, $condition, $nested);
+            $nested = true;
+            $inner = $depth < self::MAX_AT_RULE_DEPTH && $this->nestedRuleBytes < self::MAX_NESTED_RULE_BYTES ? $this->nestedSelectors($selectors, $prelude) : null;
+
+            if ($inner === null) {
+                $this->truncated = true;
+                $this->skipBlock($css, $position);
+            } else {
+                $this->parseRuleBody($css, $position, $inner, $rules, $orderOffset, $conditional, $condition, $depth + 1, true);
+            }
+
+            $segment = $position;
+        }
+    }
+
+    /**
+     * Add a rule per selector for the declarations. Entries added for nesting ($nested) count against
+     * MAX_NESTED_RULE_BYTES: the first block that does not fit fills the budget and is dropped (truncated).
+     *
+     * @param  list<string>|string  $selectors  a prelude is split only when there are declarations
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
+     * @param  'preference'|'viewport'|null  $condition
+     */
+    private function addRules(string $declarations, array|string $selectors, array &$rules, int $orderOffset, bool $conditional, ?string $condition, bool $nested): void
+    {
+        $properties = str_contains($declarations, ':') ? $this->parseProperties($declarations) : [];
+
+        if ($properties === []) {
+            return;
+        }
+
+        $selectors = is_string($selectors) ? $this->selectorList($selectors) : $selectors;
+
+        if ($nested) {
+            $bytes = $this->nestedRuleBytes;
+
+            foreach ($selectors as $selector) {
+                $bytes += strlen($selector) + self::NESTED_ENTRY_BYTES;
+
+                if ($bytes > self::MAX_NESTED_RULE_BYTES) {
+                    $this->truncated = true;
+                    $this->nestedRuleBytes = self::MAX_NESTED_RULE_BYTES;
+
+                    return;
+                }
+            }
+
+            $this->nestedRuleBytes = $bytes;
+        }
+
+        foreach ($selectors as $selector) {
+            $rules[] = [
+                'selector' => $selector,
+                'properties' => $properties,
+                'specificity' => $this->calculateSpecificity($selector),
+                'order' => $orderOffset + count($rules),
+                'sheet' => 0,
+                'conditional' => $conditional,
+                'condition' => $condition,
+            ];
+        }
+    }
+
+    /**
+     * The selectors of a nested style rule: each selector of its list with every `&` replaced by a parent selector, in
+     * every combination; an `&` inside parentheses (an argument such as :not(&)) stands for the whole parent list
+     * instead. A selector without `&`, or starting with a combinator, is relative to the parent (`& .b`, `& > .b`). Null
+     * when they would be more than MAX_NESTED_SELECTOR_COMBINATIONS, one longer than MAX_NESTED_SELECTOR_BYTES, or their
+     * bytes do not fit into MAX_NESTED_RULE_BYTES (which they count against; the budget is then full): all three are known
+     * before any selector is built.
+     *
+     * @param  list<string>  $parents
+     * @return list<string>|null
+     */
+    private function nestedSelectors(array $parents, string $prelude): ?array
+    {
+        $count = count($parents);
+
+        if ($count > self::MAX_NESTED_SELECTOR_COMBINATIONS) {
+            return null; // each selector of the list expands to at least one per parent
+        }
+
+        if ($count === 0) {
+            return [];
+        }
+
+        $lengths = array_map('strlen', $parents);
+        $longest = max($lengths);
+        $listBytes = $count === 1 ? $lengths[0] : array_sum($lengths) + 2 * $count + 3; // ":is(a, b)"
+        $combinations = $cost = 0;
+        $inArgument = false;
+        $lists = [];
+
+        foreach ($this->selectorList($prelude, self::MAX_NESTED_SELECTOR_COMBINATIONS) as $selector) {
+            [$parts, $arguments] = $this->nestingParts($selector);
+
+            if ($arguments === [] || str_contains('>+~', $selector[0])) {
+                $parts[0] = ' '.$parts[0];
+                array_unshift($parts, '');
+                array_unshift($arguments, false);
+            }
+
+            $expansions = 1;
+            $bytes = strlen(implode('', $parts));
+
+            foreach ($arguments as $argument) {
+                $expansions *= $argument ? 1 : $count;
+                $bytes += $argument ? $listBytes : $longest;
+
+                if ($combinations + $expansions > self::MAX_NESTED_SELECTOR_COMBINATIONS) {
+                    return null;
+                }
+            }
+
+            if ($bytes > self::MAX_NESTED_SELECTOR_BYTES) {
+                return null;
+            }
+
+            $combinations += $expansions;
+            $cost += $expansions * $bytes;
+            $inArgument = $inArgument || in_array(true, $arguments, true);
+            $lists[] = [$parts, $arguments];
+        }
+
+        if ($this->nestedRuleBytes + $cost > self::MAX_NESTED_RULE_BYTES) {
+            $this->nestedRuleBytes = self::MAX_NESTED_RULE_BYTES;
+
+            return null;
+        }
+
+        $this->nestedRuleBytes += $cost;
+        $list = $count > 1 && $inArgument ? [':is('.implode(', ', $parents).')'] : [$parents[0]];
+        $selectors = [];
+
+        foreach ($lists as [$parts, $arguments]) {
+            $built = [array_shift($parts)];
+
+            foreach ($parts as $index => $part) {
+                $next = [];
+
+                foreach ($built as $prefix) {
+                    foreach ($arguments[$index] ? $list : $parents as $parent) {
+                        $next[] = $prefix.$parent.$part;
+                    }
                 }
 
-                $rules[] = [
-                    'selector' => $selector,
-                    'properties' => $properties,
-                    'specificity' => $this->calculateSpecificity($selector),
-                    'order' => $orderOffset + count($rules),
-                    'sheet' => 0,
-                    'conditional' => $conditional,
-                    'condition' => $condition,
-                ];
+                $built = $next;
+            }
+
+            array_push($selectors, ...$built);
+        }
+
+        return $selectors;
+    }
+
+    /**
+     * The text of a selector around each nesting selector `&` (outside strings, unescaped), and for each `&` whether it
+     * is inside parentheses.
+     *
+     * @return array{0: non-empty-list<string>, 1: list<bool>}
+     */
+    private function nestingParts(string $selector): array
+    {
+        if (! str_contains($selector, '&')) {
+            return [[$selector], []];
+        }
+
+        $parts = $arguments = [];
+        $start = $depth = 0;
+        $quote = null;
+        $length = strlen($selector);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $selector[$i];
+
+            if ($char === '\\') {
+                $i++;
+            } elseif ($quote !== null) {
+                if ($char === $quote) {
+                    $quote = null;
+                }
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '(') {
+                $depth++;
+            } elseif ($char === ')') {
+                $depth = max(0, $depth - 1);
+            } elseif ($char === '&') {
+                $parts[] = substr($selector, $start, $i - $start);
+                $arguments[] = $depth > 0;
+                $start = $i + 1;
             }
         }
+
+        $parts[] = substr($selector, $start);
+
+        return [$parts, $arguments];
+    }
+
+    /**
+     * The selectors of a prelude, whitespace collapsed; when the list is longer than $limit, only $limit + 1 of them.
+     *
+     * @return list<string>
+     */
+    private function selectorList(string $prelude, int $limit = PHP_INT_MAX): array
+    {
+        $selectors = [];
+
+        foreach ($this->splitTopLevel($prelude, ',', false, $limit) as $selector) {
+            $selector = trim(preg_replace('/\s+/', ' ', $selector) ?? $selector);
+
+            if ($selector !== '') {
+                $selectors[] = $selector;
+            }
+        }
+
+        return $selectors;
     }
 
     /**
@@ -3111,7 +3426,8 @@ class CssParser
     }
 
     /**
-     * Read up to (and consume) the first of $terminators outside strings and parentheses.
+     * Read up to (and consume) the first of $terminators outside strings: braces anywhere (as in skipBlock()), others
+     * outside parentheses.
      *
      * @param  list<string>  $terminators
      * @return array{0: string, 1: ?string} text before the terminator, the terminator (null at end of input)
@@ -3142,7 +3458,7 @@ class CssParser
                 $depth++;
             } elseif ($char === ')') {
                 $depth = max(0, $depth - 1);
-            } elseif ($depth === 0 && in_array($char, $terminators, true)) {
+            } elseif (($depth === 0 || $char === '{' || $char === '}') && in_array($char, $terminators, true)) {
                 $text = substr($css, $start, $position - $start);
                 $position++;
 
@@ -3153,10 +3469,9 @@ class CssParser
         return [substr($css, $start), null];
     }
 
-    /** Read a balanced block body; $position is just after the opening brace and ends after the closing one. */
-    private function readBlock(string $css, int &$position): string
+    /** Skip a balanced block body; $position is just after the opening brace and ends after the closing one. */
+    private function skipBlock(string $css, int &$position): void
     {
-        $start = $position;
         $length = strlen($css);
         $depth = 1;
         $quote = null;
@@ -3179,22 +3494,22 @@ class CssParser
             } elseif ($char === '{') {
                 $depth++;
             } elseif ($char === '}' && --$depth === 0) {
-                $body = substr($css, $start, $position - $start);
                 $position++;
 
-                return $body;
+                return;
             }
         }
 
-        return substr($css, $start);
+        $position = $length;
     }
 
     /**
-     * Split on $separator outside strings, parentheses and brackets; optionally drop nested {…} blocks.
+     * Split on $separator outside strings, parentheses and brackets; optionally drop nested {…} blocks. After $limit
+     * non-empty parts the rest is one more part.
      *
      * @return list<string>
      */
-    private function splitTopLevel(string $text, string $separator, bool $skipBlocks = false): array
+    private function splitTopLevel(string $text, string $separator, bool $skipBlocks = false, int $limit = PHP_INT_MAX): array
     {
         $parts = [];
         $current = '';
@@ -3242,8 +3557,17 @@ class CssParser
             } elseif ($char === ')' || $char === ']') {
                 $depth = max(0, $depth - 1);
             } elseif ($char === $separator && $depth === 0) {
-                $parts[] = $current;
+                if (trim($current) !== '') {
+                    $parts[] = $current;
+                }
+
                 $current = '';
+
+                if (count($parts) >= $limit) {
+                    $current = substr($text, $i + 1);
+
+                    break;
+                }
 
                 continue;
             }

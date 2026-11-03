@@ -753,6 +753,121 @@ class CssParserTest extends TestCase
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('nested @media: %.3f s', $elapsed));
     }
 
+    public function test_nesting_with_ampersand(): void
+    {
+        $this->assertSame(['.a', '.a:focus'], $this->selectors('.a{color:red;&:focus{outline:none}}'));
+    }
+
+    public function test_nesting_without_ampersand(): void
+    {
+        $this->assertSame(['.a .b'], $this->selectors('.a{.b{color:#ccc}}'));
+    }
+
+    public function test_nesting_combinators_and_inner_ampersand(): void
+    {
+        $rules = (new CssParser)->parseStylesheet('.a{& > .b{color:red} + .c{color:red} .x &{color:red}}');
+
+        $this->assertSame(['.a > .b', '.a + .c', '.x .a'], array_column($rules, 'selector'));
+        $this->assertSame([0, 2, 0], $rules[2]['specificity'], 'computed on the flattened selector');
+        $this->assertSame(['[title="&"] .a'], $this->selectors('.a{[title="&"] &{color:red}}'), 'an ampersand in a string is no nesting selector');
+    }
+
+    public function test_nesting_selector_lists_expand_and_cap(): void
+    {
+        $this->assertSame(['.a:hover', '.b:hover'], $this->selectors('.a,.b{&:hover{color:red}}'));
+        $this->assertSame(['.a + .a', '.a + .b', '.b + .a', '.b + .b'], $this->selectors('.a,.b{& + &{color:red}}'), 'every ampersand stands for each parent selector');
+        $this->assertSame(['.c:not(:is(.a, .b))'], $this->selectors('.a,.b{.c:not(&){color:red}}'), 'in an argument it stands for the whole list');
+        $this->assertSame(['.c:not(.a)', ':is(.a > *)'], $this->selectors('.a{.c:not(&){color:red} :is(& > *){color:red}}'));
+
+        $list = fn (string $prefix): string => implode(',', array_map(fn (int $i): string => ".$prefix$i", range(1, 6)));
+        $parser = new CssParser;
+
+        $this->assertSame([], $parser->parseStylesheet($list('a').'{'.$list('b').'{color:red}}'));
+        $this->assertTrue($parser->isTruncated(), 'the skipped rule makes the results approximate');
+    }
+
+    public function test_nested_media_inside_rule(): void
+    {
+        $rules = fn (string $css): array => array_map(fn (array $rule): array => [$rule['selector'], $rule['condition']], (new CssParser)->parseStylesheet($css));
+
+        $this->assertSame([['.a', 'preference']], $rules('.a{@media (prefers-color-scheme: dark){color:#eee}}'));
+        $this->assertSame([['.a:hover', 'viewport']], $rules('.a{@media (hover:hover){&:hover{color:red}}}'));
+        $this->assertSame([['.a:hover', 'viewport']], $rules('@layer utilities{.a{&:hover{@media (hover:hover){color:red}}}}'), 'Tailwind v4 variants');
+        $this->assertSame([['.a', null], ['.a .b', null]], $rules('.a{@supports (display:grid){color:red;.b{color:red}} @font-face{color:red} @starting-style{color:red}}'));
+    }
+
+    public function test_declarations_after_a_nested_block_follow_it(): void
+    {
+        $rules = (new CssParser)->parseStylesheet('.a{color:red;&:hover{color:blue}color:green}');
+
+        $this->assertSame(['.a', '.a:hover', '.a'], array_column($rules, 'selector'));
+        $this->assertSame('green', $rules[2]['properties']['color']['value']);
+        $this->assertSame([0, 1, 2], array_column($rules, 'order'));
+    }
+
+    public function test_nested_rules_apply_through_the_cascade(): void
+    {
+        $this->assertSame(['#222222', '#ffffff', false], $this->colors('div{color:#111; p{color:#222; &:hover{color:#333}}}', '<div><p id="t">x</p></div>'));
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('p{color:#111; @media (prefers-color-scheme: dark){color:#eee}}', '<p id="t">x</p>'));
+        $this->assertSame(['#444444', '#ffffff', false], $this->colors('p{color:#111; .x &{color:#444}}', '<div class="x"><p id="t">x</p></div>'));
+    }
+
+    public function test_nested_rules_share_the_depth_limit_with_at_rules(): void
+    {
+        $nested = fn (int $depth): string => '.a{color:#111;'.str_repeat('@media (min-width: 1px){&{', intdiv($depth, 2)).str_repeat('&{', $depth % 2).'color:#eee'.str_repeat('}', $depth + 1);
+        $parser = new CssParser;
+
+        $this->assertCount(2, $parser->parseStylesheet($nested(16)));
+        $this->assertFalse($parser->isTruncated());
+        $this->assertSame(['.a', '.after'], array_column($parser->parseStylesheet($nested(17).' .after{color:#111}'), 'selector'));
+        $this->assertTrue($parser->isTruncated(), 'the dropped rules make the results approximate');
+    }
+
+    /** @return array<string, array{0: string, 1: string}> shape, foreground of p.p1 */
+    public static function hostileNesting(): array
+    {
+        return [
+            '10,000 nested & levels' => ['levels', '#eeeeee'], 'a 6 × 6 × 6 selector-list nesting' => ['lists', '#111111'],
+            'selectors doubling at every level' => ['doubling', '#eeeeee'], '1 MB of nested rules' => ['megabyte', '#111111'],
+            '300,000 empty rules under 32 long parents' => ['empty', '#111111'],
+        ];
+    }
+
+    #[Group('performance')]
+    #[DataProvider('hostileNesting')]
+    public function test_hostile_nesting_stays_linear_and_bounded(string $shape, string $foreground): void
+    {
+        $list = fn (string $prefix): string => implode(',', array_map(fn (int $i): string => ".$prefix$i", range(1, 6)));
+        $children = '';
+
+        for ($i = 0; strlen($children) < 1048576; $i++) {
+            $children .= ".c$i{color:#222;&:hover{color:#333}.x &{color:#444}> .y{color:#555}@media (min-width: 1px){&:focus{outline:none}}}";
+        }
+
+        $css = match ($shape) {
+            'levels' => 'p{color:#111;'.str_repeat('&{color:#eee;', 10000).str_repeat('}', 10001),
+            'lists' => $list('p').'{color:#111;'.$list('q').'{color:#eee;'.$list('r').'{color:#eee}}}',
+            'doubling' => '.p1{color:#111;'.str_repeat('&&{color:#eee;', 64).str_repeat('}', 65),
+            'megabyte' => 'p{color:#111;'.$children.'}',
+            'empty' => 'p{color:#111} '.implode(',', array_map(fn (int $i): string => ".q$i".str_repeat(' div', 1000), range(1, 32))).'{'.str_repeat('&{}', 300000).'}',
+        };
+        unset($children);
+        $this->assertLessThan(2 * 1048576, strlen($css));
+        $document = HtmlDocument::fromHtml('<html><head><style>'.$css.'</style></head><body><p id="t" class="p1">x</p></body></html>');
+
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+        $start = microtime(true);
+        $parser = (new CssParser)->parse($document);
+        $colors = $parser->resolveColors($this->target($document));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertTrue($parser->isTruncated(), 'the dropped rules make the results approximate');
+        $this->assertSame($foreground, $colors['foreground']->toHex());
+        $this->assertLessThan(PerformanceBudget::seconds(0.5), $elapsed, sprintf('%.3f s', $elapsed));
+        $this->assertLessThan(32 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.1f MB', (memory_get_peak_usage(true) - $before) / 1048576));
+    }
+
     public function test_preference_media_is_not_part_of_the_base_cascade(): void
     {
         $this->assertSame(['#111111', '#ffffff', false], $this->colors('p{color:#111} @media (prefers-color-scheme: dark){p{color:#eee}}', '<p id="t">x</p>'));
