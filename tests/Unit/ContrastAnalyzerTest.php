@@ -187,7 +187,7 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
     public function test_analysis_stops_at_the_element_cap_with_one_notice(): void
     {
-        $html = '<div>'.implode('', array_map(fn (int $i) => '<p id="p'.$i.'">x</p>', range(1, ContrastAnalyzer::MAX_MEASURED + 5))).'</div>';
+        $html = '<div>'.implode('', array_map(fn (int $i) => '<p class="p'.$i.'">x</p>', range(1, ContrastAnalyzer::MAX_MEASURED + 5))).'</div>';
 
         $violations = $this->analyze($html);
 
@@ -551,5 +551,55 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $violation = $this->assertHasViolation($labels, 'contrast.insufficient', severity: Severity::Error);
         $this->assertSame(3, $violation->meta['occurrences']);
         $this->assertNotContains('/html[1]/body[1]/div[3]/label[1]', [$violation->selector, ...$violation->meta['selectors']]);
+
+        // `hidden` is read by the analysis, not by a selector: it stays in the chain (R40).
+        $hidden = $this->assertHasViolation($this->analyze($this->page('p{color:#bbb}', $twins('<p>x</p>', '<p hidden>x</p>'))), 'contrast.insufficient');
+        $this->assertSame(3, $hidden->meta['occurrences']);
+        $this->assertNotContains('/html[1]/body[1]/div[3]/p[1]', [$hidden->selector, ...$hidden->meta['selectors']]);
+    }
+
+    /** @return string a listing of cards with a unique href and wire:key each (MAX_MEASURED + 100 by default), and a footer note */
+    private function listing(string $css, int $cards = ContrastAnalyzer::MAX_MEASURED + 100): string
+    {
+        $cards = implode('', array_map(fn (int $n) => '<a href="/p/'.$n.'" wire:key="'.$n.'"><p class="date">1.1.</p></a>', range(1, $cards)));
+
+        return $this->page($css, '<main>'.$cards.'</main><footer><p class="note" style="color:#bbb">x</p></footer>');
+    }
+
+    /** @return array<string, array{0: string}> stylesheets that see the cards' href at most by its presence */
+    public static function hrefUnseenOrPresence(): array
+    {
+        return [
+            'no selector' => ['.date{color:#aaa}'],
+            '[href]' => ['a[href] .date{color:#aaa}'],
+            ':link' => ['a:link .date{color:#aaa}'],
+        ];
+    }
+
+    // R40: attributes no selector can see (or only by presence) do not split the style chain: the listing is measured whole.
+    #[DataProvider('hrefUnseenOrPresence')]
+    public function test_attribute_values_no_selector_sees_do_not_split_the_chain(string $css): void
+    {
+        $violations = $this->analyze($this->listing($css));
+
+        $this->assertNoViolation($violations, 'contrast.analysis_truncated');
+        $this->assertViolationCount($violations, 'contrast.insufficient', 2);
+        $this->assertSame(ContrastAnalyzer::MAX_MEASURED + 100, $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.date')->meta['occurrences']);
+        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.note');
+    }
+
+    // R40: a selector that tests an attribute value makes it part of the chain (#999 is 2.85:1; of 200 cards, hrefs /p/1,
+    // /p/10–19 and /p/100–199 match). Every href then counts, so the listing stays below MAX_MEASURED here.
+    public function test_attribute_values_a_selector_tests_split_the_chain(): void
+    {
+        $violations = $this->analyze($this->listing('.date{color:#aaa} a[href^="/p/1"] .date{color:#999}', 200));
+
+        $occurrences = [];
+
+        foreach ($violations as $violation) {
+            $occurrences[$violation->params['foreground'] ?? $violation->key] = $violation->meta['occurrences'] ?? null;
+        }
+
+        $this->assertSame(['#999999' => 111, '#aaaaaa' => 89, '#bbbbbb' => 1], $occurrences);
     }
 }

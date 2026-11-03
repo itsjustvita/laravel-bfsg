@@ -1680,4 +1680,24 @@ class CssParserTest extends TestCase
             $this->assertNotSame([], $expected, "$selector should match something in the fixture");
         }
     }
+
+    // R40: what the selectors see of an element, for ContrastAnalyzer's style chain.
+    public function test_selector_attributes(): void
+    {
+        $css = '.bg-\[\#fff\]{color:red} a[title="#x"]{color:red} a[href]{color:red} a[href^="/p/1" i]{color:red} [lang|=en] p{color:red}'
+            .' [*|data-x]{color:red} :not([aria-expanded=true]):hover{color:red} .x{&[data-state=open]{color:red}} a:link{color:red}';
+        [$parser] = $this->parsed($css, '');
+
+        $this->assertSame([
+            'id' => false,
+            'all' => false,
+            'attributes' => ['title' => true, 'href' => true, 'lang' => true, 'data-x' => false, 'aria-expanded' => true, 'data-state' => true],
+        ], $parser->selectorAttributes());
+
+        [$parser] = $this->parsed('a:link{color:red} #main p{color:red}', '');
+        $this->assertSame(['id' => true, 'all' => false, 'attributes' => ['href' => false]], $parser->selectorAttributes());
+
+        [$parser] = $this->parsed('p[ ="x"]{color:red}', '');
+        $this->assertTrue($parser->selectorAttributes()['all']);
+    }
 }

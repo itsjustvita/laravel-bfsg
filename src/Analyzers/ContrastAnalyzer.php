@@ -22,6 +22,9 @@ class ContrastAnalyzer extends BaseAnalyzer
     /** Exempt style chains remembered per document (16-byte keys); beyond it, exemption is checked per element. */
     private const MAX_EXEMPT_CHAINS = 5000;
 
+    /** Attributes always in the style chain: the cascade reads `class` and `style`, Element::isNotRendered() `hidden`. */
+    private const CHAIN_ATTRIBUTES = ['class', 'style', 'hidden'];
+
     /** [normal, large] thresholds per level. */
     private const THRESHOLDS = ['AA' => [4.5, 3.0], 'AAA' => [7.0, 4.5]];
 
@@ -47,6 +50,9 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     /** @var array<int, int> spl_object_id of an element on the path => its index in the path */
     private array $depths = [];
+
+    /** @var array{id: bool, all: bool, attributes: array<string, bool>}|null CssParser::selectorAttributes(), per document */
+    private ?array $selectorAttributes = null;
 
     /** @var array<string, array<string, mixed>|null> chain key => its finding (verdict(); null: passes), per document */
     private array $verdicts = [];
@@ -106,6 +112,7 @@ class ContrastAnalyzer extends BaseAnalyzer
         // releases the document's elements
         $this->inactiveLabels = new SplObjectStorage;
         $this->chain = $this->depths = $this->verdicts = $this->exemptChains = $this->groups = [];
+        $this->selectorAttributes = null;
     }
 
     /**
@@ -230,11 +237,14 @@ class ContrastAnalyzer extends BaseAnalyzer
     }
 
     /**
-     * The style chain key: a 16-byte hash over every level from the root to the element of its tag, all attributes sorted by
-     * name, whether it is its parent's first and last element child, and whether a previous sibling may cover its backdrop
-     * (CssParser::coveringChildIndex()). The supported selectors see nothing else, so text with the same key has the same
-     * colours, size and verdict. The path's keys are kept while the document-order walk stays below it, so each element is
-     * hashed once and memory stays O(depth).
+     * The style chain key (R40): a 16-byte hash over every level from the root to the element of its tag, its attributes
+     * that matter sorted by name, whether it is its parent's first and last element child, and whether a previous sibling
+     * may cover its backdrop (CssParser::coveringChildIndex()). The attributes that matter are CHAIN_ATTRIBUTES and those a
+     * selector sees (CssParser::selectorAttributes(): `id` when a selector has an id selector, others by value or only by
+     * presence; all of them when a name could not be read). Nothing else can change the cascade or the exemption, so text
+     * with the same key has the same colours, size and verdict, and a unique href or wire:key does not split a listing.
+     * The path's keys are kept while the document-order walk stays below it, so each element is hashed once and memory
+     * stays O(depth).
      */
     private function chainKey(CssParser $parser, DOMElement $element): string
     {
@@ -252,9 +262,16 @@ class ContrastAnalyzer extends BaseAnalyzer
 
         foreach (array_reverse($new) as $node) {
             $attributes = [];
+            $seen = $this->selectorAttributes ??= $parser->selectorAttributes();
 
             foreach ($node->attributes as $attribute) {
-                $attributes[$attribute->nodeName] = $attribute->value;
+                $name = strtolower($attribute->nodeName);
+
+                if ($seen['all'] || in_array($name, self::CHAIN_ATTRIBUTES, true) || ($name === 'id' && $seen['id'])) {
+                    $attributes[$name] = $attribute->value;
+                } elseif (isset($seen['attributes'][$name])) {
+                    $attributes[$name] = $seen['attributes'][$name] ? $attribute->value : '';
+                }
             }
 
             ksort($attributes, SORT_STRING);

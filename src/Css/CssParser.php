@@ -66,6 +66,12 @@ class CssParser
      */
     private const IMAGE_FUNCTION = '/(?<![\w-])(?:-[a-z]++-)?(?:url|image-set|image|cross-fade|element|paint|(?:[a-z]++-)*+gradient)\(/i';
 
+    /**
+     * The selector tokens selectorAttributes() reads: escapes and quoted strings (skipped), `#` (an id selector), an
+     * attribute selector's name (after an optional namespace) and operator, and :link (href).
+     */
+    private const SELECTOR_ATTRIBUTE_TOKEN = '/\\\\.|"(?:[^"\\\\]|\\\\.)*+"|\'(?:[^\'\\\\]|\\\\.)*+\'|#|\[\s*+(?:(?:[\w-]*+|\*)\|(?!=))?(?<name>(?:[\w:.-]|\\\\.|[^\x00-\x7F])++)?\s*+(?<operator>[~|^$*]?=)?|:link(?![\w-])/si';
+
     /** The first gradient function of a background value (see IMAGE_FUNCTION). */
     private const GRADIENT_FUNCTION = '/(?<![\w-])(?:-[a-z]++-)?(?:[a-z]++-)*+gradient\(/i';
 
@@ -228,6 +234,9 @@ class CssParser
     /** @var array<string, true> node path => true for the elements an indexed rule declaring `position` matches */
     private array $positioned = [];
 
+    /** @var array{id: bool, all: bool, attributes: array<string, bool>}|null what the selectors see of an element (selectorAttributes()) */
+    private ?array $selectorAttributes = null;
+
     /** @var array<string, array<'image'|'colour'|'final', array{0: mixed, 1: mixed}>> background value => its analysis (see layers()) */
     private array $layerCache = [];
 
@@ -353,6 +362,7 @@ class CssParser
         $this->fontSizeBoundCache = $this->fontWeightCache = $this->visibilityCache = $this->opacityCache = $this->coveringMedia = $this->layerCache = [];
         $this->layerCacheBytes = 0;
         $this->viewportHiding = false;
+        $this->selectorAttributes = null;
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
         $this->declaredNames = $this->rootContext = null;
@@ -504,6 +514,51 @@ class CssParser
     public function rules(): array
     {
         return $this->rules;
+    }
+
+    /**
+     * What the selectors of the parsed stylesheets see of an element besides its tag, `class`, `style` and position: `id`
+     * when any selector has an id selector; `attributes` by lower-case name, true when a selector compares the value and
+     * false when only its presence counts ([attr], and href for :link); `all` when an attribute selector's name cannot be
+     * read. Every rule counts, also the ones the index skips or cannot evaluate (maybe, conditional and nested rules), so
+     * an attribute outside this cannot change a match. Escapes and quoted strings are skipped. Computed once per parse().
+     *
+     * @return array{id: bool, all: bool, attributes: array<string, bool>}
+     */
+    public function selectorAttributes(): array
+    {
+        if ($this->selectorAttributes !== null) {
+            return $this->selectorAttributes;
+        }
+
+        $seen = ['id' => false, 'all' => false, 'attributes' => []];
+
+        foreach ($this->rules as $rule) {
+            if (strpbrk($rule['selector'], '#[:') === false) {
+                continue;
+            }
+
+            preg_match_all(self::SELECTOR_ATTRIBUTE_TOKEN, $rule['selector'], $tokens, PREG_SET_ORDER | PREG_UNMATCHED_AS_NULL);
+
+            foreach ($tokens as $token) {
+                if ($token[0] === '#') {
+                    $seen['id'] = true;
+                } elseif ($token[0][0] === '[') {
+                    if ($token['name'] === null) {
+                        $seen['all'] = true;
+
+                        continue;
+                    }
+
+                    $name = strtolower($this->unescape($token['name']));
+                    $seen['attributes'][$name] = ($seen['attributes'][$name] ?? false) || $token['operator'] !== null;
+                } elseif ($token[0][0] === ':') {
+                    $seen['attributes']['href'] ??= false;
+                }
+            }
+        }
+
+        return $this->selectorAttributes = $seen;
     }
 
     public function isIndexed(): bool
