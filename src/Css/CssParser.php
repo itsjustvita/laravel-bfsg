@@ -13,9 +13,10 @@ use Throwable;
  *
  * A rule is an array{selector: string, properties: array<string, array{value: string, important: bool}>,
  * specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}.
- * `conditional`: the rule sits behind a media feature, @supports or @container. `condition`: 'preference' behind a media
- * query that uses one of PREFERENCE_FEATURES (from @media, <style media> or an inlined <link media>), else 'viewport'
- * behind any other media feature or @container, else null. Preference rules are not part of the base cascade.
+ * `conditional`: the rule sits behind a media feature, @supports or @container. `condition` (from @media, <style media>
+ * or an inlined <link media>; see HtmlDocument::mediaCondition()): 'preference' behind a media query that fails with the
+ * default user preferences (PREFERENCE_DEFAULTS), else 'viewport' behind one that depends on another media feature and
+ * behind @container, else null. Preference rules are not part of the base cascade.
  */
 class CssParser
 {
@@ -52,8 +53,14 @@ class CssParser
     /** At-rules whose body is unwrapped (their rules apply unconditionally for static analysis). */
     private const UNWRAPPED_AT_RULES = ['layer', 'supports', 'container', 'scope', 'document', '-moz-document'];
 
-    /** Media features of user preferences: rules behind them are not part of the base cascade (they are another theme). */
+    /** Media features of user preferences: rules behind a query that fails with their defaults are not part of the base cascade (another theme). */
     public const PREFERENCE_FEATURES = ['prefers-color-scheme', 'prefers-contrast', 'forced-colors', 'inverted-colors', 'prefers-reduced-transparency'];
+
+    /** The default value of each of PREFERENCE_FEATURES: the base cascade is the page as a user with these preferences sees it. */
+    public const PREFERENCE_DEFAULTS = [
+        'prefers-color-scheme' => 'light', 'prefers-contrast' => 'no-preference', 'forced-colors' => 'none',
+        'inverted-colors' => 'none', 'prefers-reduced-transparency' => 'no-preference',
+    ];
 
     /** Nesting levels of @media and unwrapped at-rules followed; deeper blocks are dropped and the results marked truncated. */
     private const MAX_AT_RULE_DEPTH = 16;
@@ -156,11 +163,11 @@ class CssParser
     /** @var array<string, ?float> node path => computed font weight (null: unknown) */
     private array $fontWeightCache = [];
 
-    /** Whether a viewport rule declares display or visibility (hidesElement() then also evaluates the cascade without them). */
-    private bool $viewportVisibility = false;
+    /** Whether a viewport rule declares display:none or visibility:hidden|collapse (hidesElement() then leaves them out). */
+    private bool $viewportHiding = false;
 
-    /** @var array<string, array<string, array{value: string, important: bool}>> node path => display and visibility without viewport rules */
-    private array $staticVisibilityCache = [];
+    /** @var array<string, array<string, array{value: string, important: bool}>> node path => display and visibility without hiding viewport declarations */
+    private array $visibilityCache = [];
 
     /** @var array<string, array<string, array{value: string, important: bool}>> */
     private array $declarationCache = [];
@@ -263,8 +270,8 @@ class CssParser
         $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
-        $this->fontSizeBoundCache = $this->fontWeightCache = $this->staticVisibilityCache = [];
-        $this->viewportVisibility = false;
+        $this->fontSizeBoundCache = $this->fontWeightCache = $this->visibilityCache = [];
+        $this->viewportHiding = false;
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
         $this->declaredNames = $this->rootContext = null;
@@ -293,8 +300,8 @@ class CssParser
                 $counts[$kind]++;
             }
 
-            if ($rule['condition'] === 'viewport' && (isset($rule['properties']['display']) || isset($rule['properties']['visibility']))) {
-                $this->viewportVisibility = true;
+            if ($rule['condition'] === 'viewport' && $this->hidingDeclarations($rule['properties']) !== []) {
+                $this->viewportHiding = true;
             }
         }
 
@@ -694,22 +701,22 @@ class CssParser
 
     /**
      * Whether the stylesheets hide the element: cascaded display:none on self or an ancestor, or an inherited
-     * visibility:hidden/collapse that no closer element resets to visible. Viewport-conditional rules never hide an
-     * element: it counts as hidden only when it is hidden both with them and without them (`md:hidden` is visible
-     * below the breakpoint, `hidden md:block` above it).
+     * visibility:hidden/collapse that no closer element resets to visible. The hiding declarations of viewport-conditional
+     * rules never win, their revealing ones do (`md:hidden` is measured, and so is `hidden md:block lg:hidden`).
      */
     public function hidesElement(DOMElement $element): bool
     {
-        return $this->hiddenIn($element, false) && (! $this->viewportVisibility || $this->hiddenIn($element, true));
+        // Leaving declarations out can only reveal: only a result hidden in declarationsFor()'s cascade is checked again.
+        return $this->hiddenIn($element, false) && (! $this->viewportHiding || $this->hiddenIn($element, true));
     }
 
-    /** hidesElement() in one cascade: every rule of the base cascade, or ($static) those without a viewport condition. */
-    private function hiddenIn(DOMElement $element, bool $static): bool
+    /** hidesElement() in declarationsFor()'s cascade, or ($revealing) in the one without hiding viewport declarations. */
+    private function hiddenIn(DOMElement $element, bool $revealing): bool
     {
         $visibility = null;
 
         for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
-            $declarations = $static ? $this->staticVisibility($node) : $this->declarationsFor($node);
+            $declarations = $revealing ? $this->revealingVisibility($node) : $this->declarationsFor($node);
 
             if (strtolower($declarations['display']['value'] ?? '') === 'none') {
                 return true;
@@ -726,22 +733,28 @@ class CssParser
     }
 
     /**
-     * The element's cascaded display and visibility declarations without viewport-conditional rules.
+     * The element's cascaded display and visibility declarations without the hiding declarations of viewport rules.
      *
      * @return array<string, array{value: string, important: bool}>
      */
-    private function staticVisibility(DOMElement $element): array
+    private function revealingVisibility(DOMElement $element): array
     {
         $key = $this->nodeKey($element);
 
-        if (isset($this->staticVisibilityCache[$key])) {
-            return $this->staticVisibilityCache[$key];
+        if (isset($this->visibilityCache[$key])) {
+            return $this->visibilityCache[$key];
         }
 
         $winners = [];
 
         foreach ($this->matchingRules($element) as $rule) {
-            foreach ($rule['condition'] === 'viewport' ? [] : array_intersect_key($rule['properties'], ['display' => true, 'visibility' => true]) as $name => $declaration) {
+            $declarations = array_intersect_key($rule['properties'], ['display' => true, 'visibility' => true]);
+
+            if ($rule['condition'] === 'viewport') {
+                $declarations = array_diff_key($declarations, $this->hidingDeclarations($declarations));
+            }
+
+            foreach ($declarations as $name => $declaration) {
                 $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']]);
             }
         }
@@ -750,7 +763,24 @@ class CssParser
             $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX]);
         }
 
-        return $this->staticVisibilityCache[$key] = array_map(fn (array $winner) => $winner['declaration'], $winners);
+        return $this->visibilityCache[$key] = array_map(fn (array $winner) => $winner['declaration'], $winners);
+    }
+
+    /**
+     * The hiding declarations among a rule's properties: display:none, visibility:hidden or visibility:collapse.
+     *
+     * @param  array<string, array{value: string, important: bool}>  $properties
+     * @return array<string, array{value: string, important: bool}>
+     */
+    private function hidingDeclarations(array $properties): array
+    {
+        $display = strtolower(trim($properties['display']['value'] ?? ''));
+        $visibility = strtolower(trim($properties['visibility']['value'] ?? ''));
+
+        return array_intersect_key($properties, array_filter([
+            'display' => $display === 'none',
+            'visibility' => $visibility === 'hidden' || $visibility === 'collapse',
+        ]));
     }
 
     /** Whether the element's computed font weight is at least 700 (boldness() === true): an unknown weight is not bold. */

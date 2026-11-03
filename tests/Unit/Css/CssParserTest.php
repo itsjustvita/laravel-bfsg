@@ -601,8 +601,10 @@ class CssParserTest extends TestCase
                 .'.hidden { display: none } @media (min-width: 768px) { .md\\:block { display: block } } '
                 .'@container (min-width: 1px) { .cq\\:hidden { display: none } } @media screen { .screen\\:hidden { display: none } } '
                 .'@media (prefers-reduced-motion: reduce) { .motion\\:hidden { display: none } } @media (forced-colors: active) { .forced\\:hidden { display: none } } '
-                .'@supports (display: grid) { .grid\\:hidden { display: none } }',
-            '<p id="md" class="md:hidden">a</p><p id="inv" class="md:invisible">b</p><p id="reveal" class="hidden md:block">c</p>'
+                .'@supports (display: grid) { .grid\\:hidden { display: none } } .invisible { visibility: hidden } '
+                .'@media (min-width: 768px) { .md\\:visible { visibility: visible } } @media (min-width: 1024px) { .lg\\:hidden { display: none } .lg\\:invisible { visibility: hidden } }',
+            '<p id="between" class="hidden md:block lg:hidden">k</p><p id="between-visibility" class="invisible md:visible lg:invisible">l</p>'
+                .'<p id="md" class="md:hidden">a</p><p id="inv" class="md:invisible">b</p><p id="reveal" class="hidden md:block">c</p>'
                 .'<div class="hidden md:block"><p id="both" class="md:hidden">d</p></div><p id="cq" class="cq:hidden">e</p>'
                 .'<p id="screen" class="screen:hidden">f</p><p id="motion" class="motion:hidden">g</p><p id="forced" class="forced:hidden">h</p>'
                 .'<p id="grid" class="grid:hidden">i</p><p id="plain" class="hidden">j</p>'
@@ -612,7 +614,9 @@ class CssParserTest extends TestCase
         $this->assertFalse($parser->hidesElement($byId['md']), 'md:hidden is visible below the breakpoint');
         $this->assertFalse($parser->hidesElement($byId['inv']));
         $this->assertFalse($parser->hidesElement($byId['reveal']), 'hidden md:block is visible above the breakpoint');
-        $this->assertTrue($parser->hidesElement($byId['both']), 'hidden below the breakpoint by its parent, above it by itself');
+        $this->assertFalse($parser->hidesElement($byId['both']), 'hiding viewport declarations never win: hidden below the breakpoint by its parent and above it by itself, but measured (R31)');
+        $this->assertFalse($parser->hidesElement($byId['between']), 'visible only between two breakpoints');
+        $this->assertFalse($parser->hidesElement($byId['between-visibility']));
         $this->assertFalse($parser->hidesElement($byId['cq']), 'container queries are size conditions too');
         $this->assertTrue($parser->hidesElement($byId['screen']), 'a media type alone is no condition');
         $this->assertFalse($parser->hidesElement($byId['motion']));
@@ -655,6 +659,53 @@ class CssParserTest extends TestCase
         $this->assertFalse(HtmlDocument::mediaCondition('not screen, print'));
         $this->assertFalse(HtmlDocument::mediaCondition(',, ,'), 'only empty queries');
         $this->assertFalse(HtmlDocument::mediaCondition('not ,'));
+        $this->assertFalse(HtmlDocument::mediaCondition("\fprint"), 'a form feed is whitespace, not the media type all');
+        $this->assertFalse(HtmlDocument::mediaAppliesToScreen("\f print"));
+    }
+
+    public function test_preference_features_are_evaluated_with_the_default_preferences(): void
+    {
+        $this->assertSame(CssParser::PREFERENCE_FEATURES, array_keys(CssParser::PREFERENCE_DEFAULTS));
+
+        $expected = [
+            '(prefers-color-scheme: light)' => null,
+            '(PREFERS-COLOR-SCHEME: Light)' => null,
+            '(prefers-color-scheme: dark)' => 'preference',
+            'not (prefers-color-scheme: dark)' => null,
+            'not (prefers-color-scheme: light)' => 'preference',
+            'only (prefers-color-scheme: light)' => null,
+            '(prefers-color-scheme: dark) or (min-width: 1px)' => 'viewport',
+            '(prefers-color-scheme: dark), (min-width: 1px)' => 'viewport',
+            '(prefers-color-scheme: dark) or (forced-colors: active)' => 'preference',
+            '(prefers-color-scheme: dark) or (prefers-color-scheme: light)' => null,
+            '(forced-colors: active)' => 'preference',
+            '(forced-colors: none)' => null,
+            '(prefers-contrast: more)' => 'preference',
+            '(prefers-contrast: no-preference)' => null,
+            '(inverted-colors: inverted)' => 'preference',
+            '(prefers-reduced-transparency: reduce)' => 'preference',
+            '(prefers-color-scheme)' => null,
+            '(forced-colors)' => 'preference',
+            '(prefers-contrast)' => 'preference',
+            'screen and (prefers-color-scheme: light) and (min-width: 768px)' => 'viewport',
+            'screen and (prefers-color-scheme: light)' => null,
+            'screen and (prefers-color-scheme: dark) and (min-width: 768px)' => 'preference',
+            '((prefers-color-scheme: light) or (forced-colors: active)) and (min-width: 1px)' => 'viewport',
+            '(not (prefers-color-scheme: dark)) and (not (forced-colors: active))' => null,
+            '(min-width: calc(1px + (2px))) and (prefers-color-scheme: dark)' => 'preference',
+            'not (min-width: 1px)' => 'viewport',
+            '(foo bar) and (prefers-color-scheme: dark)' => 'preference',
+            '(prefers-color-scheme: light) and (min-width: 1px) or (hover)' => 'viewport',
+            'screen and (prefers-color-scheme: light) or (min-width: 1px)' => 'viewport',
+            '(prefers-color-scheme: dark' => 'viewport',
+            '(prefers-color-scheme: dark))' => 'viewport',
+            str_repeat('(', 16).'(prefers-color-scheme: dark)'.str_repeat(')', 16) => 'viewport',
+            str_repeat('(', 15).'(prefers-color-scheme: dark)'.str_repeat(')', 15) => 'preference',
+        ];
+
+        foreach ($expected as $media => $condition) {
+            $this->assertSame($condition, HtmlDocument::mediaCondition($media), $media);
+        }
     }
 
     public function test_at_rules_nested_beyond_the_depth_limit_are_dropped(): void
@@ -711,6 +762,10 @@ class CssParserTest extends TestCase
         [$parser] = $this->parsed(':root{--fg:#111} @media (prefers-color-scheme: dark){:root{--fg:#eee}} @media (min-width: 1px){:root{--bg:#fafafa}}', '<p id="t">x</p>');
         $this->assertSame('#111', $parser->resolveVariables('var(--fg)'));
         $this->assertSame('#fafafa', $parser->resolveVariables('var(--bg)'), 'viewport rules apply to the root custom properties as well');
+
+        $this->assertSame(['#222222', '#ffffff', false], $this->colors('p{color:#111} @media (prefers-color-scheme: light){p{color:#222}}', '<p id="t">x</p>'), 'the default preferences are the base theme');
+        $this->assertSame(['#333333', '#ffffff', false], $this->colors('p{color:#111} @media not (prefers-color-scheme: dark){p{color:#333}}', '<p id="t">x</p>'));
+        $this->assertSame(['#444444', '#ffffff', false], $this->colors('p{color:#111} @media (forced-colors: none) and (prefers-contrast: no-preference){p{color:#444}}', '<p id="t">x</p>'));
     }
 
     public function test_colour_keywords_are_exact(): void

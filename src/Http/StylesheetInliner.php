@@ -173,9 +173,9 @@ final class StylesheetInliner
 
         // The media query list goes along, so the cascade sees it as it sees <style media> (CssParser conditions).
         $media = trim($attributes['media'] ?? '');
-        $media = $media === '' ? '' : ' media="'.htmlspecialchars($media, ENT_QUOTES).'"';
+        $media = $media === '' ? '' : ' media="'.htmlspecialchars($media, ENT_QUOTES | ENT_SUBSTITUTE).'"';
 
-        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES).'"'.$media.'>'.str_ireplace('</style', '<\/style', $css).'</style>';
+        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES | ENT_SUBSTITUTE).'"'.$media.'>'.str_ireplace('</style', '<\/style', $css).'</style>';
     }
 
     /** @return array<string, string> lowercased attribute name => decoded value */

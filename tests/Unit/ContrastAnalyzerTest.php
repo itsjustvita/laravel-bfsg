@@ -297,6 +297,19 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
             $this->assertSame(Severity::Error, $violation->severity, (string) $violation->element);
             $this->assertFalse($violation->meta['approximate'], (string) $violation->element);
         }
+
+        foreach (['a', 'button'] as $element) {
+            $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: $element, severity: Severity::Error);
+            $this->assertSame('#d1d5db', $violation->params['foreground'], $element);
+        }
+    }
+
+    public function test_light_theme_media_is_the_base_theme(): void
+    {
+        $css = 'body{color:#111} @media (prefers-color-scheme: light){.muted{color:#ccc}} @media (prefers-color-scheme: dark){.muted{color:#111}}';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<p class="muted">x</p>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('#cccccc', $violation->params['foreground']);
     }
 
     public function test_custom_properties_inherit_from_ancestors(): void

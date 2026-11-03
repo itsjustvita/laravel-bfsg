@@ -23,18 +23,19 @@ final class HtmlDocument
     /** Elements nested deeper than this are unwrapped after parsing, so the recursive analyzers stay bounded. */
     public const MAX_DEPTH = 256;
 
-    /** Whitespace that trim() removes around a media query. */
-    private const MEDIA_TRIM = " \t\n\r\0\x0B";
+    /** Whitespace around media queries and their tokens: trim()'s set plus the form feed, which CSS also treats as whitespace. */
+    private const MEDIA_TRIM = " \t\n\r\0\x0B\f";
 
     /** Characters that end a media type (PCRE \s and the opening parenthesis of a feature). */
     private const MEDIA_TYPE_END = " \t\n\r\f\x0B(";
 
-    private const IDENTIFIER_START = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-';
-
     private const IDENTIFIER_CHARACTERS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_';
 
-    /** Longest identifier compared with CssParser::PREFERENCE_FEATURES; longer ones cannot be one of them. */
+    /** Longest media feature name or value compared; longer ones cannot be a preference feature or its default. */
     private const MAX_FEATURE_NAME_BYTES = 32;
+
+    /** Nesting levels of parentheses a media condition is evaluated through; deeper conditions are unknown (viewport). */
+    private const MAX_MEDIA_DEPTH = 16;
 
     private ?DOMXPath $xpath = null;
 
@@ -272,8 +273,9 @@ final class HtmlDocument
     }
 
     /**
-     * Whether a media query list (a media attribute or an @media prelude) applies to a screen.
-     * Only the media type and the not/only prefixes are evaluated; media features are ignored.
+     * Whether a media query list (a media attribute or an @media prelude) applies to a screen: a query for the media
+     * type all or screen (not negated), or a media condition without a type (`(…)`, `not (…)`). Media features
+     * decide the condition (mediaCondition()), not whether the list applies.
      */
     public static function mediaAppliesToScreen(string $media): bool
     {
@@ -282,10 +284,12 @@ final class HtmlDocument
 
     /**
      * The condition a media query list puts on the rules it guards: false when no query applies to a screen (see
-     * mediaAppliesToScreen()), null when a query applies without a media feature (or the list is empty), else the
-     * weakest condition among the queries that apply: 'viewport' for media features, 'preference' for a query that
-     * uses one of CssParser::PREFERENCE_FEATURES. One pass over the list: strspn()/strcspn() bounded by the query,
-     * no regular expression, and only identifiers of at most MAX_FEATURE_NAME_BYTES are copied.
+     * mediaAppliesToScreen()), else the weakest condition among the queries that apply. A query's media condition is
+     * evaluated with the default user preferences (CssParser::PREFERENCE_DEFAULTS) and every other media feature
+     * unknown: null when it holds (or there is none, or the list is empty), 'preference' when it fails (another theme),
+     * 'viewport' when it depends on another feature or cannot be parsed. One linear pass: strspn()/strcspn() bounded by
+     * the query, parentheses followed at most MAX_MEDIA_DEPTH levels deep, no regular expression, and only tokens of at
+     * most MAX_FEATURE_NAME_BYTES are copied.
      *
      * @return 'preference'|'viewport'|false|null
      */
@@ -297,12 +301,11 @@ final class HtmlDocument
             return null;
         }
 
-        $features = array_flip(CssParser::PREFERENCE_FEATURES);
         $result = false;
 
         for ($position = 0; $position <= $length; $position = $end + 1) {
             $end = $position + strcspn($media, ',', $position);
-            $condition = self::queryCondition($media, $position, $end, $features);
+            $condition = self::queryCondition($media, $position, $end);
 
             if ($condition === null) {
                 return null;
@@ -318,11 +321,12 @@ final class HtmlDocument
 
     /**
      * The condition of the media query between $start and $end: false when it is empty or does not apply to a screen.
+     * `[only|not] <type> [and <condition>]` keeps 3.0's reading (`not` negates the type); a query that starts with a
+     * parenthesis, `not (` or `only (` is a media condition for every media type.
      *
-     * @param  array<string, int>  $features
      * @return 'preference'|'viewport'|false|null
      */
-    private static function queryCondition(string $media, int $start, int $end, array $features): string|false|null
+    private static function queryCondition(string $media, int $start, int $end): string|false|null
     {
         $position = $start + strspn($media, self::MEDIA_TRIM, $start, $end - $start);
         $last = $end;
@@ -333,6 +337,16 @@ final class HtmlDocument
 
         if ($position >= $last) {
             return false;
+        }
+
+        $word = self::mediaKeyword($media, $position, $last);
+        $next = $position + strlen($word);
+        $next += strspn($media, self::MEDIA_TRIM, $next, $last - $next);
+
+        if ($media[$position] === '(' || (($word === 'not' || $word === 'only') && $next < $last && $media[$next] === '(')) {
+            $position = $word === 'only' ? $next : $position;
+
+            return self::conditionFrom($media, $position, $last, true);
         }
 
         $negated = false;
@@ -346,32 +360,190 @@ final class HtmlDocument
         }
 
         $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
-        $typeLength = $media[$position] === '(' ? 0 : strcspn($media, self::MEDIA_TYPE_END, $position, $last - $position);
-        $type = $typeLength === 0 ? 'all' : ($typeLength <= 6 ? strtolower(substr($media, $position, $typeLength)) : '');
+        $typeLength = strcspn($media, self::MEDIA_TYPE_END, $position, $last - $position);
+        $type = $typeLength > 0 && $typeLength <= 6 ? strtolower(substr($media, $position, $typeLength)) : '';
 
         if (in_array($type, ['all', 'screen'], true) === $negated) {
             return false;
         }
 
         $position += $typeLength;
-        $position += strcspn($media, '(', $position, $last - $position);
+        $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
 
         if ($position >= $last) {
             return null; // a media type alone
         }
 
-        while ($position < $last) {
-            $position += strcspn($media, self::IDENTIFIER_START, $position, $last - $position);
-            $identifier = strspn($media, self::IDENTIFIER_CHARACTERS, $position, $last - $position);
-
-            if ($identifier > 0 && $identifier <= self::MAX_FEATURE_NAME_BYTES && isset($features[strtolower(substr($media, $position, $identifier))])) {
-                return 'preference';
-            }
-
-            $position += $identifier;
+        if (self::mediaKeyword($media, $position, $last) !== 'and') {
+            return 'viewport'; // not a valid query: unknown
         }
 
-        return 'viewport';
+        $position += 3;
+
+        return self::conditionFrom($media, $position, $last, false);
+    }
+
+    /**
+     * The condition of the media condition from $position to the end of its query: null when it holds, 'preference'
+     * when it fails, 'viewport' when it is unknown or cannot be parsed.
+     *
+     * @return 'preference'|'viewport'|null
+     */
+    private static function conditionFrom(string $media, int $position, int $last, bool $allowOr): ?string
+    {
+        $failed = false;
+        $value = self::evaluateCondition($media, $position, $last, 0, $allowOr, $failed);
+        $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
+
+        return match (true) {
+            $failed || $position < $last, $value === null => 'viewport',
+            $value => null,
+            default => 'preference',
+        };
+    }
+
+    /**
+     * Evaluate `not <in-parens>` or `<in-parens> [and|or <in-parens>]*` (one operator kind; `or` only where $allowOr),
+     * three-valued: true, false, or null (unknown). Stops before a `)` or the end; sets $failed on a syntax error.
+     */
+    private static function evaluateCondition(string $media, int &$position, int $last, int $depth, bool $allowOr, bool &$failed): ?bool
+    {
+        $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
+
+        if (self::mediaKeyword($media, $position, $last) === 'not') {
+            $position += 3;
+            $value = self::evaluateInParens($media, $position, $last, $depth, $failed);
+
+            return $value === null ? null : ! $value;
+        }
+
+        $value = self::evaluateInParens($media, $position, $last, $depth, $failed);
+        $operator = null;
+
+        while (! $failed) {
+            $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
+
+            if ($position >= $last || $media[$position] === ')') {
+                break;
+            }
+
+            $word = self::mediaKeyword($media, $position, $last);
+
+            if (! ($word === 'and' || ($word === 'or' && $allowOr)) || ($operator !== null && $word !== $operator)) {
+                $failed = true;
+
+                break;
+            }
+
+            $operator = $word;
+            $position += strlen($word);
+            $operand = self::evaluateInParens($media, $position, $last, $depth, $failed);
+            $value = $word === 'and'
+                ? ($value === false || $operand === false ? false : ($value === true && $operand === true ? true : null))
+                : ($value === true || $operand === true ? true : ($value === false && $operand === false ? false : null));
+        }
+
+        return $value;
+    }
+
+    /** Evaluate `( <condition> )` or `( <feature> )` (anything else in parentheses is unknown), advancing past the `)`. */
+    private static function evaluateInParens(string $media, int &$position, int $last, int $depth, bool &$failed): ?bool
+    {
+        $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
+
+        if ($failed || $position >= $last || $media[$position] !== '(' || $depth >= self::MAX_MEDIA_DEPTH) {
+            $failed = true;
+
+            return null;
+        }
+
+        $position++;
+        $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
+
+        if ($position < $last && ($media[$position] === '(' || self::mediaKeyword($media, $position, $last) === 'not')) {
+            $value = self::evaluateCondition($media, $position, $last, $depth + 1, true, $failed);
+
+            if ($failed || $position >= $last || $media[$position] !== ')') {
+                $failed = true;
+
+                return null;
+            }
+
+            $position++;
+
+            return $value;
+        }
+
+        $start = $position;
+
+        for ($nesting = 0; ; $position++) { // to the matching parenthesis: values may hold functions such as calc()
+            $position += strcspn($media, '()', $position, $last - $position);
+
+            if ($position >= $last) {
+                $failed = true;
+
+                return null;
+            }
+
+            if ($media[$position] === '(') {
+                $nesting++;
+            } elseif ($nesting-- === 0) {
+                break;
+            }
+        }
+
+        $value = self::evaluateFeature($media, $start, $position);
+        $position++;
+
+        return $value;
+    }
+
+    /**
+     * A media feature between its parentheses: a preference feature compared with its default value (in a boolean
+     * context true unless the default is `none` or `no-preference`); every other feature, a range and general-enclosed
+     * text are unknown (null).
+     */
+    private static function evaluateFeature(string $media, int $start, int $end): ?bool
+    {
+        $colon = $start + strcspn($media, ':', $start, $end - $start);
+        $name = self::mediaToken($media, $start, $colon);
+        $default = $name === null ? null : CssParser::PREFERENCE_DEFAULTS[$name] ?? null;
+
+        if ($default === null) {
+            return null;
+        }
+
+        if ($colon === $end) {
+            return ! in_array($default, ['none', 'no-preference'], true);
+        }
+
+        return self::mediaToken($media, $colon + 1, $end) === $default;
+    }
+
+    /** The lowercased identifier between $start and $end (whitespace trimmed), or null when it is none or longer than MAX_FEATURE_NAME_BYTES. */
+    private static function mediaToken(string $media, int $start, int $end): ?string
+    {
+        $start += strspn($media, self::MEDIA_TRIM, $start, $end - $start);
+
+        while ($end > $start && str_contains(self::MEDIA_TRIM, $media[$end - 1])) {
+            $end--;
+        }
+
+        $length = $end - $start;
+
+        if ($length === 0 || $length > self::MAX_FEATURE_NAME_BYTES || strspn($media, self::IDENTIFIER_CHARACTERS, $start, $length) !== $length) {
+            return null;
+        }
+
+        return strtolower(substr($media, $start, $length));
+    }
+
+    /** The keyword (an identifier of at most four bytes, lowercased) at $position, else ''. */
+    private static function mediaKeyword(string $media, int $position, int $last): string
+    {
+        $length = strspn($media, self::IDENTIFIER_CHARACTERS, $position, $last - $position);
+
+        return $length > 0 && $length <= 4 ? strtolower(substr($media, $position, $length)) : '';
     }
 
     /**

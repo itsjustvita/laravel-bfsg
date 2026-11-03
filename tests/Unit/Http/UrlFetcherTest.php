@@ -195,6 +195,18 @@ class UrlFetcherTest extends TestCase
         $this->assertSame(['preference', 'viewport', null], array_column(HtmlDocument::fromHtml($page->html)->cssParser()->rules(), 'condition'));
     }
 
+    public function test_invalid_utf8_in_an_inlined_media_attribute_is_substituted(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response("<html><head><link rel=\"stylesheet\" media=\"(prefers-color-scheme: dark\xFF)\" href=\"/dark.css\"></head><body></body></html>", 200),
+            'https://example.com/dark.css' => Http::response('p { color: #eee }', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertStringContainsString("<style data-bfsg-inlined=\"/dark.css\" media=\"(prefers-color-scheme: dark\u{FFFD})\">p { color: #eee }</style>", $page->html);
+    }
+
     public function test_stylesheet_limits_and_the_switch(): void
     {
         config()->set('bfsg.fetch.max_stylesheets', 2);
