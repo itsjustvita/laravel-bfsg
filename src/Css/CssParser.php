@@ -55,9 +55,16 @@ class CssParser
     ];
 
     /** Default font-size factor relative to the parent, per UA stylesheet. */
-    private const TAG_FONT_FACTORS = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.67, 'small' => 0.83];
+    private const TAG_FONT_FACTORS = ['h1' => 2.0, 'h2' => 1.5, 'h3' => 1.17, 'h4' => 1.0, 'h5' => 0.83, 'h6' => 0.67, 'small' => 0.83, 'sub' => 0.83, 'sup' => 0.83];
 
-    private const BOLD_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th', 'b', 'strong'];
+    /** Form controls: the UA font (-webkit-small-control, -moz-field) is 13.333px whatever the parent's size. */
+    private const FORM_CONTROL_FONT_SIZES = ['button' => 13.333, 'input' => 13.333, 'select' => 13.333, 'textarea' => 13.333];
+
+    /** Elements the UA stylesheet makes bold (700). */
+    private const BOLD_TAGS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'th'];
+
+    /** Elements the UA stylesheet makes `bolder` than their parent. */
+    private const BOLDER_TAGS = ['b', 'strong'];
 
     /** Nesting levels of math functions and parentheses a font-size lower bound follows; deeper is unknown. */
     private const MAX_CALC_DEPTH = 32;
@@ -65,8 +72,11 @@ class CssParser
     /** Absolute length units in px. */
     private const ABSOLUTE_UNITS = ['px' => 1.0, 'pt' => 4 / 3, 'pc' => 16.0, 'in' => 96.0, 'cm' => 96 / 2.54, 'mm' => 96 / 25.4, 'q' => 96 / 101.6];
 
-    /** Viewport, container and font-relative units (other than em and rem): valid, but without a bound. */
-    private const UNBOUNDED_UNITS = '/^(?:[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max)|r?(?:ex|ch|lh|cap|ic))$/';
+    /** Viewport and container units: no bound, but at least 0 with a non-negative coefficient (a floor for sums). */
+    private const VIEWPORT_UNITS = '/^(?:[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max))$/';
+
+    /** Font-relative units other than em and rem: valid, but without a bound. */
+    private const FONT_RELATIVE_UNITS = '/^r?(?:ex|ch|lh|cap|ic)$/';
 
     /** larger / smaller as factors of the parent size: engines use 1.2 and 1 / 1.2, so both are lower bounds. */
     private const RELATIVE_FONT_SIZES = ['larger' => 1.2, 'smaller' => 0.83];
@@ -679,18 +689,28 @@ class CssParser
         return $visibility === 'hidden' || $visibility === 'collapse';
     }
 
-    /**
-     * Whether the element's computed font weight is at least 700. The winning `font-weight` or `font` shorthand
-     * declaration (which sets `normal` unless it names a weight) counts, var() substituted; inherit, unset and no
-     * declaration take the parent's weight, except that BOLD_TAGS are 700 when no declaration sets their weight; bolder
-     * and lighter follow the CSS Fonts table. An unknown weight (a system font, an unsupported value) is not bold.
-     */
+    /** Whether the element's computed font weight is at least 700 (boldness() === true): an unknown weight is not bold. */
     public function isBold(DOMElement $element): bool
     {
-        return ($this->fontWeight($element) ?? 0.0) >= 700;
+        return $this->boldness($element) === true;
     }
 
-    /** Computed font weight of the element (null: unknown); see isBold(). */
+    /**
+     * Whether the element's computed font weight is at least 700; null when the weight is unknown. The winning
+     * `font-weight` or `font` shorthand declaration (which sets `normal` unless it names a weight) counts, var()
+     * substituted. inherit, unset, an undefined reference and no declaration take the parent's weight; without a
+     * declaration h1–h6 and th are 700 and b and strong `bolder` than the parent (UA stylesheet); bolder and lighter
+     * follow the CSS Fonts table. Unknown: an approximate substitution, a substitution limit, a system-font shorthand,
+     * revert, revert-layer, and anything inheriting from or relative to an unknown weight.
+     */
+    public function boldness(DOMElement $element): ?bool
+    {
+        $weight = $this->fontWeight($element);
+
+        return $weight === null ? null : $weight >= 700;
+    }
+
+    /** Computed font weight of the element (null: unknown); see boldness(). */
     private function fontWeight(DOMElement $element): ?float
     {
         $key = $this->nodeKey($element);
@@ -699,35 +719,52 @@ class CssParser
             return $this->fontWeightCache[$key];
         }
 
-        $declared = $this->winningDeclaration($element, 'font-weight', 'font');
-        $default = in_array(Element::tag($element), self::BOLD_TAGS, true) ? 700.0 : null; // UA stylesheet; null inherits
         $parent = fn (): ?float => $element->parentNode instanceof DOMElement ? $this->fontWeight($element->parentNode) : 400.0;
+        $declared = $this->winningDeclaration($element, 'font-weight', 'font');
 
         if ($declared === null) {
-            return $this->fontWeightCache[$key] = $default ?? $parent();
+            return $this->fontWeightCache[$key] = $this->defaultFontWeight($element, $parent);
         }
 
-        [$value] = $this->substituteValue($element, $key, $declared[0]);
+        [$value, $approximate] = $this->substituteIn($element, $key, $declared[0], 0);
 
-        if ($value === null || strlen($value) > self::MAX_RESOLVED_LENGTH) {
+        if ($value === false || $approximate || (is_string($value) && strlen($value) > self::MAX_RESOLVED_LENGTH)) {
+            return $this->fontWeightCache[$key] = null; // a limit, a cycle, or a maybe rule could win
+        }
+
+        if ($value === null) {
             return $this->fontWeightCache[$key] = $parent(); // invalid at computed-value time: as unset, which inherits
         }
 
         $value = $declared[1] ? $this->fontShorthand($value)['weight'] ?? null : strtolower(trim($value));
         $weight = match (true) {
-            $value === null => null,
+            $value === null, $value === 'revert', $value === 'revert-layer' => null,
             in_array($value, ['inherit', 'unset'], true) => $parent(),
             $value === 'initial', $value === 'normal' => 400.0,
             $value === 'bold' => 700.0,
             $value === 'bolder', $value === 'lighter' => $this->relativeWeight($parent(), $value),
-            $value === 'revert' => $default ?? $parent(),
             is_numeric($value) && (float) $value >= 1 && (float) $value <= 1000 => (float) $value,
-            $value === 'revert-layer' => null,
-            // Invalid: a literal is dropped at parse time (the UA weight applies), a substituted one is invalid at computed-value time.
-            default => stripos($declared[0], 'var(') === false ? $default ?? $parent() : $parent(),
+            // Invalid: a literal is dropped at parse time (approximated by the UA weight), a substituted one is invalid at computed-value time.
+            default => stripos($declared[0], 'var(') === false ? $this->defaultFontWeight($element, $parent) : $parent(),
         };
 
         return $this->fontWeightCache[$key] = $weight;
+    }
+
+    /**
+     * The UA weight without a declaration: 700 for BOLD_TAGS, `bolder` than the parent for BOLDER_TAGS, else inherited.
+     *
+     * @param  callable(): ?float  $parent
+     */
+    private function defaultFontWeight(DOMElement $element, callable $parent): ?float
+    {
+        $tag = Element::tag($element);
+
+        return match (true) {
+            in_array($tag, self::BOLD_TAGS, true) => 700.0,
+            in_array($tag, self::BOLDER_TAGS, true) => $this->relativeWeight($parent(), 'bolder'),
+            default => $parent(),
+        };
     }
 
     /** `bolder` or `lighter` of the parent's weight, per the CSS Fonts table. */
@@ -1954,10 +1991,16 @@ class CssParser
         return null;
     }
 
-    /** The UA font size without a declaration: the parent's (null: unknown), scaled for headings and <small>. */
+    /** The UA font size without a declaration: 13.333px for form controls, else the parent's (null: unknown), scaled for headings, <small>, <sub> and <sup>. */
     private function defaultFontSize(DOMElement $element, ?float $parent): ?float
     {
-        return $parent === null ? null : $parent * (self::TAG_FONT_FACTORS[Element::tag($element)] ?? 1.0);
+        $tag = Element::tag($element);
+
+        if (isset(self::FORM_CONTROL_FONT_SIZES[$tag])) {
+            return self::FORM_CONTROL_FONT_SIZES[$tag];
+        }
+
+        return $parent === null ? null : $parent * (self::TAG_FONT_FACTORS[$tag] ?? 1.0);
     }
 
     /** Lower bound in px of a lowercased font-size value, given the parent's bound (null: unknown). */
@@ -1989,7 +2032,7 @@ class CssParser
             return null; // empty, revert-layer, a negative length
         }
 
-        $rem = str_contains($value, 'rem') ? $this->rootFontSize($element) : self::FONT_KEYWORDS['medium'];
+        $rem = str_contains($value, 'rem') ? $this->rootFontSize($element) : null;
         $position = 0;
         $result = $this->mathFactor($value, $position, 0, $rem, $parent);
 
@@ -1997,7 +2040,7 @@ class CssParser
             return null;
         }
 
-        [$length, $bound] = $result;
+        [$length, $bound] = $result; // a floor alone (a lone viewport term) is no bound
 
         if (! $length) {
             return $value === '0' ? 0.0 : null; // a bare number is a length only when it is zero
@@ -2006,8 +2049,11 @@ class CssParser
         return $bound === null ? null : max(0.0, $bound); // math results are clamped to the property's range
     }
 
-    /** The root's font-size bound for rem (16px for the root itself and when the root has no bound). */
-    private function rootFontSize(DOMElement $element): float
+    /**
+     * The root's font-size bound for rem: 16px for the root itself and for a root without a font-size declaration,
+     * null when the root's declared size has no bound.
+     */
+    private function rootFontSize(DOMElement $element): ?float
     {
         $root = $element->ownerDocument?->documentElement;
 
@@ -2015,19 +2061,22 @@ class CssParser
             return self::FONT_KEYWORDS['medium'];
         }
 
-        return $this->fontSizeLowerBoundPx($root) ?? self::FONT_KEYWORDS['medium'];
+        return $this->fontSizeLowerBoundPx($root);
     }
 
     /**
      * One operand of a font-size expression at $position: a number, a dimension, a percentage, or calc(), min(), max(),
      * clamp() or a parenthesised sum (inside a function only). Recursive descent without backtracking; each call
-     * consumes what it reads.
+     * consumes what it reads. A negative coefficient on rem, em, % or a viewport unit has no bound (its base is only a
+     * lower bound, or unknown); a viewport or container term with a non-negative coefficient has the floor 0, which only
+     * a sum uses.
      *
-     * @return array{0: bool, 1: ?float}|null whether it is a length (else a number), and its lower bound in px or exact
-     *                                        number (null: unknown); null when the expression is invalid, nests deeper
-     *                                        than MAX_CALC_DEPTH or overflows
+     * @return array{0: bool, 1: ?float, 2: ?float}|null whether it is a length (else a number), its lower bound in px
+     *                                                   or exact number (null: unknown), and its floor as a sum term
+     *                                                   (the bound where there is one); null when the expression is
+     *                                                   invalid, nests deeper than MAX_CALC_DEPTH or overflows
      */
-    private function mathFactor(string $value, int &$position, int $depth, float $rem, ?float $em): ?array
+    private function mathFactor(string $value, int &$position, int $depth, ?float $rem, ?float $em): ?array
     {
         if (preg_match('/[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?/A', $value, $m, 0, $position) === 1) {
             $position += strlen($m[0]);
@@ -2037,23 +2086,26 @@ class CssParser
                 return null;
             }
 
+            $relative = fn (?float $base): array => $number < 0 || $base === null ? [true, null, null] : [true, $number * $base, $number * $base];
+
             if (($value[$position] ?? '') === '%') {
                 $position++;
 
-                return [true, $em === null ? null : $number / 100 * $em];
+                return $relative($em === null ? null : $em / 100);
             }
 
             if (preg_match('/[a-z]+/A', $value, $unit, 0, $position) !== 1) {
-                return [false, $number];
+                return [false, $number, $number];
             }
 
             $position += strlen($unit[0]);
 
             return match (true) {
-                isset(self::ABSOLUTE_UNITS[$unit[0]]) => [true, $number * self::ABSOLUTE_UNITS[$unit[0]]],
-                $unit[0] === 'rem' => [true, $number * $rem],
-                $unit[0] === 'em' => [true, $em === null ? null : $number * $em],
-                preg_match(self::UNBOUNDED_UNITS, $unit[0]) === 1 => [true, null],
+                isset(self::ABSOLUTE_UNITS[$unit[0]]) => [true, $number * self::ABSOLUTE_UNITS[$unit[0]], $number * self::ABSOLUTE_UNITS[$unit[0]]],
+                $unit[0] === 'rem' => $relative($rem),
+                $unit[0] === 'em' => $relative($em),
+                preg_match(self::VIEWPORT_UNITS, $unit[0]) === 1 => [true, null, $number < 0 ? null : 0.0],
+                preg_match(self::FONT_RELATIVE_UNITS, $unit[0]) === 1 => [true, null, null],
                 default => null,
             };
         }
@@ -2089,11 +2141,11 @@ class CssParser
 
     /**
      * Operands joined by + and - (surrounded by whitespace, as CSS requires). A sum of lengths is bounded by the sum of
-     * the bounds; a difference has no bound.
+     * its terms' bounds, or floors where a term has no bound; a difference has no bound.
      *
-     * @return array{0: bool, 1: ?float}|null
+     * @return array{0: bool, 1: ?float, 2: ?float}|null
      */
-    private function mathSum(string $value, int &$position, int $depth, float $rem, ?float $em): ?array
+    private function mathSum(string $value, int &$position, int $depth, ?float $rem, ?float $em): ?array
     {
         $left = $this->mathProduct($value, $position, $depth, $rem, $em);
 
@@ -2115,22 +2167,26 @@ class CssParser
                 return null; // a length and a number cannot be added
             }
 
-            $left = [$left[0], $operator === '+' && $left[1] !== null && $right[1] !== null ? $left[1] + $right[1] : null];
+            $a = $left[1] ?? $left[2];
+            $b = $right[1] ?? $right[2];
+            $sum = $operator === '+' && $a !== null && $b !== null ? $a + $b : null;
 
-            if ($left[1] !== null && ! is_finite($left[1])) {
+            if ($sum !== null && ! is_finite($sum)) {
                 return null;
             }
+
+            $left = [$left[0], $sum, $sum];
         }
 
         return $left;
     }
 
     /**
-     * Operands joined by * and /. A positive number times a length scales its bound; a quotient has no bound.
+     * Operands joined by * and /. A positive number times a length scales its bound and floor; a quotient has none.
      *
-     * @return array{0: bool, 1: ?float}|null
+     * @return array{0: bool, 1: ?float, 2: ?float}|null
      */
-    private function mathProduct(string $value, int &$position, int $depth, float $rem, ?float $em): ?array
+    private function mathProduct(string $value, int &$position, int $depth, ?float $rem, ?float $em): ?array
     {
         $left = $this->mathFactor($value, $position, $depth, $rem, $em);
 
@@ -2154,18 +2210,20 @@ class CssParser
             }
 
             if ($operator === '/') {
-                $left = [$left[0], null];
+                $left = [$left[0], null, null];
 
                 continue;
             }
 
-            [$number, $length] = $left[0] ? [$right[1], $left] : [$left[1], $right];
-            $left = match (true) {
-                ! $length[0] => [false, $number !== null && $length[1] !== null ? $number * $length[1] : null],
-                default => [true, $number !== null && $number > 0 && $length[1] !== null ? $number * $length[1] : null],
-            };
+            [$number, $operand] = $left[0] ? [$right[1], $left] : [$left[1], $right];
+            $scale = $number !== null && ($number > 0 || ! $operand[0]);
+            $left = [
+                $operand[0],
+                $scale && $operand[1] !== null ? $number * $operand[1] : null,
+                $scale && $operand[2] !== null ? $number * $operand[2] : null,
+            ];
 
-            if ($left[1] !== null && ! is_finite($left[1])) {
+            if (($left[1] !== null && ! is_finite($left[1])) || ($left[2] !== null && ! is_finite($left[2]))) {
                 return null;
             }
         }
@@ -2174,11 +2232,12 @@ class CssParser
     }
 
     /**
-     * calc() and parentheses (one argument), min() (every bound known), max() (the known bounds) and clamp(): at least
-     * its minimum, and at least the smaller of its value and maximum. Numbers are exact, so they need every argument.
+     * calc() and parentheses (one argument, floor kept), min() (every bound known), max() (the known bounds) and
+     * clamp(): at least its minimum, and at least the smaller of its value and maximum. Numbers are exact, so they need
+     * every argument.
      *
-     * @param  list<array{0: bool, 1: ?float}>  $arguments
-     * @return array{0: bool, 1: ?float}|null
+     * @param  list<array{0: bool, 1: ?float, 2: ?float}>  $arguments
+     * @return array{0: bool, 1: ?float, 2: ?float}|null
      */
     private function mathFunction(string $function, array $arguments): ?array
     {
@@ -2203,21 +2262,26 @@ class CssParser
             return null;
         }
 
+        if ($function === '' || $function === 'calc') {
+            return $arguments[0];
+        }
+
         $known = array_values(array_filter($bounds, fn (?float $bound): bool => $bound !== null));
 
         if (! $length && count($known) !== count($bounds)) {
-            return [false, null];
+            return [false, null, null];
         }
 
-        return [$length, match ($function) {
-            '', 'calc' => $bounds[0],
+        $bound = match ($function) {
             'min' => count($known) === count($bounds) ? min($known) : null,
             'max' => $known === [] ? null : max($known),
             'clamp' => match (true) {
                 $bounds[1] !== null && $bounds[2] !== null => max($bounds[0] ?? -INF, min($bounds[1], $bounds[2])),
                 default => $bounds[0],
             },
-        }];
+        };
+
+        return [$length, $bound, $bound];
     }
 
     /** Today's estimate of a font-size value, used where there is no lower bound. */

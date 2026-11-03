@@ -355,6 +355,14 @@ class CssParserTest extends TestCase
             'parentheses outside a function' => ['(16px)', null],
             'undefined custom property' => ['var(--undefined)', null],
             'custom property fallback' => ['var(--undefined, 20px)', 20.0],
+            'negative absolute term' => ['calc(40px + -10px)', 30.0],
+            'viewport term in a sum counts as zero' => ['calc(12px + 0.5vw)', 12.0],
+            'scaled container term in a sum counts as zero' => ['calc(12px + 2 * 1cqi)', 12.0],
+            'viewport term in a nested sum' => ['calc(2px + (10px + 1vw))', 12.0],
+            'negative viewport term' => ['calc(12px + -1vw)', null],
+            'viewport term alone in calc' => ['calc(5vw)', null],
+            'min with a viewport sum' => ['min(20px, calc(12px + 1vw))', 12.0],
+            'min with a viewport argument' => ['min(20px, 1vw)', null],
         ];
     }
 
@@ -370,7 +378,10 @@ class CssParserTest extends TestCase
     {
         $this->assertEqualsWithDelta(20.0, $this->lowerBound('html{font-size:62.5%} p{font-size:2rem}'), 0.001);
         $this->assertEqualsWithDelta(32.0, $this->lowerBound('html{font-size:2rem} p{font-size:1rem}'), 0.001, 'rem on the root is relative to the initial size');
-        $this->assertEqualsWithDelta(32.0, $this->lowerBound('html{font-size:2vw} p{font-size:2rem}'), 0.001, 'an unknown root size counts as 16px');
+        $this->assertNull($this->lowerBound('html{font-size:2vw} p{font-size:2rem}'), 'a root font-size without a bound makes rem unknown');
+        $this->assertEqualsWithDelta(18.0, $this->lowerBound('html{font-size:calc(12px + 0.5vw)} p{font-size:1.5rem}'), 0.001, 'the root bound is 12px');
+        $this->assertNull($this->lowerBound('html{font-size:5vw} p{font-size:1.5rem}'));
+        $this->assertEqualsWithDelta(32.0, $this->lowerBound('p{font-size:2rem}'), 0.001, 'without a root rule rem is 16px');
 
         $unknownParent = '<div class="a"><p id="t">x</p><h1 id="h">x</h1></div>';
         $this->assertNull($this->lowerBound('.a{font-size:5vw}', $unknownParent), 'inherits an unknown size');
@@ -379,6 +390,27 @@ class CssParserTest extends TestCase
         $this->assertEqualsWithDelta(16.0, $this->lowerBound('.a{font-size:5vw} p{font-size:1rem}', $unknownParent), 0.001);
         $this->assertEqualsWithDelta(32.0, $this->lowerBound('.a{font-size:1rem}', '<div class="a"><h1 id="t">x</h1></div>'), 0.001, 'the UA heading size');
         $this->assertNull($this->lowerBound('.a{font-size:5vw}', '<div class="a"><h1 id="t">x</h1></div>'));
+    }
+
+    public function test_negative_relative_terms_have_no_bound(): void
+    {
+        $this->assertNull($this->lowerBound('.a{font-size:max(16px, 5vw)} p{font-size:calc(40px + -50%)}', '<div class="a"><p id="t">x</p></div>'));
+        $this->assertNull($this->lowerBound('.a{font-size:max(16px, 5vw)} p{font-size:calc(40px + -1em)}', '<div class="a"><p id="t">x</p></div>'));
+        $this->assertNull($this->lowerBound('html{font-size:max(16px,2vw)} p{font-size:calc(40px + -1rem)}'));
+    }
+
+    public function test_form_controls_and_sub_sup_use_the_ua_font_size(): void
+    {
+        foreach (['button', 'select', 'textarea'] as $tag) {
+            $this->assertEqualsWithDelta(13.333, $this->lowerBound('body{font-size:24px}', "<$tag id=\"t\">x</$tag>"), 0.001, $tag);
+        }
+
+        $this->assertEqualsWithDelta(13.333, $this->lowerBound('body{font-size:5vw}', '<input id="t" value="x">'), 0.001, 'an absolute size, also under a fluid parent');
+        $this->assertEqualsWithDelta(24.0, $this->lowerBound('body{font-size:24px} button{font:inherit}', '<button id="t">x</button>'), 0.001, 'a rule sets the size');
+        $this->assertEqualsWithDelta(24.0, $this->lowerBound('body{font-size:24px} button{font-size:100%}', '<button id="t">x</button>'), 0.001);
+        $this->assertEqualsWithDelta(19.92, $this->lowerBound('body{font-size:24px}', '<p><sub id="t">x</sub></p>'), 0.001);
+        $this->assertEqualsWithDelta(19.92, $this->lowerBound('body{font-size:24px}', '<p><sup id="t">x</sup></p>'), 0.001);
+        $this->assertEqualsWithDelta(24.0, $this->lowerBound('body{font-size:24px} sup{font-size:100%}', '<p><sup id="t">x</sup></p>'), 0.001);
     }
 
     public function test_font_size_px_falls_back_to_the_estimate_without_a_lower_bound(): void
@@ -442,6 +474,10 @@ class CssParserTest extends TestCase
             'bolder then lighter from 550' => ['div{font-weight:550} p{font-weight:bolder} span{font-weight:lighter}', '<div><p><span id="t">x</span></p></div>', true],
             'bolder twice from 100' => ['div{font-weight:100} p{font-weight:bolder} span{font-weight:bolder}', '<div><p><span id="t">x</span></p></div>', true],
             'lighter then bolder from 100' => ['div{font-weight:100} p{font-weight:lighter} span{font-weight:bolder}', '<div><p><span id="t">x</span></p></div>', false],
+            'strong is bolder of a normal parent' => ['p{color:#111}', '<p><strong id="t">x</strong></p>', true],
+            'strong is bolder of a light parent' => ['p{font-weight:300}', '<p><strong id="t">x</strong></p>', false],
+            'b is bolder of a semi-light parent' => ['p{font-weight:350}', '<p><b id="t">x</b></p>', true],
+            'th keeps the UA bold' => ['table{font-weight:300}', '<table><tr><th id="t">x</th></tr></table>', true],
         ];
     }
 
@@ -451,6 +487,42 @@ class CssParserTest extends TestCase
         [$parser, $document] = $this->parsed($css, $body);
 
         $this->assertSame($bold, $parser->isBold($this->target($document)));
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function unknownWeights(): array
+    {
+        $chain = implode(';', array_map(fn (string $name, string $next) => "--$name:var(--$next)", range('a', 'j'), range('b', 'k')));
+
+        return [
+            'revert-layer' => ['@layer base{.t{font-weight:700}} .t{font-weight:revert-layer}', '<p class="t" id="t">x</p>'],
+            'revert' => ['.t{font-weight:revert}', '<p class="t" id="t">x</p>'],
+            'approximate substitution' => [':root{--fw:400} body:has(.x) .t{--fw:700} .t{font-weight:var(--fw)}', '<div class="x"></div><p class="t" id="t">x</p>'],
+            'var chain deeper than the limit' => [".t{{$chain};--k:700;font-weight:var(--a)}", '<p class="t" id="t">x</p>'],
+            'system font' => ['.t{font:caption}', '<p class="t" id="t">x</p>'],
+            'system font in the shorthand of a heading' => ['h3{font:caption}', '<h3 id="t">x</h3>'],
+            'inherited from an unknown weight' => ['div{font-weight:revert-layer}', '<div><p id="t">x</p></div>'],
+            'bolder of an unknown weight' => ['div{font:caption} p{font-weight:bolder}', '<div><p id="t">x</p></div>'],
+        ];
+    }
+
+    #[DataProvider('unknownWeights')]
+    public function test_uncertain_weights_have_unknown_boldness(string $css, string $body): void
+    {
+        [$parser, $document] = $this->parsed($css, $body);
+
+        $this->assertNull($parser->boldness($this->target($document)));
+        $this->assertFalse($parser->isBold($this->target($document)));
+    }
+
+    public function test_boldness_of_known_weights(): void
+    {
+        [$parser, $document] = $this->parsed(':root{--w:700} .b{font-weight:var(--w)} .n{font-weight:var(--undefined)}', '<p class="b" id="b">x</p><p class="n" id="n">x</p><h2 id="h">x</h2>');
+        $byId = $document->elementsById();
+
+        $this->assertTrue($parser->boldness($byId['b']));
+        $this->assertFalse($parser->boldness($byId['n']), 'an undefined reference is invalid at computed-value time and inherits');
+        $this->assertTrue($parser->boldness($byId['h']));
     }
 
     public function test_font_size_math_is_capped_in_depth_and_length(): void

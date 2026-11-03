@@ -114,6 +114,20 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame(4.5, $violation->params['required']);
     }
 
+    public function test_strong_is_bolder_of_a_light_parent(): void
+    {
+        $violations = $this->analyze($this->page('body{font-weight:300} strong{font-size:20px;color:#8a8a8a}', '<strong>T</strong>'));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'strong', severity: Severity::Error);
+        $this->assertSame(4.5, $violation->params['required']);
+    }
+
+    public function test_form_controls_do_not_inherit_a_large_size(): void
+    {
+        $violation = $this->assertHasViolation($this->analyze($this->page('body{font-size:24px} button{color:#8a8a8a}', '<button>Go</button>')), 'contrast.insufficient', element: 'button', severity: Severity::Error);
+        $this->assertSame(4.5, $violation->params['required']);
+    }
+
     public function test_css_classes_cascade_and_inheritance(): void
     {
         $this->assertHasViolation($this->analyze($this->page('.muted { color: #999999; background-color: #aaaaaa; }', '<p class="muted" id="target">Hard to read</p>')), 'contrast.insufficient', element: 'p#target.muted');
