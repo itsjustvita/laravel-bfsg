@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-11-03
+
+A quality release: contrast measures far more pages exactly and says so when it cannot, in-process fetching and every output path are hardened, and the MCP server no longer ends on a failing tool. There are no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names or the JSON report shape; findings, scores, severities and exit codes change only where listed below. See [UPGRADE.md](UPGRADE.md).
+
+### Fixed
+- HTML parsing: documents nested deeper than libxml's limit are parsed (inputs up to 1 MiB with `LIBXML_PARSEHUGE`; containers beyond 256 levels are unwrapped so no content is lost and the analysis cost stays bounded); a leading BOM is stripped; documents without `<html>` and with a late UTF-8 `<meta>` declaration are detected correctly; the node libxml 2.14+ creates for the encoding hint no longer ends up in the DOM, so results are identical on old and new systems; void-element closing and charset detection are linear on adversarial input; `@click` / `#slot` style attributes survive parsing.
+- CSS: native nesting (`&`, nested rules) is flattened; modern colour syntax is parsed (`lab()`, `lch()`, `oklab()`, `oklch()`, `hwb()`, `color()`, `color-mix()`, hue units, relative keywords) and a colour that cannot be parsed makes the result approximate instead of wrong; gradient scanning is linear and non-finite numbers are rejected.
+- Contrast: custom properties are resolved per element with inheritance and fallbacks (Tailwind v3, Bootstrap 5.3, Filament); `inherit` and `currentColor` are exact; font sizes are bounded through `var()`, `calc()`, `clamp()`, `min()`/`max()` and the `font` shorthand, so large text is recognised through them; form controls and `sub`/`sup` use their user-agent sizes, `b`/`strong` use `bolder`.
+- `bfsg:history`: `--days` and `--limit` are validated, operational errors exit 2 (see Changed), and `--url` filters and MCP `get_history` match normalised URLs (lowercase scheme and host, default port dropped, query and fragment removed).
+- In-process fetching: output the application writes outside the response (`echo`, `dump()`, `ob_flush()`) no longer reaches stdout, scoped container instances and `Context` are reset for each page and restored afterwards, and an `APP_URL` with a sub-path works.
+- MCP: a tool that fails returns an error (`isError`) instead of crashing the server; error texts are valid UTF-8 without control characters; the JSON of every tool survives invalid UTF-8.
+
+### Changed
+Contrast verdicts (the headline of this release):
+- An uncertain measurement is never a definite Error. An unknown colour (background image or gradient, an image or video behind the text, an unresolvable colour function or custom property) is a Warning tagged `approximate` when the estimate fails, and the new Notice `contrast.unverifiable` when it passes. An unknown font size is an Error only below 3:1 (it fails even large text), a Warning tagged `approximate` below 4.5:1, and a pass above. An unknown weight in the 18.66px to 24px range counts as an unknown size. A truncated style index gives a Warning when the estimate fails and stays silent when it passes.
+- Text of inactive components is exempt: disabled controls, the content of `fieldset[disabled]`, `[aria-disabled="true"]` subtrees and labels of disabled controls.
+- Text that is only `aria-hidden` is visible and is now measured.
+- `opacity: 0` skips the text only when the zero is certain and unconditional (not from a breakpoint rule, `var()` or an approximate value); otherwise the text is measured.
+- Viewport (`@media` width and similar) rules never hide an element; they can still reveal one, so `hidden md:block` stays measured.
+- Preference media (`prefers-color-scheme`, `prefers-contrast`, `forced-colors`, `inverted-colors`, `prefers-reduced-transparency`) are evaluated against the default preferences: queries that match them apply as base styles, others (dark mode) are ignored.
+- Results that hit a resource budget (the 5 s deadline, 500 distinct style chains, size caps on custom-property data, selector lengths such as 4 KiB, and the entry cap of the custom-property index) are approximate instead of silently exact; a truncated analysis still ends with `analysis_truncated`.
+- `contrast.insufficient` and `contrast.unverifiable` are grouped by colour signature (colours, requirement, severity, approximate): one finding per group, so a page with 200 identical failures reports one. `meta.occurrences` is the total and `meta.selectors` lists up to 20 further elements; the finding points at the first. Scores change accordingly.
+- `meta.approximate` of `contrast.insufficient` now mirrors the `approximate` tag and `meta.large` is `null` when the text size is unknown.
+- Text over a covering image layer (an absolutely positioned or fixed sibling that holds media and no text) is treated as an unknown backdrop; sprite sheets, 0px or 1px elements and headers with text do not trigger it. A translucent element that paints its own background inside the backdrop makes the result approximate.
+- `bfsg:check` CLI and HTML reports show the first element of a grouped contrast finding only; use the JSON report for `meta.occurrences` and `meta.selectors`.
+- `bfsg:check` prints page text on one line (newlines collapse to a space, `--detailed` snippets included) and strips control characters.
+- `bfsg:history` exits 2 (was 1) for a missing table, a database error and `--trend` without `--url`, and 2 for an invalid `--days` or `--limit`.
+- Rows stored before 3.1 with an uppercase host or a default port (`:80`, `:443`) in `bfsg_reports.url` no longer match `bfsg:history --url` and MCP `get_history` filters, which now normalise the URL.
+- Guarded MCP fetches (`analyze_url`, `generate_report`) are refused when a proxy is in effect, unless `bfsg.mcp.allow_proxy` is true (see Added).
+- Global `Http` configuration (`Http::globalOptions()`, `globalMiddleware()`, `globalRequestMiddleware()`, `globalResponseMiddleware()`, for example `proxy` or `verify`) no longer applies to the package's requests: `bfsg:check`, the MCP tools, logins and stylesheet fetches ignore it. `Http::fake()` and `Http::preventStrayRequests()` still work.
+- `analyze_html` rejects HTML larger than 5 MiB, like a fetched page.
+- MCP error texts stay English.
+- CI: PHP 8.5 is tested next to 8.2 to 8.4 (the package supports 8.2 to 8.5), `laravel/mcp` 1.x is tested next to 0.6.4, there is a leg without the optional packages and a leg on Ubuntu 24.04 with libxml 2.9; the live test runs on Ubuntu 24.04.
+
+### Added
+- `contrast.unverifiable` (Notice, WCAG 1.4.3, tag `approximate`, params `foreground`, `background`): text over an image, gradient or unparsed colour whose estimate passes; verify it by hand. Translations in `lang/en` and `lang/de`. At level AAA it is the only notice for such text.
+- `bfsg.mcp.allow_proxy` (`BFSG_MCP_ALLOW_PROXY`, default `false`): allow guarded MCP fetches through a proxy, without address pinning. With a published `config/bfsg.php` the env variable has no effect (the config is merged shallowly): add the `allow_proxy` key under `mcp` in your file.
+- `bfsg.mcp.boost` (`BFSG_MCP_BOOST`, default `true`): `false` keeps the tools out of Laravel Boost's MCP server. Same note for published configs.
+- A warning when the application wrote output outside the response during an in-process fetch (`report.fetch_warnings.stray_output`, en and de), shown by `bfsg:check` on stderr.
+
+### Security
+- Terminal escapes: page-derived text in `bfsg:check` and `bfsg:history` has C0, DEL, C1 and bidi control characters removed and invalid UTF-8 repaired before it reaches the terminal.
+- GitHub Actions workflow commands: page text is printed on one line in CLI output, so a page can no longer start a stdout line with `::notice`, `::add-mask::` or `::stop-commands::`; the same holds for inline text in Markdown reports.
+- Markdown injection: Markdown reports escape inline markup, HTML and table pipes in page text.
+- The JSON report escapes U+0080 to U+009F and the bidi controls as `\uXXXX` (lossless, same shape).
+- Global `Http` middleware and options no longer leak into the package's requests, in particular credentials and tokens it sends (see Changed).
+- Guarded fetches refuse proxies (SSRF protection by address pinning cannot be enforced through one) unless `bfsg.mcp.allow_proxy` is set.
+- A failing MCP tool can no longer end the server, and its error text cannot carry control characters or credentials from URLs.
+
+### Known gaps
+- The warning for very deeply nested markup (`HtmlDocument::warnings()`) is not shown in reports yet. Contrast of deep pages is still measured with the unwrapped content.
+- `bfsg:check --browser` inlines stylesheets with the old reading of `not (…)` and preference media queries.
+- Not captured in-process: `dd()` and `exit` end the process, and writes to `STDOUT` through `fwrite()` bypass the capture.
+
 ## [3.0.0] - 2026-09-24
 
 A rewrite of the package's core with breaking changes: typed results (`AnalysisResult`, `Violation`) instead of nested arrays, one analyzer registry for every entry point, English and German messages, all 16 analyzers reworked against WCAG 2.1, and a `bfsg:check` command with exit codes for CI. Read [UPGRADE.md](UPGRADE.md) before upgrading from 2.x.
@@ -432,3 +486,20 @@ German TYPO3 sites. Analyzer output is now more consistent, less noisy, and Germ
 - Laravel-Integration mit Service Provider und Facade
 - Umfassende Testsuite
 - MIT-Lizenz
+
+[Unreleased]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.2.4...v3.0.0
+[2.2.4]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.2.2...v2.2.4
+[2.2.2]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.2.1...v2.2.2
+[2.2.1]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.2.0...v2.2.1
+[2.2.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.5.1...v2.0.0
+[1.5.1]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/itsjustvita/laravel-bfsg/releases/tag/v1.0.0

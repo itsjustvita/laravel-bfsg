@@ -1,5 +1,58 @@
 # Upgrading
 
+## From 3.0 to 3.1
+
+3.1 has no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names or the JSON report shape. Requirements are unchanged (PHP 8.2 to 8.5, Laravel 12 or 13, `laravel/mcp` `^0.6.4 || ^1.0`). What changes is what the analyzers report and how the commands behave; check your CI thresholds, which may see different counts and scores.
+
+1. `composer require itsjustvita/laravel-bfsg:^3.1`. No migration is needed.
+2. If you published `config/bfsg.php`, add the new keys under `mcp` by hand if you want them (see "Config" below); the config is merged shallowly, so env variables alone have no effect.
+3. Re-run your accessibility checks and re-baseline any score threshold (`--min-score`).
+
+### Contrast findings
+
+- **Fewer, grouped findings.** `contrast.insufficient` and `contrast.unverifiable` are grouped by colour signature, one finding per group. The finding points at the first element; `meta.occurrences` holds the total and `meta.selectors` up to 20 further elements. The CLI and HTML reports show only the first element, so read the JSON report if you need the others. Code that counts `contrast.insufficient` findings as a number of elements must read `meta.occurrences`.
+- **Uncertain is never a definite Error.** A failing estimate with an unknown colour (image, gradient, unresolvable colour function or custom property) is a Warning tagged `approximate`; an unknown font size is an Error only below 3:1, a Warning below 4.5:1. If your CI fails on `error` only, some previous errors are now warnings, and a few results that were wrongly exact are now correctly uncertain.
+- **New `contrast.unverifiable` (Notice).** Text over an image, gradient or unparsed colour whose estimate passes. Notices do not affect `--fail-on=error|warning` or `isAccessible()`, but they do count in the score. Verify these places with a browser-based tool.
+- **New findings** where element-level custom properties were ignored before (Tailwind v3, Bootstrap 5.3, Filament), and for text that is only `aria-hidden` (it is visible, so it is measured).
+- **Fewer findings** for inactive controls (disabled controls, `fieldset[disabled]`, `[aria-disabled="true"]`, labels of disabled controls), for dark-mode and other preference media rules (evaluated against the default preferences), for viewport rules that used to hide elements (they never hide now) and for large text recognised through `var()`, `calc()` and `clamp()`.
+- `opacity: 0` skips the text only when the zero is certain and unconditional.
+- `meta.approximate` of `contrast.insufficient` mirrors the `approximate` tag, and `meta.large` may be `null` (unknown size). Consumers of the JSON report that expect a boolean must accept `null`.
+
+### Commands
+
+- `bfsg:history` exits **2** (was 1) for a missing table, a database error and `--trend` without `--url`, and 2 for an invalid `--days` or `--limit`. Update scripts that test for exit code 1.
+- `bfsg:history --url` and MCP `get_history` normalise the URL (lowercase scheme and host, default port dropped, query and fragment removed). **Rows stored before 3.1 with an uppercase host or a default port no longer match such filters**; filter with the normalised form of what was stored, or let new runs accumulate.
+- `bfsg:check` prints page text on one line (newlines collapse to a space, also in `--detailed` snippets) and strips control characters; output the application writes outside the response while it is rendered in-process is discarded and reported as a warning on stderr.
+
+### Fetching and the MCP server
+
+- **Global `Http` configuration no longer applies.** `Http::globalOptions()`, `globalMiddleware()`, `globalRequestMiddleware()` and `globalResponseMiddleware()` (for example a `proxy` or `verify` option set in a service provider) are ignored by every request the package makes, `bfsg:check` included. Use `fetch.verify_ssl` and `bfsg.mcp.verify_ssl` for TLS, and the standard proxy environment variables where a proxy is needed.
+- **MCP fetches are refused in proxied environments.** While `bfsg.mcp.allowed_hosts` is `null` or empty, `analyze_url` and `generate_report` fail when a proxy is in effect (`HTTPS_PROXY`, `http_proxy`, `ALL_PROXY`, … unless `NO_PROXY` covers the host), because address pinning cannot be enforced through a proxy. Set `bfsg.mcp.allow_proxy` to `true` to allow it. `bfsg:check` is not affected. Fetch warnings are not shown to MCP clients in 3.1.
+- `analyze_html` rejects HTML larger than 5 MiB. A failing tool now returns an error instead of ending the server.
+
+### Config
+
+For a published `config/bfsg.php`, add the new keys under `mcp` (setting only the env variable has no effect with a published file):
+
+```php
+// config/bfsg.php
+return [
+    // ...
+    'mcp' => [
+        'allowed_hosts' => null,
+        'verify_ssl' => true,
+        'allow_proxy' => env('BFSG_MCP_ALLOW_PROXY', false),   // allow guarded fetches through a proxy
+        'boost' => env('BFSG_MCP_BOOST', true),                // false: keep the tools out of Laravel Boost's MCP server
+    ],
+];
+```
+
+Everything else in the config is unchanged. The new `report.fetch_warnings.*` and `contrast.unverifiable` messages are in `lang/en` and `lang/de`; if you published the translations, re-publish them or add the keys.
+
+### Known gaps
+
+The warning for very deeply nested markup is not shown in reports yet, and `bfsg:check --browser` inlines stylesheets with the old reading of `not (…)` and preference media. `dd()`, `exit` and `fwrite(STDOUT)` in an in-process page cannot be captured. The first two gaps are planned for 3.2.
+
 ## From 2.x to 3.0
 
 3.0 is a rewrite of the package's core: typed results instead of nested arrays, one analyzer registry for every entry point, localized messages, a reworked analyzer set, and a `bfsg:check` command with CI-friendly exit codes. Plan for about an hour for a typical application; most of it is updating code that reads violation arrays and CI scripts that call the commands.
