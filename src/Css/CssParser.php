@@ -12,7 +12,10 @@ use Throwable;
  * supported selector subset, and computes text/background colours and font metrics.
  *
  * A rule is an array{selector: string, properties: array<string, array{value: string, important: bool}>,
- * specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}.
+ * specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}.
+ * `conditional`: the rule sits behind a media feature, @supports or @container. `condition`: 'preference' behind a media
+ * query that uses one of PREFERENCE_FEATURES (from @media, <style media> or an inlined <link media>), else 'viewport'
+ * behind any other media feature or @container, else null. Preference rules are not part of the base cascade.
  */
 class CssParser
 {
@@ -48,6 +51,12 @@ class CssParser
 
     /** At-rules whose body is unwrapped (their rules apply unconditionally for static analysis). */
     private const UNWRAPPED_AT_RULES = ['layer', 'supports', 'container', 'scope', 'document', '-moz-document'];
+
+    /** Media features of user preferences: rules behind them are not part of the base cascade (they are another theme). */
+    public const PREFERENCE_FEATURES = ['prefers-color-scheme', 'prefers-contrast', 'forced-colors', 'inverted-colors', 'prefers-reduced-transparency'];
+
+    /** Nesting levels of @media and unwrapped at-rules followed; deeper blocks are dropped and the results marked truncated. */
+    private const MAX_AT_RULE_DEPTH = 16;
 
     private const FONT_KEYWORDS = [
         'xx-small' => 9.0, 'x-small' => 10.0, 'small' => 13.0, 'medium' => 16.0,
@@ -93,7 +102,7 @@ class CssParser
     /** `bolder` and `lighter` (CSS Fonts): [parent weight below, bolder, lighter] per row; null keeps the parent's weight. */
     private const RELATIVE_WEIGHTS = [[100, 400, null], [350, 400, 100], [550, 700, 100], [750, 900, 400], [900, 900, 700], [PHP_FLOAT_MAX, null, 700]];
 
-    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
+    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
     protected array $rules = [];
 
     /** @var array<string, list<int>> node path => positions in rules() of the matching rules that carry one of INDEXED_PROPERTIES */
@@ -147,6 +156,12 @@ class CssParser
     /** @var array<string, ?float> node path => computed font weight (null: unknown) */
     private array $fontWeightCache = [];
 
+    /** Whether a viewport rule declares display or visibility (hidesElement() then also evaluates the cascade without them). */
+    private bool $viewportVisibility = false;
+
+    /** @var array<string, array<string, array{value: string, important: bool}>> node path => display and visibility without viewport rules */
+    private array $staticVisibilityCache = [];
+
     /** @var array<string, array<string, array{value: string, important: bool}>> */
     private array $declarationCache = [];
 
@@ -156,7 +171,7 @@ class CssParser
     /** @var array<string, string>|null custom property name => value, from :root / html / :host */
     private ?array $customProperties = null;
 
-    /** @var array<string, true> custom property names also declared by non-root or conditional rules (substitution is approximate) */
+    /** @var array<string, true> custom property names also declared by non-root rules of the base cascade (substitution is approximate) */
     private array $overriddenProperties = [];
 
     /** @var array<string, array{0: ?string, 1: bool}> "depth:name" => substituted value (null: unresolvable) and whether it is approximate */
@@ -248,7 +263,8 @@ class CssParser
         $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
-        $this->fontSizeBoundCache = $this->fontWeightCache = [];
+        $this->fontSizeBoundCache = $this->fontWeightCache = $this->staticVisibilityCache = [];
+        $this->viewportVisibility = false;
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
         $this->declaredNames = $this->rootContext = null;
@@ -257,8 +273,12 @@ class CssParser
         $this->inlineCustomProperties = $this->computingProperties = [];
         $this->cachedBytes = 0;
 
+        $media = $document->styleSheetMedia();
+
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
-            foreach ($this->parseStylesheet($css, count($this->rules)) as $rule) {
+            $condition = HtmlDocument::mediaCondition($media[$sheet] ?? '');
+
+            foreach ($this->parseStylesheet($css, count($this->rules), $condition === false ? null : $condition) as $rule) {
                 $rule['sheet'] = $sheet;
                 $this->rules[] = $rule;
             }
@@ -269,12 +289,17 @@ class CssParser
         foreach ($this->rules as $rule) {
             $kind = $this->indexKind($rule);
 
-            if ($kind !== null) {
+            if ($kind !== null && $this->inBaseCascade($rule)) {
                 $counts[$kind]++;
+            }
+
+            if ($rule['condition'] === 'viewport' && (isset($rule['properties']['display']) || isset($rule['properties']['visibility']))) {
+                $this->viewportVisibility = true;
             }
         }
 
-        $this->truncated = $counts['rule'] > self::MAX_INDEXED_RULES || $counts['custom'] > self::MAX_CUSTOM_PROPERTY_RULES;
+        // parseStylesheet() may already have marked the rules truncated (at-rules nested too deep).
+        $this->truncated = $this->truncated || $counts['rule'] > self::MAX_INDEXED_RULES || $counts['custom'] > self::MAX_CUSTOM_PROPERTY_RULES;
 
         return $this;
     }
@@ -381,7 +406,7 @@ class CssParser
         return $document->styleSheets();
     }
 
-    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
     public function rules(): array
     {
         return $this->rules;
@@ -401,13 +426,16 @@ class CssParser
     /**
      * Tokenize one stylesheet into qualified rules. Comments are stripped; @media is kept for
      * all/screen only; @layer, @supports, @container are unwrapped; every other at-rule is dropped.
+     * $condition is the condition of the whole sheet (its media attribute, see HtmlDocument::mediaCondition());
+     * at-rules nested more than MAX_AT_RULE_DEPTH levels deep are dropped and mark the parser truncated.
      *
-     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}>
+     * @param  'preference'|'viewport'|null  $condition
+     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>
      */
-    public function parseStylesheet(string $css, int $orderOffset = 0): array
+    public function parseStylesheet(string $css, int $orderOffset = 0, ?string $condition = null): array
     {
         $rules = [];
-        $this->parseBlock(self::stripComments($css), $rules, $orderOffset);
+        $this->parseBlock(self::stripComments($css), $rules, $orderOffset, $condition !== null, $condition);
 
         return $rules;
     }
@@ -666,14 +694,22 @@ class CssParser
 
     /**
      * Whether the stylesheets hide the element: cascaded display:none on self or an ancestor, or an inherited
-     * visibility:hidden/collapse that no closer element resets to visible.
+     * visibility:hidden/collapse that no closer element resets to visible. Viewport-conditional rules never hide an
+     * element: it counts as hidden only when it is hidden both with them and without them (`md:hidden` is visible
+     * below the breakpoint, `hidden md:block` above it).
      */
     public function hidesElement(DOMElement $element): bool
+    {
+        return $this->hiddenIn($element, false) && (! $this->viewportVisibility || $this->hiddenIn($element, true));
+    }
+
+    /** hidesElement() in one cascade: every rule of the base cascade, or ($static) those without a viewport condition. */
+    private function hiddenIn(DOMElement $element, bool $static): bool
     {
         $visibility = null;
 
         for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
-            $declarations = $this->declarationsFor($node);
+            $declarations = $static ? $this->staticVisibility($node) : $this->declarationsFor($node);
 
             if (strtolower($declarations['display']['value'] ?? '') === 'none') {
                 return true;
@@ -687,6 +723,34 @@ class CssParser
         }
 
         return $visibility === 'hidden' || $visibility === 'collapse';
+    }
+
+    /**
+     * The element's cascaded display and visibility declarations without viewport-conditional rules.
+     *
+     * @return array<string, array{value: string, important: bool}>
+     */
+    private function staticVisibility(DOMElement $element): array
+    {
+        $key = $this->nodeKey($element);
+
+        if (isset($this->staticVisibilityCache[$key])) {
+            return $this->staticVisibilityCache[$key];
+        }
+
+        $winners = [];
+
+        foreach ($this->matchingRules($element) as $rule) {
+            foreach ($rule['condition'] === 'viewport' ? [] : array_intersect_key($rule['properties'], ['display' => true, 'visibility' => true]) as $name => $declaration) {
+                $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']]);
+            }
+        }
+
+        foreach (array_intersect_key($this->inlineStyle($element), ['display' => true, 'visibility' => true]) as $name => $declaration) {
+            $this->keepHeavier($winners, $name, $declaration, [$declaration['important'] ? 1 : 0, 1, 0, 0, 0, PHP_INT_MAX]);
+        }
+
+        return $this->staticVisibilityCache[$key] = array_map(fn (array $winner) => $winner['declaration'], $winners);
     }
 
     /** Whether the element's computed font weight is at least 700 (boldness() === true): an unknown weight is not bold. */
@@ -783,8 +847,11 @@ class CssParser
         return $parent;
     }
 
-    /** @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}>  $rules */
-    private function parseBlock(string $css, array &$rules, int $orderOffset, bool $conditional = false): void
+    /**
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
+     * @param  'preference'|'viewport'|null  $condition
+     */
+    private function parseBlock(string $css, array &$rules, int $orderOffset, bool $conditional = false, ?string $condition = null, int $depth = 0): void
     {
         $position = 0;
         $length = strlen($css);
@@ -797,7 +864,7 @@ class CssParser
             }
 
             if ($css[$position] === '@') {
-                preg_match('/@([\w-]+)/A', $css, $m, 0, $position);
+                preg_match('/@([\w-]++)/A', $css, $m, 0, $position);
                 $name = strtolower($m[1] ?? '');
                 $position += strlen($m[0] ?? '@');
                 [$prelude, $terminator] = $this->readUntil($css, $position, ['{', ';']);
@@ -807,15 +874,29 @@ class CssParser
                 }
 
                 $body = $this->readBlock($css, $position);
+                $media = $name === 'media' ? HtmlDocument::mediaCondition($prelude) : false;
 
-                // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`).
-                if ($name === 'media' && HtmlDocument::mediaAppliesToScreen($prelude)) {
-                    $this->parseBlock($body, $rules, $orderOffset, $conditional || str_contains($prelude, '('));
-                } elseif (in_array($name, self::UNWRAPPED_AT_RULES, true)) {
-                    $this->parseBlock($body, $rules, $orderOffset, $conditional || in_array($name, ['supports', 'container'], true));
+                if ($media === false && ! in_array($name, self::UNWRAPPED_AT_RULES, true)) {
+                    continue; // @font-face, @keyframes, @page, @property, print media, …
                 }
 
-                continue; // @font-face, @keyframes, @page, @property, print media, …
+                if ($depth >= self::MAX_AT_RULE_DEPTH) {
+                    $this->truncated = true; // every nesting level re-reads its body: deeper blocks are dropped
+
+                    continue;
+                }
+
+                // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
+                // features and container queries also put a condition on them (see the class description).
+                $inner = match (true) {
+                    $name === 'media' => $this->strongerCondition($condition, $media),
+                    $name === 'container' => $this->strongerCondition($condition, 'viewport'),
+                    default => $condition,
+                };
+                $innerConditional = $conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true));
+                $this->parseBlock($body, $rules, $orderOffset, $innerConditional, $inner, $depth + 1);
+
+                continue;
             }
 
             [$prelude, $terminator] = $this->readUntil($css, $position, ['{']);
@@ -844,9 +925,22 @@ class CssParser
                     'order' => $orderOffset + count($rules),
                     'sheet' => 0,
                     'conditional' => $conditional,
+                    'condition' => $condition,
                 ];
             }
         }
+    }
+
+    /**
+     * The stronger of two conditions: 'preference' over 'viewport' over none.
+     *
+     * @param  'preference'|'viewport'|null  $outer
+     * @param  'preference'|'viewport'|null  $inner
+     * @return 'preference'|'viewport'|null
+     */
+    private function strongerCondition(?string $outer, ?string $inner): ?string
+    {
+        return $outer === 'preference' || $inner === 'preference' ? 'preference' : ($outer ?? $inner);
     }
 
     /**
@@ -939,8 +1033,8 @@ class CssParser
     }
 
     /**
-     * resolveVariables() plus whether the result is approximate: a substituted name is also declared outside the
-     * unconditional root rules (`.dark { --fg: … }`, `@media (…) { :root { … } }`), so the element may see another value.
+     * resolveVariables() plus whether the result is approximate: a substituted name is also declared outside the root
+     * rules (`.dark { --fg: … }`), so the element may see another value.
      *
      * @return array{0: ?string, 1: bool}
      */
@@ -997,8 +1091,8 @@ class CssParser
     }
 
     /**
-     * Custom properties declared on :root, html or :host outside media features, @supports and @container
-     * (cascade winner), and on <html style>. Names that other rules also declare are recorded as overridden.
+     * Custom properties declared on :root, html or :host by rules of the base cascade (inBaseCascade(); cascade
+     * winner), and on <html style>. Names that other rules of the base cascade also declare are recorded as overridden.
      *
      * @return array<string, string>
      */
@@ -1012,7 +1106,11 @@ class CssParser
         $this->overriddenProperties = [];
 
         foreach ($this->rules as $rule) {
-            $root = ! ($rule['conditional'] ?? false) && in_array(strtolower($rule['selector']), self::ROOT_SELECTORS, true);
+            if (! $this->inBaseCascade($rule)) {
+                continue;
+            }
+
+            $root = in_array(strtolower($rule['selector']), self::ROOT_SELECTORS, true);
 
             foreach ($rule['properties'] as $name => $declaration) {
                 if (! str_starts_with($name, '--')) {
@@ -1385,7 +1483,7 @@ class CssParser
         $names = [];
 
         foreach ($this->rules as $position => $rule) {
-            foreach ($rule['properties'] as $name => $declaration) {
+            foreach ($this->inBaseCascade($rule) ? $rule['properties'] : [] as $name => $declaration) {
                 if (str_starts_with((string) $name, '--')) {
                     $names[$name] = true;
                     $this->declarers[$name][] = $position;
@@ -1514,14 +1612,16 @@ class CssParser
     }
 
     /**
-     * Whether an indexed rule takes part in the base cascade, which declarationsFor() and the custom properties share.
-     * Every rule does; rules behind a media feature, @supports or @container count as if their condition held.
+     * Whether a rule takes part in the base cascade, which declarationsFor(), the custom properties (per element and the
+     * root map) and the index budgets share: every rule except those behind a user-preference media query (dark mode,
+     * forced colours, …: another theme, not the default one). Rules behind other media features, behind @supports and
+     * behind @container count as if their condition held.
      *
-     * @param  array{conditional?: bool}  $rule
+     * @param  array{condition?: 'preference'|'viewport'|null}  $rule
      */
     private function inBaseCascade(array $rule): bool
     {
-        return true;
+        return ($rule['condition'] ?? null) !== 'preference';
     }
 
     /** @param  array{properties: array<string, array{value: string, important: bool}>}  $rule */
@@ -1809,7 +1909,7 @@ class CssParser
         return $custom ? 'custom' : null;
     }
 
-    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool}> */
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
     private function matchingRules(DOMElement $element): array
     {
         $this->buildIndex();
@@ -1829,7 +1929,12 @@ class CssParser
         }
     }
 
-    /** @return array{0: Color, 1: bool} colour and whether it is approximate */
+    /**
+     * The backdrop of the element's text: its own background colour composited over the parent's backdrop (white at the
+     * root), whether that is approximate, and the element's own background colour (null: none) with its uncertainty.
+     *
+     * @return array{0: Color, 1: bool, 2: ?Color, 3: bool}
+     */
     private function background(DOMElement $element): array
     {
         $key = $this->nodeKey($element);
@@ -1838,30 +1943,36 @@ class CssParser
             return $this->backgroundCache[$key];
         }
 
-        [$parent, $approximate] = $element->parentNode instanceof DOMElement
+        [$parent, $approximate, $parentOwn, $parentOwnApproximate] = $element->parentNode instanceof DOMElement
             ? $this->background($element->parentNode)
-            : [new Color(255, 255, 255), false];
+            : [new Color(255, 255, 255), false, null, false];
 
         $value = $this->winningBackground($element);
 
         if ($value === null) {
-            return $this->backgroundCache[$key] = [$parent, $approximate];
+            return $this->backgroundCache[$key] = [$parent, $approximate, null, false];
         }
 
         [$value, $variablesApproximate] = $this->substituteValue($element, $key, $value);
 
         if ($value === null) {
-            return $this->backgroundCache[$key] = [$parent, true];
+            return $this->backgroundCache[$key] = [$parent, true, null, true];
         }
 
-        [$own, $ownApproximate] = Color::fromBackground($value);
+        // CSS-wide keywords and currentcolor of background-color (or the whole `background` shorthand).
+        [$own, $ownApproximate] = match (strtolower(trim($value))) {
+            'inherit' => [$parentOwn, $parentOwnApproximate],
+            'initial', 'unset' => [null, false],
+            'currentcolor' => $this->foreground($element),
+            default => Color::fromBackground($value),
+        };
         $ownApproximate = $ownApproximate || $variablesApproximate;
 
         if ($own === null || $own->a <= 0) {
-            return $this->backgroundCache[$key] = [$parent, $approximate || $ownApproximate];
+            return $this->backgroundCache[$key] = [$parent, $approximate || $ownApproximate, $own, $ownApproximate];
         }
 
-        return $this->backgroundCache[$key] = [$own->a < 1 ? $own->over($parent) : $own, $approximate || $ownApproximate];
+        return $this->backgroundCache[$key] = [$own->a < 1 ? $own->over($parent) : $own, $approximate || $ownApproximate, $own, $ownApproximate];
     }
 
     /** @return array{0: Color, 1: bool} */
@@ -1884,6 +1995,17 @@ class CssParser
         }
 
         [$value, $variablesApproximate] = $this->substituteValue($element, $key, $value);
+        $keyword = $value === null ? null : strtolower(trim($value));
+
+        // inherit, unset (color inherits) and currentcolor (on `color` itself the inherited colour) are the parent's colour.
+        if ($keyword === 'inherit' || $keyword === 'unset' || $keyword === 'currentcolor') {
+            return $this->foregroundCache[$key] = [$parent, $approximate || $variablesApproximate];
+        }
+
+        if ($keyword === 'initial') {
+            return $this->foregroundCache[$key] = [new Color(0, 0, 0), $approximate || $variablesApproximate];
+        }
+
         $own = $value === null || Color::isUnresolvable($value) ? null : Color::parse($value);
 
         if ($own === null) {

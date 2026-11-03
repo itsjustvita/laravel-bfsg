@@ -262,6 +262,43 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame(['#fbbf24', '#fffbeb'], [$violation->params['foreground'], $violation->params['background']]);
     }
 
+    public function test_dark_mode_rules_are_not_the_base_theme(): void
+    {
+        $css = 'body{background:#fff;color:#111} .muted{color:#666} @media (prefers-color-scheme: dark){body{background:#111;color:#eee}}';
+
+        $this->assertNoViolation($this->analyze($this->page($css, '<p class="muted">x</p>')), 'contrast.insufficient');
+    }
+
+    public function test_style_element_with_preference_media_is_ignored(): void
+    {
+        $html = '<html><head><style media="(prefers-color-scheme: dark)">p{color:#eee}</style></head><body><p>x</p></body></html>';
+
+        $this->assertNoViolation($this->analyze($html), 'contrast.insufficient');
+    }
+
+    public function test_viewport_conditional_display_none_does_not_hide(): void
+    {
+        $css = '@media (min-width:768px){.md\\:hidden{display:none}} .low{color:#ccc}';
+
+        $this->assertHasViolation($this->analyze($this->page($css, '<p class="md:hidden low">x</p>')), 'contrast.insufficient', severity: Severity::Error);
+    }
+
+    public function test_inherited_link_and_button_colours_are_definite(): void
+    {
+        $css = '.text-gray-300{--tw-text-opacity:1;color:rgb(209 213 219 / var(--tw-text-opacity))} a,button{color:inherit}';
+        $violations = array_filter(
+            $this->analyze($this->page($css, '<p class="text-gray-300">Text <a href="#">link</a> <button>button</button></p>')),
+            fn ($violation) => $violation->key === 'contrast.insufficient',
+        );
+
+        $this->assertNotEmpty($violations);
+
+        foreach ($violations as $violation) {
+            $this->assertSame(Severity::Error, $violation->severity, (string) $violation->element);
+            $this->assertFalse($violation->meta['approximate'], (string) $violation->element);
+        }
+    }
+
     public function test_custom_properties_inherit_from_ancestors(): void
     {
         $violations = $this->analyze($this->page('.card{--muted:#bbb} .meta{color:var(--muted)}', '<div class="card"><section><p class="meta">Inherited</p></section></div>'));

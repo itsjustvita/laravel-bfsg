@@ -6,6 +6,7 @@ use Illuminate\Auth\GenericUser;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Http\FetchedPage;
 use ItsJustVita\LaravelBfsg\Http\FetchFailed;
@@ -172,6 +173,26 @@ class UrlFetcherTest extends TestCase
         $this->assertStringContainsString('<link rel=stylesheet href=missing.css>', $page->html);
         $this->assertSame(['Stylesheet missing.css could not be loaded.'], $page->warnings);
         Http::assertNotSent(fn (Request $request) => in_array($request->url(), ['https://cdn.example.net/lib.css', 'https://example.com/print.css', 'https://example.com/alt.css'], true));
+    }
+
+    public function test_inlined_stylesheets_keep_their_media(): void
+    {
+        $html = '<html><head><link rel="stylesheet" media="(prefers-color-scheme: dark)" href="/dark.css"><link rel="stylesheet" media="screen and (min-width: 1px)" href="/wide.css">'
+            .'<link rel="stylesheet" media="" href="/all.css"></head><body><p>x</p></body></html>';
+
+        Http::fake([
+            'https://example.com/page' => Http::response($html, 200),
+            'https://example.com/dark.css' => Http::response('p { color: #eee }', 200),
+            'https://example.com/wide.css' => Http::response('p { font-size: 20px }', 200),
+            'https://example.com/all.css' => Http::response('p { font-weight: 700 }', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertStringContainsString('<style data-bfsg-inlined="/dark.css" media="(prefers-color-scheme: dark)">p { color: #eee }</style>', $page->html);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/wide.css" media="screen and (min-width: 1px)">p { font-size: 20px }</style>', $page->html);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/all.css">p { font-weight: 700 }</style>', $page->html);
+        $this->assertSame(['preference', 'viewport', null], array_column(HtmlDocument::fromHtml($page->html)->cssParser()->rules(), 'condition'));
     }
 
     public function test_stylesheet_limits_and_the_switch(): void

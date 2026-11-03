@@ -10,7 +10,7 @@ use Throwable;
 
 /**
  * Replaces same-origin `<link rel="stylesheet">` elements whose media applies to screen with
- * `<style data-bfsg-inlined="{href}">`, in place so the cascade order is kept. At most `max_stylesheets`
+ * `<style data-bfsg-inlined="{href}">` (with the link's `media`, if any), in place so the cascade order is kept. At most `max_stylesheets`
  * are loaded, each at most `max_stylesheet_bytes`; failures leave the link and add a warning. Links inside comments,
  * `<script>`, `<style>`, `<template>`, `<noscript>`, `<textarea>` and `<title>` are not stylesheets and stay untouched.
  */
@@ -171,7 +171,11 @@ final class StylesheetInliner
             return $tag;
         }
 
-        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES).'">'.str_ireplace('</style', '<\/style', $css).'</style>';
+        // The media query list goes along, so the cascade sees it as it sees <style media> (CssParser conditions).
+        $media = trim($attributes['media'] ?? '');
+        $media = $media === '' ? '' : ' media="'.htmlspecialchars($media, ENT_QUOTES).'"';
+
+        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES).'"'.$media.'>'.str_ireplace('</style', '<\/style', $css).'</style>';
     }
 
     /** @return array<string, string> lowercased attribute name => decoded value */

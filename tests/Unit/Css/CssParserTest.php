@@ -161,7 +161,8 @@ class CssParserTest extends TestCase
     {
         $this->assertSame(['#333333', '#ffffff', true], $this->colors('body { color: #333 } p { color: var(--muted) }', '<p id="t">x</p>'));
         $this->assertSame(['#000000', '#eeeeee', true], $this->colors('body { background: #eee } p { background: var(--bg) }', '<p id="t">x</p>'));
-        $this->assertSame(['#333333', '#ffffff', true], $this->colors('body { color: #333 } p { color: currentColor }', '<p id="t">x</p>'));
+        $this->assertSame(['#333333', '#ffffff', true], $this->colors('body { color: #333 } p { color: revert }', '<p id="t">x</p>'), 'revert depends on the UA stylesheet');
+        $this->assertSame(['#333333', '#ffffff', false], $this->colors('body { color: #333 } p { color: currentColor }', '<p id="t">x</p>'), 'currentColor is the inherited colour, exactly');
     }
 
     public function test_inherited_resolved_colours_are_exact(): void
@@ -593,6 +594,158 @@ class CssParserTest extends TestCase
         $this->assertFalse($parser->hidesElement($byId['p2']));
     }
 
+    public function test_viewport_rules_never_hide_an_element(): void
+    {
+        [$parser, $document] = $this->parsed(
+            '@media (min-width: 768px) { .md\\:hidden { display: none } .md\\:invisible { visibility: hidden } } '
+                .'.hidden { display: none } @media (min-width: 768px) { .md\\:block { display: block } } '
+                .'@container (min-width: 1px) { .cq\\:hidden { display: none } } @media screen { .screen\\:hidden { display: none } } '
+                .'@media (prefers-reduced-motion: reduce) { .motion\\:hidden { display: none } } @media (forced-colors: active) { .forced\\:hidden { display: none } } '
+                .'@supports (display: grid) { .grid\\:hidden { display: none } }',
+            '<p id="md" class="md:hidden">a</p><p id="inv" class="md:invisible">b</p><p id="reveal" class="hidden md:block">c</p>'
+                .'<div class="hidden md:block"><p id="both" class="md:hidden">d</p></div><p id="cq" class="cq:hidden">e</p>'
+                .'<p id="screen" class="screen:hidden">f</p><p id="motion" class="motion:hidden">g</p><p id="forced" class="forced:hidden">h</p>'
+                .'<p id="grid" class="grid:hidden">i</p><p id="plain" class="hidden">j</p>'
+        );
+        $byId = $document->elementsById();
+
+        $this->assertFalse($parser->hidesElement($byId['md']), 'md:hidden is visible below the breakpoint');
+        $this->assertFalse($parser->hidesElement($byId['inv']));
+        $this->assertFalse($parser->hidesElement($byId['reveal']), 'hidden md:block is visible above the breakpoint');
+        $this->assertTrue($parser->hidesElement($byId['both']), 'hidden below the breakpoint by its parent, above it by itself');
+        $this->assertFalse($parser->hidesElement($byId['cq']), 'container queries are size conditions too');
+        $this->assertTrue($parser->hidesElement($byId['screen']), 'a media type alone is no condition');
+        $this->assertFalse($parser->hidesElement($byId['motion']));
+        $this->assertFalse($parser->hidesElement($byId['forced']), 'preference media is not part of the base cascade');
+        $this->assertTrue($parser->hidesElement($byId['grid']), '@supports applies');
+        $this->assertTrue($parser->hidesElement($byId['plain']));
+    }
+
+    public function test_rules_carry_their_media_condition(): void
+    {
+        $document = HtmlDocument::fromHtml('<html><head><style>'
+            .'.a{color:red} @media screen{.b{color:red}} @media (min-width: 768px){.c{color:red}} @media (prefers-color-scheme: dark){.d{color:red}} '
+            .'@media only screen and (FORCED-COLORS: active){.e{color:red}} @media (min-width: 1px){@media (prefers-contrast: more){.f{color:red}}} '
+            .'@media (inverted-colors: inverted){@media (min-width: 1px){.g{color:red}}} @media (prefers-reduced-motion: reduce){.h{color:red}} '
+            .'@media not print and (prefers-reduced-transparency: reduce){.i{color:red}} @supports (display: grid){.j{color:red}} '
+            .'@container card (min-width: 1px){.k{color:red}} @media (prefers-color-scheme: dark), screen{.l{color:red}} '
+            .'@media print, (hover: hover) and (prefers-color-scheme: dark){.m{color:red}} @media (prefers-color-scheme: dark), (min-width: 1px){.n{color:red}} '
+            .'@layer x{@media (400px <= width <= 700px){.o{color:red}}}'
+            .'</style><style media="(prefers-color-scheme: dark)">.p{color:red}</style><style media="screen and (min-width: 1px)">.q{color:red} @media (forced-colors: active){.r{color:red}}</style>'
+            .'</head><body></body></html>');
+
+        $conditions = array_column((new CssParser)->parse($document)->rules(), 'condition', 'selector');
+
+        $this->assertSame([
+            '.a' => null, '.b' => null, '.c' => 'viewport', '.d' => 'preference', '.e' => 'preference', '.f' => 'preference', '.g' => 'preference',
+            '.h' => 'viewport', '.i' => 'preference', '.j' => null, '.k' => 'viewport', '.l' => null, '.m' => 'preference', '.n' => 'viewport',
+            '.o' => 'viewport', '.p' => 'preference', '.q' => 'viewport', '.r' => 'preference',
+        ], $conditions);
+    }
+
+    public function test_media_condition_of_query_lists(): void
+    {
+        $this->assertNull(HtmlDocument::mediaCondition(''));
+        $this->assertNull(HtmlDocument::mediaCondition(' Screen '));
+        $this->assertNull(HtmlDocument::mediaCondition('not print'));
+        $this->assertSame('viewport', HtmlDocument::mediaCondition('screen and (min-width: 40em)'));
+        $this->assertSame('preference', HtmlDocument::mediaCondition('(prefers-color-scheme:dark)'));
+        $this->assertSame('viewport', HtmlDocument::mediaCondition('(prefers-color-scheme-x: dark)'), 'whole feature names only');
+        $this->assertFalse(HtmlDocument::mediaCondition('print and (prefers-color-scheme: dark)'));
+        $this->assertFalse(HtmlDocument::mediaCondition('not screen, print'));
+        $this->assertFalse(HtmlDocument::mediaCondition(',, ,'), 'only empty queries');
+        $this->assertFalse(HtmlDocument::mediaCondition('not ,'));
+    }
+
+    public function test_at_rules_nested_beyond_the_depth_limit_are_dropped(): void
+    {
+        $nested = fn (int $depth): string => str_repeat('@media (min-width: 1px) { ', $depth).'.deep { color: #eee }'.str_repeat(' }', $depth);
+        $parser = new CssParser;
+
+        $this->assertSame(['.top', '.deep'], array_column($parser->parseStylesheet('.top { color: #111 } '.$nested(16)), 'selector'));
+        $this->assertFalse($parser->isTruncated());
+        $this->assertSame(['.top', '.after'], array_column($parser->parseStylesheet('.top { color: #111 } '.$nested(17).' .after { color: #111 }'), 'selector'));
+        $this->assertTrue($parser->isTruncated(), 'the dropped rules make the results approximate');
+    }
+
+    /** A 1 MB media query list (in a media attribute and in an @media prelude) and 10,000 nested @media blocks. */
+    #[Group('performance')]
+    public function test_hostile_media_queries_stay_linear(): void
+    {
+        $queries = str_repeat('screen and (min-width: 1px) and (hover: hover), ', 21000).'(prefers-color-scheme: dark)';
+        $this->assertGreaterThan(1000000, strlen($queries));
+
+        $start = microtime(true);
+        [$parser] = $this->parsed('</style><style media="'.$queries.'">p { color: #eee }', '<p id="t">x</p>');
+        $this->assertSame(['viewport'], array_column($parser->rules(), 'condition'));
+        $elapsed = microtime(true) - $start;
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('media attribute: %.3f s', $elapsed));
+
+        $query = 'screen'.str_repeat(' and (min-width: 1px)', 48000).' and (forced-colors: active)';
+        $this->assertGreaterThan(1000000, strlen($query));
+        $start = microtime(true);
+        [$parser] = $this->parsed('@media '.$query.' { p { color: #eee } }', '<p id="t">x</p>');
+        $this->assertSame(['preference'], array_column($parser->rules(), 'condition'));
+        $elapsed = microtime(true) - $start;
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('@media prelude: %.3f s', $elapsed));
+        unset($queries, $query, $parser);
+
+        $start = microtime(true);
+        [$parser, $document] = $this->parsed('p { color: #111 } '.str_repeat('@media (min-width: 1px) { ', 10000).'p { color: #eee }'.str_repeat(' }', 10000), '<p id="t">x</p>');
+        $colors = $parser->resolveColors($this->target($document));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(['p'], array_column($parser->rules(), 'selector'));
+        $this->assertSame('#111111', $colors['foreground']->toHex());
+        $this->assertTrue($colors['approximate'], 'rules beyond the depth limit were dropped');
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('nested @media: %.3f s', $elapsed));
+    }
+
+    public function test_preference_media_is_not_part_of_the_base_cascade(): void
+    {
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('p{color:#111} @media (prefers-color-scheme: dark){p{color:#eee}}', '<p id="t">x</p>'));
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root{--fg:#111} @media (forced-colors: active){:root{--fg:CanvasText}} p{color:var(--fg)}', '<p id="t">x</p>'));
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('@media (prefers-contrast: more){:root{--fg:#000}} :host{--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'the root custom properties');
+        $this->assertSame(['#000000', '#ffffff', false], $this->colors('@media (prefers-color-scheme: dark){.x{--fg:#eee}} p{color:var(--fg, #000)}', '<div class="x"><p id="t">x</p></div>'), 'a name declared only there is undefined');
+
+        [$parser] = $this->parsed(':root{--fg:#111} @media (prefers-color-scheme: dark){:root{--fg:#eee}} @media (min-width: 1px){:root{--bg:#fafafa}}', '<p id="t">x</p>');
+        $this->assertSame('#111', $parser->resolveVariables('var(--fg)'));
+        $this->assertSame('#fafafa', $parser->resolveVariables('var(--bg)'), 'viewport rules apply to the root custom properties as well');
+    }
+
+    public function test_colour_keywords_are_exact(): void
+    {
+        [$parser, $document] = $this->parsed('.gray{color:#ccc} a,button{color:inherit}', '<p class="gray">t <a href="#">l</a><button>b</button></p>');
+
+        foreach (['a', 'button'] as $tag) {
+            $colors = $parser->resolveColors($document->query('//'.$tag)[0]);
+
+            $this->assertSame('#cccccc', $colors['foreground']->toHex(), $tag);
+            $this->assertFalse($colors['approximate'], $tag);
+        }
+
+        $body = '<p class="gray">t <a id="t" href="#">l</a></p>';
+        $this->assertSame(['#cccccc', '#ffffff', false], $this->colors('.gray{color:#ccc} a{color:currentColor}', $body));
+        $this->assertSame(['#cccccc', '#ffffff', false], $this->colors('.gray{color:#ccc} a{color:UNSET}', $body));
+        $this->assertSame(['#000000', '#ffffff', false], $this->colors('.gray{color:#ccc} a{color:initial}', $body));
+        $this->assertSame(['#cccccc', '#ffffff', false], $this->colors('.gray{color:#ccc} a{--c:currentcolor;color:var(--c)}', $body), 'currentcolor through var()');
+        $this->assertSame(['#cccccc', '#ffffff', true], $this->colors('.gray{color:#ccc} a{color:revert}', $body), 'revert depends on the UA stylesheet');
+    }
+
+    public function test_background_keywords(): void
+    {
+        $nested = '<div class="p"><p class="c" id="t">x</p></div>';
+
+        $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .c{background-color:inherit}', $nested));
+        $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .c{background:inherit}', $nested));
+        $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .c{background-color:initial}', $nested), 'transparent: the parent shows through');
+        $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .c{background-color:unset}', $nested));
+        $this->assertSame(['#ffffff', '#ffffff', false], $this->colors('.c{color:#fff;background-color:currentcolor}', '<p class="c" id="t">x</p>'));
+        $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .c{background-color:inherit}', '<div class="p"><div><p class="c" id="t">x</p></div></div>'), 'the parent\'s own background is transparent');
+        $this->assertSame(['#000000', '#404040', false], $this->colors('.p{background:rgba(0,0,0,.5)} .c{background-color:inherit}', $nested), 'the parent\'s own translucent colour, composited again');
+        $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .m{background-color:inherit} .c{background-color:inherit}', '<div class="p"><div class="m"><p class="c" id="t">x</p></div></div>'), 'an inherited inherit');
+    }
+
     public function test_custom_properties_resolve_from_the_root_with_fallbacks(): void
     {
         $root = ':root { --fg: #222; --muted: var(--gray-500); --gray-500: oklch(55% 0 0); --Brand: #0000ff } html { --bg: #fafafa }';
@@ -651,7 +804,7 @@ class CssParserTest extends TestCase
     {
         $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors(':root { --fg: #111 } .dark { --fg: #eee } p { color: var(--fg) }', '<div class="dark"><p id="t">x</p></div>'), 'the closest declaration wins');
         $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root { --fg: #111 } html.dark { --fg: #eee } p { color: var(--fg) }', '<p id="t">x</p>'), 'a rule that matches nothing changes nothing');
-        $this->assertSame(['#eeeeee', '#ffffff', false], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'), 'conditional rules apply as they do for color');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root { --fg: #111 } @media (prefers-color-scheme: dark) { :root { --fg: #eee } } p { color: var(--fg) }', '<p id="t">x</p>'), 'preference media is not part of the base cascade, as for color');
         $this->assertSame(['#111111', '#fafafa', false], $this->colors(':root { --fg: #111; --bg: #fafafa } .x { --fg: #222 } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'));
         $this->assertSame(['#111111', '#fafafa', false], $this->colors('@layer theme { :root { --fg: #111 } } @media screen { :root { --bg: #fafafa } } p { color: var(--fg); background: var(--bg) }', '<p id="t">x</p>'), '@layer and plain screen media are unconditional');
     }

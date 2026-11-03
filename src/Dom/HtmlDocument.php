@@ -23,6 +23,19 @@ final class HtmlDocument
     /** Elements nested deeper than this are unwrapped after parsing, so the recursive analyzers stay bounded. */
     public const MAX_DEPTH = 256;
 
+    /** Whitespace that trim() removes around a media query. */
+    private const MEDIA_TRIM = " \t\n\r\0\x0B";
+
+    /** Characters that end a media type (PCRE \s and the opening parenthesis of a feature). */
+    private const MEDIA_TYPE_END = " \t\n\r\f\x0B(";
+
+    private const IDENTIFIER_START = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-';
+
+    private const IDENTIFIER_CHARACTERS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_';
+
+    /** Longest identifier compared with CssParser::PREFERENCE_FEATURES; longer ones cannot be one of them. */
+    private const MAX_FEATURE_NAME_BYTES = 32;
+
     private ?DOMXPath $xpath = null;
 
     private ?CssParser $cssParser = null;
@@ -252,42 +265,113 @@ final class HtmlDocument
         return array_map(fn (DOMElement $style): string => $style->textContent, $this->styleElements());
     }
 
+    /** @return list<string> the media attribute of every screen stylesheet ('' when absent), in the order of styleSheets() */
+    public function styleSheetMedia(): array
+    {
+        return array_map(fn (DOMElement $style): string => $style->getAttribute('media'), $this->styleElements());
+    }
+
     /**
      * Whether a media query list (a media attribute or an @media prelude) applies to a screen.
      * Only the media type and the not/only prefixes are evaluated; media features are ignored.
      */
     public static function mediaAppliesToScreen(string $media): bool
     {
-        $media = strtolower(trim($media));
+        return self::mediaCondition($media) !== false;
+    }
 
-        if ($media === '') {
-            return true;
+    /**
+     * The condition a media query list puts on the rules it guards: false when no query applies to a screen (see
+     * mediaAppliesToScreen()), null when a query applies without a media feature (or the list is empty), else the
+     * weakest condition among the queries that apply: 'viewport' for media features, 'preference' for a query that
+     * uses one of CssParser::PREFERENCE_FEATURES. One pass over the list: strspn()/strcspn() bounded by the query,
+     * no regular expression, and only identifiers of at most MAX_FEATURE_NAME_BYTES are copied.
+     *
+     * @return 'preference'|'viewport'|false|null
+     */
+    public static function mediaCondition(string $media): string|false|null
+    {
+        $length = strlen($media);
+
+        if (strspn($media, self::MEDIA_TRIM) === $length) {
+            return null;
         }
 
-        foreach (explode(',', $media) as $query) {
-            $query = trim($query);
+        $features = array_flip(CssParser::PREFERENCE_FEATURES);
+        $result = false;
 
-            if ($query === '') {
-                continue;
+        for ($position = 0; $position <= $length; $position = $end + 1) {
+            $end = $position + strcspn($media, ',', $position);
+            $condition = self::queryCondition($media, $position, $end, $features);
+
+            if ($condition === null) {
+                return null;
             }
 
-            $negated = false;
-
-            if (str_starts_with($query, 'only ')) {
-                $query = ltrim(substr($query, 5));
-            } elseif (str_starts_with($query, 'not ')) {
-                $negated = true;
-                $query = ltrim(substr($query, 4));
-            }
-
-            $type = str_starts_with($query, '(') ? 'all' : (preg_split('/[\s(]/', $query)[0] ?? '');
-
-            if (in_array($type, ['all', 'screen'], true) !== $negated) {
-                return true;
+            if ($condition !== false && ($result === false || $condition === 'viewport')) {
+                $result = $condition;
             }
         }
 
-        return false;
+        return $result;
+    }
+
+    /**
+     * The condition of the media query between $start and $end: false when it is empty or does not apply to a screen.
+     *
+     * @param  array<string, int>  $features
+     * @return 'preference'|'viewport'|false|null
+     */
+    private static function queryCondition(string $media, int $start, int $end, array $features): string|false|null
+    {
+        $position = $start + strspn($media, self::MEDIA_TRIM, $start, $end - $start);
+        $last = $end;
+
+        while ($last > $position && str_contains(self::MEDIA_TRIM, $media[$last - 1])) {
+            $last--;
+        }
+
+        if ($position >= $last) {
+            return false;
+        }
+
+        $negated = false;
+        $prefix = strtolower(substr($media, $position, 5));
+
+        if ($prefix === 'only ' && $position + 5 < $last) {
+            $position += 5;
+        } elseif (str_starts_with($prefix, 'not ') && $position + 4 < $last) {
+            $negated = true;
+            $position += 4;
+        }
+
+        $position += strspn($media, self::MEDIA_TRIM, $position, $last - $position);
+        $typeLength = $media[$position] === '(' ? 0 : strcspn($media, self::MEDIA_TYPE_END, $position, $last - $position);
+        $type = $typeLength === 0 ? 'all' : ($typeLength <= 6 ? strtolower(substr($media, $position, $typeLength)) : '');
+
+        if (in_array($type, ['all', 'screen'], true) === $negated) {
+            return false;
+        }
+
+        $position += $typeLength;
+        $position += strcspn($media, '(', $position, $last - $position);
+
+        if ($position >= $last) {
+            return null; // a media type alone
+        }
+
+        while ($position < $last) {
+            $position += strcspn($media, self::IDENTIFIER_START, $position, $last - $position);
+            $identifier = strspn($media, self::IDENTIFIER_CHARACTERS, $position, $last - $position);
+
+            if ($identifier > 0 && $identifier <= self::MAX_FEATURE_NAME_BYTES && isset($features[strtolower(substr($media, $position, $identifier))])) {
+                return 'preference';
+            }
+
+            $position += $identifier;
+        }
+
+        return 'viewport';
     }
 
     /**
