@@ -83,10 +83,14 @@ class AuthenticatedHttpClient
         return $this->jar;
     }
 
-    /** The factory every request is built from; credential headers and cookies are added per request for their origin. */
+    /**
+     * The factory every request is built from; credential headers and cookies are added per request for their origin.
+     * The application's global Http middleware and options do not apply (IsolatedHttp); Http::fake() does.
+     */
     public function request(): PendingRequest
     {
-        return Http::timeout($this->timeout)
+        return IsolatedHttp::pendingRequest(Http::getFacadeRoot())
+            ->timeout($this->timeout)
             ->withUserAgent($this->userAgent)
             ->withOptions(['verify' => $this->verifySsl, 'allow_redirects' => false]);
     }

@@ -107,10 +107,16 @@ return [
     | (CURLOPT_RESOLVE), so a DNS answer that changes after the check (rebinding) is never connected to; this needs
     | the curl extension, and without it such fetches fail. TLS verification comes only from verify_ssl; MCP
     | clients cannot switch it off.
+    |
+    | allow_proxy: a proxy resolves the host itself, so the pin cannot be enforced through one. While allowed_hosts
+    | is null or [], a fetch that would go through a proxy (HTTPS_PROXY, https_proxy, http_proxy, ALL_PROXY,
+    | all_proxy or, in the CLI, HTTP_PROXY, as Guzzle and curl read them, unless NO_PROXY covers the host) is
+    | refused; true allows it with a warning. bfsg:check is not affected.
     */
     'mcp' => [
         'allowed_hosts' => null,
         'verify_ssl' => true,
+        'allow_proxy' => env('BFSG_MCP_ALLOW_PROXY', false),
     ],
 
     /*

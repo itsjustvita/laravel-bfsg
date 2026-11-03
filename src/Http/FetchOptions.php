@@ -21,7 +21,9 @@ final class FetchOptions
      *                                                                 by the kernel are not network requests and skip it);
      *                                                                 throws FetchFailed to refuse it (see
      *                                                                 PrivateNetworkGuard). The addresses it returns are
-     *                                                                 pinned (CURLOPT_RESOLVE) for that request
+     *                                                                 pinned (CURLOPT_RESOLVE) for that request; a hop it
+     *                                                                 checks is not sent through a proxy unless
+     *                                                                 `bfsg.mcp.allow_proxy` is true
      */
     public function __construct(
         public readonly ?AuthenticatedHttpClient $client = null,

@@ -2,10 +2,13 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Http;
 
+use GuzzleHttp\Handler\ProxyEnvironment;
+use GuzzleHttp\ProxyOptions;
 use Illuminate\Auth\GenericUser;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Log\Context\Repository;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
@@ -15,13 +18,31 @@ use ItsJustVita\LaravelBfsg\Http\FetchFailed;
 use ItsJustVita\LaravelBfsg\Http\FetchOptions;
 use ItsJustVita\LaravelBfsg\Http\InProcessFetcher;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
+use ItsJustVita\LaravelBfsg\Tests\Support\ProxyVariables;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\VarDumper\VarDumper;
 
 class UrlFetcherTest extends TestCase
 {
+    use ProxyVariables;
+
     private const PAGE = '<!DOCTYPE html><html lang="en"><head><title>Page</title></head><body><main><h1>Hi</h1></main></body></html>';
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        $this->clearProxyEnvironment();
+    }
+
+    protected function tearDown(): void
+    {
+        $this->restoreProxyEnvironment();
+
+        parent::tearDown();
+    }
 
     private function fetcher(): UrlFetcher
     {
@@ -729,5 +750,105 @@ class UrlFetcherTest extends TestCase
         $this->assertSame([['contact', 'http://localhost/app/x'], ['/', 'http://localhost/app/x'], ['/', 'http://localhost/app/x']], $seen);
         $this->assertStringContainsString('<style data-bfsg-inlined="/app/css/app.css">.muted { color: #999 }</style>', $contact->html);
         $this->assertSame([], $contact->warnings);
+    }
+
+    /**
+     * What Guzzle and libcurl do (checked against real curl requests with Guzzle 7.8, 7.11, 7.16 and 8.3): the request's
+     * `proxy` option, else Guzzle's default from HTTPS_PROXY, HTTP_PROXY (CLI only) and NO_PROXY; when that decides
+     * nothing, the variables libcurl reads (lowercase first, never uppercase HTTP_PROXY) with no_proxy/NO_PROXY.
+     *
+     * @return array<string, array{0: array<string, string>, 1: array<string, mixed>, 2: string, 3: bool}> environment, request options, URL, proxied
+     */
+    public static function proxyDecisions(): array
+    {
+        $proxy = 'http://proxy.local:3128';
+        // Guzzle 8 and 7.12+ resolve proxies themselves; earlier Guzzle 7 leaves no_proxy to libcurl, which applies it to every proxy
+        $guzzleResolves = class_exists(ProxyOptions::class) || class_exists(ProxyEnvironment::class);
+
+        return [
+            'nothing configured' => [[], [], 'https://example.com/', false],
+            'HTTPS_PROXY' => [['HTTPS_PROXY' => $proxy], [], 'https://example.com/', true],
+            'https_proxy' => [['https_proxy' => $proxy], [], 'https://example.com/', true],
+            'HTTPS_PROXY is not used for http' => [['HTTPS_PROXY' => $proxy], [], 'http://example.com/', false],
+            'http_proxy' => [['http_proxy' => $proxy], [], 'http://example.com/', true],
+            'HTTP_PROXY in the CLI' => [['HTTP_PROXY' => $proxy], [], 'http://example.com/', true],
+            'HTTP_PROXY is not used for https' => [['HTTP_PROXY' => $proxy], [], 'https://example.com/', false],
+            'all_proxy' => [['all_proxy' => 'socks5://proxy.local:1080'], [], 'http://example.com/', true],
+            'ALL_PROXY' => [['ALL_PROXY' => 'socks5://proxy.local:1080'], [], 'https://example.com/', true],
+            'empty variable' => [['HTTPS_PROXY' => ''], [], 'https://example.com/', false],
+            'NO_PROXY host' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => 'example.com'], [], 'https://example.com/', false],
+            'NO_PROXY parent domain' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => 'example.com'], [], 'https://www.example.com/', false],
+            'NO_PROXY leading dot, subdomain' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => '.example.com'], [], 'https://www.example.com/', false],
+            'NO_PROXY wildcard' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => '*'], [], 'https://example.com/', false],
+            'NO_PROXY list' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => 'localhost, example.com'], [], 'https://example.com/', false],
+            'NO_PROXY other host' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => 'other.com'], [], 'https://example.com/', true],
+            'NO_PROXY needs a label boundary' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => 'example.com'], [], 'https://notexample.com/', true],
+            // Guzzle 8 and libcurl ignore the leading dot; the own match of Guzzle 7.12+ does not and proxies the domain itself
+            'NO_PROXY leading dot, the domain itself' => [['HTTPS_PROXY' => $proxy, 'NO_PROXY' => '.example.com'], [], 'https://example.com/', class_exists(ProxyEnvironment::class)],
+            'no_proxy with https_proxy (libcurl rules)' => [['https_proxy' => $proxy, 'no_proxy' => '.example.com'], [], 'https://example.com/', false],
+            // Guzzle builds its default from HTTPS_PROXY and NO_PROXY only; just libcurl (Guzzle 7 before 7.12) adds no_proxy
+            'no_proxy and HTTPS_PROXY' => [['HTTPS_PROXY' => $proxy, 'no_proxy' => 'example.com'], [], 'https://example.com/', $guzzleResolves],
+            'NO_PROXY and a proxy option' => [['NO_PROXY' => 'example.com'], ['proxy' => $proxy], 'https://example.com/', $guzzleResolves],
+            'proxy option' => [[], ['proxy' => $proxy], 'https://example.com/', true],
+            'proxy option for the scheme' => [[], ['proxy' => ['https' => $proxy]], 'https://example.com/', true],
+            'proxy option for another scheme' => [[], ['proxy' => ['http' => $proxy]], 'https://example.com/', false],
+            'proxy option with a no list' => [[], ['proxy' => ['https' => $proxy, 'no' => ['example.com']]], 'https://example.com/', false],
+            'an empty proxy option switches the environment off' => [['HTTPS_PROXY' => $proxy], ['proxy' => ''], 'https://example.com/', false],
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $environment
+     * @param  array<string, mixed>  $options
+     */
+    #[DataProvider('proxyDecisions')]
+    public function test_proxy_in_effect_mirrors_guzzle_and_libcurl(array $environment, array $options, string $url, bool $proxied): void
+    {
+        $this->setProxyEnvironment($environment);
+
+        $this->assertSame($proxied, UrlFetcher::proxyInEffect($url, $options));
+    }
+
+    public function test_a_guarded_fetch_through_a_proxy_is_refused_unless_allowed_and_then_warns_once(): void
+    {
+        $this->setProxyEnvironment(['HTTPS_PROXY' => 'http://proxy.local:3128']);
+        Http::fake([
+            'https://example.com/start' => Http::response('', 302, ['Location' => '/page']),
+            'https://example.com/page' => Http::response(self::PAGE, 200, ['Content-Type' => 'text/html']),
+        ]);
+        $guarded = new FetchOptions(hopGuard: fn () => ['93.184.215.14']);
+
+        $e = $this->failure('https://user:secret@example.com/start', $guarded);
+        $this->assertSame('Refusing to fetch https://example.com/start through a proxy: address pinning cannot be enforced. Set bfsg.mcp.allow_proxy to true to allow it.', $e->getMessage());
+        Http::assertNothingSent();
+
+        config()->set('bfsg.mcp.allow_proxy', true);
+        $page = $this->fetcher()->fetch('https://example.com/start', $guarded);
+
+        $this->assertSame('https://example.com/page', $page->finalUrl);
+        $this->assertSame(['Address pinning is not enforced because a proxy is used.'], $page->warnings, 'one warning, though both hops were proxied');
+    }
+
+    public function test_the_proxy_refusal_shows_the_url_without_controls_and_truncated(): void
+    {
+        $this->setProxyEnvironment(['HTTPS_PROXY' => 'http://proxy.local:3128']);
+        $url = "https://example.com/\u{1B}]8;;x\u{07}".str_repeat('a', 500);
+
+        $message = FetchFailed::proxyNotAllowed($url)->getMessage();
+
+        $this->assertStringNotContainsString("\u{1B}", $message);
+        $this->assertStringNotContainsString("\u{07}", $message);
+        $this->assertStringNotContainsString(str_repeat('a', 300), $message);
+        $this->assertStringContainsString('…', $message);
+    }
+
+    public function test_unguarded_fetches_and_bfsg_check_ignore_the_proxy_rule(): void
+    {
+        $this->setProxyEnvironment(['HTTPS_PROXY' => 'http://proxy.local:3128']);
+        Http::fake(['https://example.com/*' => Http::response(self::PAGE, 200, ['Content-Type' => 'text/html'])]);
+
+        $this->assertSame([], $this->fetcher()->fetch('https://example.com/')->warnings);
+        $this->assertSame(0, Artisan::call('bfsg:check', ['url' => 'https://example.com/']));
+        $this->assertStringNotContainsString('proxy', Artisan::output());
     }
 }

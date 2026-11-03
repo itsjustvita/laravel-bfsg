@@ -412,6 +412,48 @@ class AuthenticatedHttpClientTest extends TestCase
         $this->assertSame(11, strlen($this->client()->get('https://example.com/big', [], 11)->body()));
     }
 
+    public function test_global_options_are_not_applied(): void
+    {
+        Http::globalOptions(['headers' => ['X-Leak' => '1'], 'proxy' => 'http://proxy.internal:3128']);
+        Http::fake(function (Request $request, array $options) {
+            return Http::response(isset($options['proxy']) ? 'proxied' : 'direct', 200);
+        });
+
+        $response = $this->client()->get('https://third-party.example/');
+
+        $this->assertSame('direct', $response->body());
+        Http::assertSent(fn (Request $request) => ! $request->hasHeader('X-Leak'));
+    }
+
+    public function test_global_request_and_response_middleware_is_not_applied(): void
+    {
+        Http::globalRequestMiddleware(fn ($request) => $request->withHeader('Authorization', 'Bearer INTERNAL'));
+        Http::globalMiddleware(fn (callable $handler) => fn ($request, array $options) => $handler($request->withHeader('X-Internal', 'yes'), $options));
+        Http::globalResponseMiddleware(fn ($response) => $response->withHeader('X-Rewritten', 'yes'));
+        Http::fake(['*' => Http::response('<html></html>', 200)]);
+
+        $response = $this->client()->get('https://third-party.example/');
+
+        $this->assertSame('', $response->header('X-Rewritten'));
+        Http::assertSent(fn (Request $request) => ! $request->hasHeader('Authorization') && ! $request->hasHeader('X-Internal'));
+    }
+
+    public function test_fakes_stray_request_prevention_and_recording_still_apply(): void
+    {
+        Http::fake(['https://faked.example/*' => Http::response('faked', 200)]);
+
+        $this->assertSame('faked', $this->client()->get('https://faked.example/page')->body());
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://faked.example/page');
+        Http::assertSentCount(1);
+
+        try {
+            $this->client()->get('https://stray.example/');
+            $this->fail('a stray request was sent');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('without a matching fake', $e->getMessage());
+        }
+    }
+
     public function test_origins_accept_a_bare_host_as_https_and_reject_garbage(): void
     {
         $this->assertSame('https://example.com:443', AuthenticatedHttpClient::origin('example.com'));

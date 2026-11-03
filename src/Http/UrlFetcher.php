@@ -2,10 +2,14 @@
 
 namespace ItsJustVita\LaravelBfsg\Http;
 
+use GuzzleHttp\Handler\ProxyEnvironment;
+use GuzzleHttp\ProxyOptions;
 use GuzzleHttp\Psr7\Uri;
 use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
+use GuzzleHttp\Utils as GuzzleUtils;
 use Illuminate\Http\Client\ConnectionException;
+use Psr\Http\Message\UriInterface;
 use Throwable;
 
 /**
@@ -19,6 +23,10 @@ use Throwable;
  * Credentials in the URL (`https://user:pass@host/`) are used for the request only: they become an
  * `Authorization: Basic` header bound to that URL's origin (unless the client already carries an Authorization
  * header) and are removed from every URL the fetch hands back or puts into an exception message.
+ *
+ * Hops checked by a hop guard (FetchOptions::$hopGuard, the MCP tools) are not sent through a proxy (see
+ * proxyInEffect()): a proxy resolves the host itself, so the pin to the vetted addresses would be void. With
+ * `bfsg.mcp.allow_proxy` they are, and the page carries a warning.
  */
 class UrlFetcher
 {
@@ -55,7 +63,7 @@ class UrlFetcher
             // In-process only while every hop so far was in-process: a remote page must not redirect into the kernel
             $viaKernel = $viaKernel && $this->isSameApp($current);
             // The hop guard covers every hop that goes over the network, the app origin included; only in-process hops skip it
-            $pin = $viaKernel ? [] : $this->guard($current, $options);
+            $pin = $viaKernel ? [] : $this->guard($current, $options, $client, $warnings);
             try {
                 $response = $this->request($current, $client, $options, $viaKernel, self::MAX_PAGE_BYTES, $pin);
             } catch (ResponseTooLarge $e) {
@@ -90,7 +98,9 @@ class UrlFetcher
         $html = $response['body'];
 
         if ($options->inlineStylesheets ?? filter_var(config('bfsg.fetch.inline_stylesheets', true), FILTER_VALIDATE_BOOL)) {
-            [$html, $inlinerWarnings] = (new StylesheetInliner)->inline($html, $current, fn (string $href) => $this->stylesheet($href, $client, $options, $viaKernel, $current, $pin));
+            [$html, $inlinerWarnings] = (new StylesheetInliner)->inline($html, $current, function (string $href) use ($client, $options, $viaKernel, $current, $pin, &$warnings) {
+                return $this->stylesheet($href, $client, $options, $viaKernel, $current, $pin, $warnings);
+            });
             $warnings = [...$warnings, ...$inlinerWarnings];
         }
 
@@ -185,13 +195,31 @@ class UrlFetcher
      * to exactly those addresses and a DNS answer that changes after the check (rebinding) is never used. IP
      * literals and numeric hosts are not resolved by curl and need no pin.
      *
+     * A guarded hop that would go through a proxy is refused unless `bfsg.mcp.allow_proxy` is true; then it is fetched
+     * and $warnings gets (once) a note that the pin is not enforced.
+     *
+     * @param  list<string>  $warnings
      * @return list<string> CURLOPT_RESOLVE entries (host:port:address,…), empty when nothing is pinned
      *
-     * @throws FetchFailed when the guard refuses $url, or a pin is needed but curl is not available
+     * @throws FetchFailed when the guard refuses $url, a proxy is used without allow_proxy, or a pin is needed but curl
+     *                     is not available
      */
-    private function guard(string $url, FetchOptions $options): array
+    private function guard(string $url, FetchOptions $options, AuthenticatedHttpClient $client, array &$warnings): array
     {
-        $addresses = $options->hopGuard === null ? null : ($options->hopGuard)($url);
+        if ($options->hopGuard === null) {
+            return [];
+        }
+
+        $addresses = ($options->hopGuard)($url);
+
+        if (self::proxyInEffect($url, $client->request()->getOptions())) {
+            if (! filter_var(config('bfsg.mcp.allow_proxy', false), FILTER_VALIDATE_BOOL)) {
+                throw FetchFailed::proxyNotAllowed($url);
+            }
+
+            $warning = (string) __('bfsg::report.fetch_warnings.proxy_unpinned');
+            $warnings = in_array($warning, $warnings, true) ? $warnings : [...$warnings, $warning];
+        }
 
         if (! is_array($addresses) || $addresses === []) {
             return [];
@@ -220,6 +248,176 @@ class UrlFetcher
     protected function canPinAddresses(): bool
     {
         return defined('CURLOPT_RESOLVE') && function_exists('curl_exec') && function_exists('curl_multi_exec');
+    }
+
+    /**
+     * Whether a request for $url with these Guzzle request options goes through a proxy, decided the way the installed
+     * Guzzle (7 or 8) and libcurl decide it:
+     *
+     * 1. The `proxy` request option, or else Guzzle's default built from HTTPS_PROXY, HTTP_PROXY (only in the CLI: a
+     *    CGI request header `Proxy:` becomes HTTP_PROXY) and NO_PROXY, read from $_SERVER or, in the CLI, the
+     *    environment. A string is the proxy ('' switches proxies off, the environment's too); an array names one per
+     *    scheme, unless its `no` list covers the host by Guzzle's own match, which leaves the request direct (Guzzle 8
+     *    and 7.12+) or to step 2 (earlier Guzzle 7).
+     * 2. Otherwise the process environment: http_proxy (never HTTP_PROXY) or https_proxy, then HTTPS_PROXY, then
+     *    all_proxy and ALL_PROXY, unless no_proxy (or else NO_PROXY) covers the host.
+     *
+     * Guzzle 8 and 7.12+ resolve all of this themselves and pin the result (CURLOPT_PROXY, CURLOPT_NOPROXY). Earlier
+     * Guzzle 7 versions leave step 2 to libcurl, which also applies no_proxy/NO_PROXY of the environment to a proxy from
+     * step 1 (curlNoProxy()). Hence the differences: there, a lowercase no_proxy exempts from HTTPS_PROXY too, and
+     * `.example.com` covers example.com itself, which in Guzzle 7.12+ it does not (only its subdomains). Empty
+     * variables count as unset; what cannot be decided counts as a proxy.
+     *
+     * @param  array<string, mixed>  $options  Guzzle request options (PendingRequest::getOptions())
+     */
+    public static function proxyInEffect(string $url, array $options): bool
+    {
+        try {
+            $uri = new Uri($url);
+            // Guzzle merges request options over its defaults key by key: a `proxy` key, even null, replaces the default
+            $option = array_key_exists('proxy', $options) ? $options['proxy'] : self::guzzleProxyDefault();
+            $noProxy = self::processEnv('no_proxy') ?? self::processEnv('NO_PROXY');
+
+            if (class_exists(ProxyOptions::class)) {
+                return self::guzzle8Option($uri, $option)
+                    ?? (self::environmentProxy($uri) && ($noProxy === null || ! ProxyOptions::isUriInNoProxy($uri, preg_split('/[\s,]+/', $noProxy, -1, PREG_SPLIT_NO_EMPTY) ?: [])));
+            }
+
+            if (class_exists(ProxyEnvironment::class)) {
+                return self::guzzle7Option($uri, $option, noMatchIsFinal: true)
+                    ?? (self::environmentProxy($uri) && ($noProxy === null || ! GuzzleUtils::isUriInNoProxy($uri, ProxyEnvironment::splitNoProxy($noProxy))));
+            }
+
+            if ($noProxy !== null && self::curlNoProxy($uri, $noProxy)) {
+                return false;
+            }
+
+            return self::guzzle7Option($uri, $option, noMatchIsFinal: false) ?? self::environmentProxy($uri);
+        } catch (Throwable) {
+            return true;
+        }
+    }
+
+    /** @return array<string, mixed>|null Guzzle's default `proxy` option (Client::configureDefaults()), null when none */
+    private static function guzzleProxyDefault(): ?array
+    {
+        $default = [];
+
+        if (PHP_SAPI === 'cli' && ($proxy = self::guzzleEnv('HTTP_PROXY'))) {
+            $default['http'] = $proxy;
+        }
+
+        if ($proxy = self::guzzleEnv('HTTPS_PROXY')) {
+            $default['https'] = $proxy;
+        }
+
+        if ($noProxy = self::guzzleEnv('NO_PROXY')) {
+            // Guzzle 8 splits at commas and blanks (ProxyOptions::resolve() does it), Guzzle 7 at commas only
+            $default['no'] = class_exists(ProxyOptions::class) ? $noProxy : explode(',', str_replace(' ', '', $noProxy));
+        }
+
+        return $default === [] ? null : $default;
+    }
+
+    /** A variable as Guzzle's client reads it (Utils::getenv(), Env::get()): $_SERVER, then the environment in the CLI. */
+    private static function guzzleEnv(string $name): ?string
+    {
+        if (isset($_SERVER[$name]) && is_scalar($_SERVER[$name])) {
+            return (string) $_SERVER[$name];
+        }
+
+        return PHP_SAPI === 'cli' && is_string($value = getenv($name)) ? $value : null;
+    }
+
+    /** A variable as libcurl and Guzzle's handlers read it: the process environment only; empty = unset. */
+    private static function processEnv(string $name): ?string
+    {
+        $value = getenv($name, true);
+
+        return $value === false || $value === '' ? null : $value;
+    }
+
+    /** @return bool|null the decision of Guzzle 8's `proxy` option; null when it leaves it to the environment */
+    private static function guzzle8Option(UriInterface $uri, mixed $option): ?bool
+    {
+        $selection = ProxyOptions::resolve($uri, $option);
+
+        return $selection->hasProxy() ? true : ($selection->shouldDisableProxy() ? false : null);
+    }
+
+    /**
+     * @param  bool  $noMatchIsFinal  a `no` match means direct (7.12+), not "ask the environment" (earlier versions)
+     * @return bool|null the decision of Guzzle 7's `proxy` option (CurlFactory); null when it leaves it to the environment
+     */
+    private static function guzzle7Option(UriInterface $uri, mixed $option, bool $noMatchIsFinal): ?bool
+    {
+        if (! is_array($option)) {
+            return $option === null ? null : (string) $option !== '';
+        }
+
+        if (! isset($option[$uri->getScheme()])) {
+            return null;
+        }
+
+        // Guzzle 7.11+ matches the URI (ports included), earlier versions the host
+        $exempt = isset($option['no']) && (method_exists(GuzzleUtils::class, 'isUriInNoProxy')
+            ? GuzzleUtils::isUriInNoProxy($uri, $option['no'])
+            : GuzzleUtils::isHostInNoProxy($uri->getHost(), $option['no']));
+
+        if (! $exempt) {
+            return (string) $option[$uri->getScheme()] !== '';
+        }
+
+        return $noMatchIsFinal ? false : null;
+    }
+
+    /** Whether the process environment names a proxy for the URL's scheme (libcurl's lookup order). */
+    private static function environmentProxy(UriInterface $uri): bool
+    {
+        $scheme = strtolower($uri->getScheme());
+
+        foreach ([...($scheme === 'http' ? ['http_proxy'] : [$scheme.'_proxy', strtoupper($scheme).'_PROXY']), 'all_proxy', 'ALL_PROXY'] as $name) {
+            if (self::processEnv($name) !== null) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * libcurl's no_proxy match (Curl_check_noproxy), for Guzzle 7 before 7.12: `*` only as the whole value; entries
+     * separated by commas, blanks around them skipped (a blank inside an entry ends the list); a leading and a trailing
+     * dot ignored; case-insensitive; the host itself or a parent domain. An IP host matches an identical entry only
+     * (CIDR entries are not read, so such a host counts as proxied).
+     */
+    private static function curlNoProxy(UriInterface $uri, string $noProxy): bool
+    {
+        if ($noProxy === '*') {
+            return true;
+        }
+
+        $host = strtolower(trim($uri->getHost(), '[]'));
+        $ip = filter_var($host, FILTER_VALIDATE_IP) !== false;
+        $host = $ip ? $host : (string) preg_replace('/\.$/', '', $host);
+        $rest = $noProxy;
+
+        while (preg_match('/^[ \t]*([^ \t,]*)[ \t]*/', $rest, $match) === 1) {
+            $rest = substr($rest, strlen($match[0]));
+            $entry = strtolower($ip ? $match[1] : (string) preg_replace('/^\.|\.$/', '', $match[1]));
+
+            if ($entry !== '' && ($entry === $host || (! $ip && str_ends_with($host, '.'.$entry)))) {
+                return true;
+            }
+
+            if (! str_starts_with($rest, ',')) {
+                return false;
+            }
+
+            $rest = ltrim($rest, ',');
+        }
+
+        return false;
     }
 
     /**
@@ -257,15 +455,16 @@ class UrlFetcher
      * again.
      *
      * @param  list<string>  $pagePin
+     * @param  list<string>  $warnings
      */
-    private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, string $pageUrl, array $pagePin): ?string
+    private function stylesheet(string $url, AuthenticatedHttpClient $client, FetchOptions $options, bool $viaKernel, string $pageUrl, array $pagePin, array &$warnings): ?string
     {
         $this->assertAllowed($url, $options->allowedHosts);
         $viaKernel = $viaKernel && $this->isSameApp($url);
         $pin = match (true) {
             $viaKernel => [],
             AuthenticatedHttpClient::origin($url) === AuthenticatedHttpClient::origin($pageUrl) => $pagePin,
-            default => $this->guard($url, $options),
+            default => $this->guard($url, $options, $client, $warnings),
         };
         $maxBytes = (int) config('bfsg.fetch.max_stylesheet_bytes', 524288);
 

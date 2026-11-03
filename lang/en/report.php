@@ -23,6 +23,7 @@ return [
     'source' => 'laravel-bfsg on GitHub',
     'fetch_warnings' => [
         'stray_output' => 'The application wrote :bytes bytes outside the response; they were discarded.',
+        'proxy_unpinned' => 'Address pinning is not enforced because a proxy is used.',
     ],
     'cli' => [
         'checking' => 'Checking :url',

@@ -23,6 +23,7 @@ return [
     'source' => 'laravel-bfsg auf GitHub',
     'fetch_warnings' => [
         'stray_output' => 'Die Anwendung hat :bytes Bytes außerhalb der Antwort ausgegeben; sie wurden verworfen.',
+        'proxy_unpinned' => 'Das Adress-Pinning wird nicht durchgesetzt, weil ein Proxy verwendet wird.',
     ],
     'cli' => [
         'checking' => 'Prüfe :url',

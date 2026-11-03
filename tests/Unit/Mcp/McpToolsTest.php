@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Mcp;
 
+use GuzzleHttp\Handler\ProxyEnvironment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Http;
@@ -23,6 +24,7 @@ use ItsJustVita\LaravelBfsg\Mcp\Tools\ListAnalyzers;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Models\BfsgViolation;
 use ItsJustVita\LaravelBfsg\Support\PackageVersion;
+use ItsJustVita\LaravelBfsg\Tests\Support\ProxyVariables;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use Laravel\Mcp\Server\Testing\TestResponse;
 use Laravel\Mcp\Server\Transport\FakeTransporter;
@@ -30,6 +32,7 @@ use PHPUnit\Framework\Attributes\DataProvider;
 
 class McpToolsTest extends TestCase
 {
+    use ProxyVariables;
     use RefreshDatabase;
 
     private const BROKEN = '<!DOCTYPE html><html><body><img src="hero.jpg"></body></html>';
@@ -57,6 +60,14 @@ class McpToolsTest extends TestCase
         }
 
         $this->app->instance(PrivateNetworkGuard::class, new PrivateNetworkGuard(fn (string $host) => self::DNS[$host] ?? ($host === 'nowhere.example' ? [] : ['93.184.215.14'])));
+        $this->clearProxyEnvironment();
+    }
+
+    protected function tearDown(): void
+    {
+        $this->restoreProxyEnvironment();
+
+        parent::tearDown();
     }
 
     public function test_tools_have_snake_case_names_and_annotations(): void
@@ -540,6 +551,90 @@ class McpToolsTest extends TestCase
         BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'http://8.8.8.8/'])->assertOk();
         config()->set('bfsg.mcp.allowed_hosts', ['docs.example.com']);
         BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://docs.example.com/'])->assertOk();
+    }
+
+    public function test_global_request_middleware_is_not_applied(): void
+    {
+        // RT7: an application's own middleware adding its internal service token must not reach a third-party host
+        Http::globalRequestMiddleware(fn ($request) => $request->withHeader('Authorization', 'Bearer INTERNAL'));
+        Http::fake(['third-party.example/*' => Http::response('<html lang="en"><title>t</title><main><h1>x</h1></main></html>', 200, ['Content-Type' => 'text/html'])]);
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://third-party.example/'])->assertOk();
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn (HttpRequest $request) => ! $request->hasHeader('Authorization'));
+    }
+
+    public function test_global_options_are_not_applied(): void
+    {
+        Http::globalOptions(['headers' => ['X-Leak' => '1']]);
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://third-party.example/'])->assertOk();
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn (HttpRequest $request) => ! $request->hasHeader('X-Leak'));
+    }
+
+    public function test_guarded_fetch_refuses_proxy(): void
+    {
+        $this->setProxyEnvironment(['HTTPS_PROXY' => 'http://proxy.local:3128', 'http_proxy' => 'http://proxy.local:3128']);
+        Http::fake(fn (HttpRequest $request) => $request->url() === 'https://hop.example/'
+            ? Http::response('', 302, ['Location' => 'http://plain.example/'])
+            : Http::response(self::BROKEN, 200));
+        $this->app['router']->get('/mcp-page', fn () => response(self::BROKEN));
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://user:secret@example.com/'])
+            ->assertHasErrors(['Refusing to fetch https://example.com/ through a proxy: address pinning cannot be enforced. Set bfsg.mcp.allow_proxy to true to allow it.']);
+        BfsgMcpServer::tool(GenerateReport::class, ['url' => 'https://example.com/', 'format' => 'json'])->assertHasErrors(['through a proxy']);
+        Http::assertNothingSent();
+
+        // Every hop is checked: without HTTPS_PROXY the https start is fetched, the http hop it redirects to is refused
+        putenv('HTTPS_PROXY');
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://hop.example/'])->assertHasErrors(['Refusing to fetch http://plain.example/ through a proxy']);
+        Http::assertSentCount(1);
+
+        // Pages of this application are rendered in-process: no network, no proxy
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => '/mcp-page'])->assertOk();
+    }
+
+    /** @return array<string, array{0: string, 1: string, 2: bool}> NO_PROXY, URL, fetched */
+    public static function noProxyCoverage(): array
+    {
+        return [
+            'exact host' => ['example.com', 'https://example.com/', true],
+            'leading dot' => ['.example.com', 'https://www.example.com/', true],
+            'parent domain' => ['example.com', 'https://www.example.com/', true],
+            'wildcard' => ['*', 'https://example.com/', true],
+            'one of a list' => ['localhost,example.com', 'https://example.com/', true],
+            // Guzzle 8 and libcurl (Guzzle 7 before 7.12) ignore the leading dot; Guzzle 7.12+ does not and proxies the domain itself
+            'leading dot, the domain itself' => ['.example.com', 'https://example.com/', ! class_exists(ProxyEnvironment::class)],
+            'other host' => ['other.com', 'https://example.com/', false],
+        ];
+    }
+
+    #[DataProvider('noProxyCoverage')]
+    public function test_no_proxy_exempts_the_host(string $noProxy, string $url, bool $fetched): void
+    {
+        $this->setProxyEnvironment(['HTTPS_PROXY' => 'http://proxy.local:3128', 'NO_PROXY' => $noProxy]);
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+
+        $response = BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => $url]);
+
+        $fetched ? $response->assertOk() : $response->assertHasErrors(['through a proxy']);
+        Http::assertSentCount($fetched ? 1 : 0);
+    }
+
+    public function test_allow_proxy_opt_in_warns(): void
+    {
+        $this->setProxyEnvironment(['HTTPS_PROXY' => 'http://proxy.local:3128']);
+        config()->set('bfsg.mcp.allow_proxy', true);
+        Http::fake(fn () => Http::response(self::BROKEN, 200));
+
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://example.com/'])->assertOk();
+
+        $page = app(UrlFetcher::class)->fetch('https://example.com/', new FetchOptions(hopGuard: app(PrivateNetworkGuard::class)->check(...)));
+        $this->assertCount(1, array_filter($page->warnings, fn (string $warning) => str_contains($warning, 'pinning')));
     }
 
     public function test_an_explicit_allow_list_governs_private_addresses_too(): void

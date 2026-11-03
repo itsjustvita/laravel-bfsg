@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Http;
 
+use ItsJustVita\LaravelBfsg\Support\Sanitizer;
 use RuntimeException;
 
 /**
@@ -10,6 +11,9 @@ use RuntimeException;
  */
 final class FetchFailed extends RuntimeException
 {
+    /** Longest URL (in characters) a message shows; a longer one ends in "…". */
+    private const MAX_URL_IN_MESSAGE = 200;
+
     public readonly string $url;
 
     public function __construct(string $message, string $url, public readonly ?int $status = null)
@@ -32,6 +36,17 @@ final class FetchFailed extends RuntimeException
     public static function privateAddress(string $url, string $host, string $address): self
     {
         return new self("The host {$host} resolves to {$address}, a non-public address (loopback, private, link-local, reserved or unspecified). List it in bfsg.mcp.allowed_hosts to allow it.", $url);
+    }
+
+    /**
+     * A guarded fetch (MCP) would go through a proxy, which resolves the host itself, so the vetted addresses cannot be
+     * pinned. The URL (possibly a redirect target the page chose) is shown without control characters, shortened.
+     */
+    public static function proxyNotAllowed(string $url): self
+    {
+        $shown = Sanitizer::truncate(Sanitizer::terminal(UrlFetcher::redact($url)), self::MAX_URL_IN_MESSAGE);
+
+        return new self("Refusing to fetch {$shown} through a proxy: address pinning cannot be enforced. Set bfsg.mcp.allow_proxy to true to allow it.", $url);
     }
 
     public static function malformedAddress(string $url, string $host): self

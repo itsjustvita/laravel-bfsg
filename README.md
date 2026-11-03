@@ -227,7 +227,7 @@ Without `--email`/`--password` in an interactive terminal, `--auth` asks for the
 
 In CI, pass credentials as `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` or `BFSG_AUTH_TOKEN` from your CI secrets rather than `--password` or `--bearer` on the command line (`BFSG_AUTH_TOKEN` is read with `--auth`, so use `--auth` instead of a bare `--bearer`): command-line arguments end up in the shell history, job logs and the process list. `--session` has no environment variable; pass it from a masked CI secret.
 
-Credentials are bound to one origin (scheme, host and port): tokens, API keys and session cookies are only sent to the checked site (or, for a login token, the login site), and a redirect to another host, another port or from `https` to `http` drops them.
+Credentials are bound to one origin (scheme, host and port): tokens, API keys and session cookies are only sent to the checked site (or, for a login token, the login site), and a redirect to another host, another port or from `https` to `http` drops them. The package's requests leave out your application's global HTTP client configuration (`Http::globalMiddleware()`, `Http::globalRequestMiddleware()`, `Http::globalResponseMiddleware()`, `Http::globalOptions()`), so a header your application adds to its own requests, such as an internal service token, never reaches a checked site. `Http::fake()` and `Http::preventStrayRequests()` still apply in tests.
 
 **HTTP basic auth** (a protected staging site): put the credentials in the URL. They become an `Authorization: Basic` header for that origin, also for the login requests of `--auth`/`--sanctum`, and are removed from every status line, report and stored URL.
 
@@ -561,6 +561,7 @@ or in `.mcp.json` in the project root:
 
 - `bfsg.mcp.allowed_hosts`: a list of hostnames. When set, the list replaces the public-host default: only the listed hosts are fetched (a public host that is not listed is refused), and every URL and every redirect hop must be on one of them. Listed hosts are trusted as they are, without the private-network check and address pinning below, so list only hosts whose DNS you control.
 - When it is `null` (the default) or empty, any public host is allowed and a private-network guard refuses every non-public address: loopback, private and link-local ranges (including the cloud metadata address `169.254.169.254`), CGNAT, reserved ranges, IPv6 unique-local and site-local, and IPv6 forms that embed such an IPv4 address. Numeric host spellings (`0x7f000001`, `127.1`) are recognised, hosts that do not resolve are refused, and each request is pinned to the addresses that were checked, so DNS rebinding cannot redirect it. Pinning needs PHP's curl extension; without it such fetches fail.
+- A proxy resolves the host itself, so pinning cannot be enforced through one. While `allowed_hosts` is `null` or empty, a fetch (every hop) that would go through a proxy is refused. Which proxy applies follows Guzzle and curl: `HTTPS_PROXY` or `https_proxy` for `https`, `http_proxy` (and `HTTP_PROXY`, in the CLI only) for `http`, `ALL_PROXY` or `all_proxy`, unless `NO_PROXY` covers the host (`example.com` also covers its subdomains, `.example.com` its subdomains, `*` every host; Guzzle builds its proxy from the uppercase variables, so exempt hosts in `NO_PROXY`, not only in `no_proxy`). Set `bfsg.mcp.allow_proxy` (`BFSG_MCP_ALLOW_PROXY`) to `true` to fetch through the proxy anyway, without pinning; the fetch result notes it in its warnings. `bfsg:check` is not affected.
 - Pages of this application (paths, or the exact origin of `app.url`) are rendered in-process and exempt from the private-network guard; a remote page that redirects to the application is guarded like any other hop. With `allowed_hosts` set, list the host of `app.url` for paths and pages of this application to work.
 - TLS verification follows `bfsg.mcp.verify_ssl` only; the assistant cannot switch it off.
 
@@ -603,6 +604,7 @@ All settings live in `config/bfsg.php` (`php artisan vendor:publish --tag=bfsg-c
 | `bfsg.reporting.output_path` | | `storage/app/bfsg-reports` | Directory of `html`/`pdf` reports written without `--output` |
 | `bfsg.mcp.allowed_hosts` | | `null` | Hosts the MCP tools may fetch; `null` = any public host (see [MCP server](#mcp-server)) |
 | `bfsg.mcp.verify_ssl` | | `true` | TLS verification of the MCP tools; only an explicit false turns it off |
+| `bfsg.mcp.allow_proxy` | `BFSG_MCP_ALLOW_PROXY` | `false` | Let the MCP tools fetch through a proxy, without address pinning (see [MCP server](#mcp-server)) |
 
 ## Analyzers
 
