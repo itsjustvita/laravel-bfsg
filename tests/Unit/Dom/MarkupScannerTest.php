@@ -107,6 +107,31 @@ class MarkupScannerTest extends TestCase
         $this->assertSame($expected, MarkupScanner::normalize($html));
     }
 
+    /** @return array<string, array{string, int}> */
+    public static function depthBounds(): array
+    {
+        return [
+            'no markup' => ['text', 0],
+            'nested' => ['<div><p>x</p></div>', 2],
+            'siblings' => ['<div></div><div></div><p>x</p>', 1],
+            'void and self-closing elements' => ['<div><img src=a><br><input><span/><source></div>', 2],
+            'end tags in any case' => ['<DIV><div></Div></DIV><div>', 2],
+            'unmatched end tags' => ['</div></p></div><div>', 1],
+            'end tag closes only its name' => ['<a><b></a><i>', 2],
+            'implied end tags still count' => ['<ul><li><li><li></ul>', 4],
+            'raw text and comments' => ['<p><script><div><div></script><style><div></style><!-- <div><div> --></p>', 2],
+            'deep' => [str_repeat('<div>', 3000).str_repeat('</div>', 3000), 3000],
+        ];
+    }
+
+    #[DataProvider('depthBounds')]
+    public function test_depth_bound(string $html, int $expected): void
+    {
+        MarkupScanner::normalize($html, $bound);
+
+        $this->assertSame($expected, $bound);
+    }
+
     /** @return array<string, array{string, string}> */
     public static function unterminated(): array
     {

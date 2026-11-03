@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class BfsgTest extends TestCase
 {
@@ -107,13 +108,28 @@ class BfsgTest extends TestCase
         $html = str_repeat('<div>', 5000).'<img src=a.png>'.str_repeat('</div>', 5000);
         $result = app(Bfsg::class)->analyze($html);
 
-        // libxml >= 2.14 stops parsing at 2048 levels and reports it; older versions keep the image.
-        $tooDeep = in_array('The document is nested too deeply for the parser; content after that point was not analyzed.', HtmlDocument::fromHtml($html)->warnings(), true);
+        // Nesting beyond 2048 levels is parsed without LIBXML_PARSEHUGE, as in 3.0: libxml stops at 256 levels and says so.
+        $this->assertContains('The document is nested too deeply for the parser; content after that point was not analyzed.', HtmlDocument::fromHtml($html)->warnings());
+        $this->assertSame([], $result->forAnalyzer('images'));
+    }
 
-        if ($tooDeep) {
-            $this->assertGreaterThanOrEqual(21400, LIBXML_VERSION);
-        } else {
-            $this->assertContains('images.missing_alt', array_map(fn ($v) => $v->key, $result->forAnalyzer('images')));
-        }
+    /** @return array<string, array{string}> */
+    public static function hundredThousandLevels(): array
+    {
+        return [
+            'plain' => [''],
+            'ignored outer element' => [' data-chatbase'],
+        ];
+    }
+
+    /** Once segfaulted on libxml 2.9: ext/libxml frees a detached subtree recursively (C1). */
+    #[DataProvider('hundredThousandLevels')]
+    public function test_a_hundred_thousand_levels_of_nesting_analyze_without_crashing(string $outerAttribute): void
+    {
+        $html = '<div'.$outerAttribute.'>'.str_repeat('<div>', 100000).'<img src=a.png>';
+        $result = app(Bfsg::class)->analyze($html);
+
+        $this->assertContains('images', $result->analyzersRun());
+        $this->assertContains('The document is nested too deeply for the parser; content after that point was not analyzed.', HtmlDocument::fromHtml($html)->warnings());
     }
 }

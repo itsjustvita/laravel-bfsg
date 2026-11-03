@@ -233,6 +233,40 @@ class HtmlDocumentTest extends TestCase
         $this->assertContains('Nesting deeper than 256 levels was flattened; the structure below that depth is approximate.', $doc->warnings());
     }
 
+    public function test_markup_nested_deeper_than_its_depth_bound_is_flattened_without_crashing(): void
+    {
+        // libxml ignores </b> under an open <div>, so every repetition nests one level deeper while the per-name
+        // depth bound stays at 2: on libxml 2.9 the parser builds 50 000 levels, which are unwrapped deepest first.
+        $deep = str_repeat('<b><div></b></div>', 50000).'<img src=a.png>';
+        $doc = HtmlDocument::fromHtml('<html><body><p>kept</p>'.$deep.'</body></html>');
+        $ignored = HtmlDocument::fromHtml('<html><body><p>kept</p><b data-chatbase>'.$deep.'</b></body></html>', ['ignoredSelectors' => ['[data-chatbase]']]);
+
+        $this->assertLessThanOrEqual(HtmlDocument::MAX_DEPTH, $this->maxDepth($doc));
+        $this->assertSame([], $ignored->query('//img'));
+        $this->assertSame([], $ignored->query('//b'));
+        $this->assertCount(1, $ignored->query('//p'));
+    }
+
+    public function test_an_ignored_element_with_a_deep_subtree_is_removed_without_crashing(): void
+    {
+        $doc = HtmlDocument::fromHtml('<html><body><div data-chatbase></div><p>kept</p></body></html>');
+        $chain = $doc->dom()->createElement('div');
+
+        // Built from the inside out: appendChild() walks the parent's ancestors.
+        for ($i = 1; $i < 100000; $i++) {
+            $outer = $doc->dom()->createElement('div');
+            $outer->appendChild($chain);
+            $chain = $outer;
+        }
+
+        $doc->query('//div')[0]->appendChild($chain);
+        unset($chain, $outer);
+
+        $this->assertSame(1, $doc->removeMatching(['[data-chatbase]']));
+        $this->assertSame([], $doc->query('//div'));
+        $this->assertSame('kept', $doc->query('//p')[0]->textContent);
+    }
+
     private function maxDepth(HtmlDocument $doc): int
     {
         $max = 0;

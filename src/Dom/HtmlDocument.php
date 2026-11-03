@@ -17,8 +17,11 @@ final class HtmlDocument
     /** The first markup of a document (after whitespace, comments and processing instructions) is a doctype, html, head or body tag. */
     private const DOCUMENT_START = '~\G<(?:!doctype|html|head|body)(?![\w-])~i';
 
-    /** LIBXML_PARSEHUGE lifts libxml's safety limits, so it is only used for inputs up to this size. */
+    /** LIBXML_PARSEHUGE lifts libxml's safety limits, so it is only used for inputs up to this size… */
     private const MAX_HUGE_PARSE_BYTES = 1048576;
+
+    /** …whose markup nests at most this deep (MarkupScanner's bound); deeper input is cut off by libxml at 256 levels. */
+    private const MAX_HUGE_PARSE_DEPTH = 2048;
 
     /** Elements nested deeper than this are unwrapped after parsing, so the recursive analyzers stay bounded. */
     public const MAX_DEPTH = 256;
@@ -75,14 +78,15 @@ final class HtmlDocument
         }
 
         $fragment = $options['fragment'] ?? ! (self::startsLikeDocument($html) || preg_match('/<html[\s>]/i', $html) === 1);
-        $html = MarkupScanner::normalize($html);
+        $html = MarkupScanner::normalize($html, $depthBound);
+        $huge = $bounded && $depthBound <= self::MAX_HUGE_PARSE_DEPTH;
         $hinted = self::needsEncodingHint($html);
 
         if ($hinted) {
             $html = self::ENCODING_HINT.$html;
         }
 
-        $flags = LIBXML_HTML_NODEFDTD | ($bounded ? LIBXML_PARSEHUGE : 0) | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
+        $flags = LIBXML_HTML_NODEFDTD | ($huge ? LIBXML_PARSEHUGE : 0) | ($fragment ? LIBXML_HTML_NOIMPLIED : 0);
         $previous = libxml_use_internal_errors(true);
         $warnings = [];
 
@@ -104,6 +108,7 @@ final class HtmlDocument
 
         $document = new self($dom, $fragment, false, $warnings);
 
+        // Before flattening, so ignored elements below the cap are removed too; both detach deepest first.
         if (! empty($options['ignoredSelectors'])) {
             $document->removeMatching($options['ignoredSelectors']);
         }
@@ -570,7 +575,7 @@ final class HtmlDocument
         }
 
         foreach ($victims as $element) {
-            $element->parentNode?->removeChild($element);
+            self::detach($element);
         }
 
         $this->byId = null;
@@ -647,29 +652,60 @@ final class HtmlDocument
             }
 
             $kept = [];
+            $tops = [];
             $stack = array_reverse(iterator_to_array($anchor->childNodes));
 
             while ($stack !== []) {
                 $node = array_pop($stack);
                 $children = $node instanceof DOMElement ? iterator_to_array($node->childNodes) : [];
 
-                if (self::hasElement($children)) {
-                    array_push($stack, ...array_reverse($children));
-                } else {
+                if (! self::hasElement($children)) {
                     $kept[] = $node;
+                } else {
+                    array_push($stack, ...array_reverse($children));
+
+                    if ($node->parentNode === $anchor) {
+                        $tops[] = $node;
+                    }
                 }
             }
 
-            foreach (iterator_to_array($anchor->childNodes) as $child) {
-                $anchor->removeChild($child);
-            }
-
+            // Moving the kept nodes behind the containers leaves nothing but containers below them.
             foreach ($kept as $node) {
                 $anchor->appendChild($node);
+            }
+
+            foreach ($tops as $top) {
+                self::detach($top);
             }
         }
 
         return true;
+    }
+
+    /**
+     * Detaches $node after removing its descendants deepest first. ext/libxml frees a detached subtree recursively,
+     * which overflows the C stack at tens of thousands of levels; this way no node is detached with children.
+     */
+    private static function detach(DOMNode $node): void
+    {
+        $current = $node;
+
+        while (true) {
+            while ($current->lastChild !== null) {
+                $current = $current->lastChild;
+            }
+
+            if ($current === $node) {
+                break;
+            }
+
+            $parent = $current->parentNode;
+            $parent->removeChild($current);
+            $current = $parent;
+        }
+
+        $node->parentNode?->removeChild($node);
     }
 
     private static function hasContainerChild(DOMNode $node): bool

@@ -14,6 +14,8 @@ namespace ItsJustVita\LaravelBfsg\Dom;
  * terminated before the end of the input (comment, raw-text body, start tag, quoted value) is copied verbatim
  * together with everything after it. Other markup ("<!doctype", "<?", end tags) is scanned like text: closing a void
  * element in there at worst adds a stray end tag, which the parser ignores.
+ *
+ * The same pass bounds the nesting depth, so the caller can decide whether the parser may build a deep tree.
  */
 final class MarkupScanner
 {
@@ -34,11 +36,30 @@ final class MarkupScanner
 
     private const ASCII_LETTERS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
-    public static function normalize(string $html): string
+    /** Elements without content: they never add a nesting level below themselves. */
+    private const VOID = [
+        'area' => true, 'base' => true, 'basefont' => true, 'br' => true, 'col' => true, 'embed' => true,
+        'frame' => true, 'hr' => true, 'img' => true, 'input' => true, 'isindex' => true, 'keygen' => true,
+        'link' => true, 'meta' => true, 'param' => true, 'source' => true, 'track' => true, 'wbr' => true,
+    ];
+
+    /** The depth bound stops counting above this, which keeps the per-name counts small on adversarial input. */
+    private const MAX_DEPTH_BOUND = 65536;
+
+    /**
+     * @param  ?int  $depthBound  set to an upper bound of the nesting depth of well-nested markup (saturating above
+     *                            MAX_DEPTH_BOUND): every start tag of a non-void element that is not self-closing
+     *                            opens its name, an end tag closes it when one is open; raw text and comments are
+     *                            skipped. Misnested markup can exceed it, as the parser's error recovery differs.
+     */
+    public static function normalize(string $html, ?int &$depthBound = null): string
     {
         $out = '';
         $copied = 0;
         $offset = 0;
+        $open = [];
+        $depth = 0;
+        $depthBound = 0;
 
         while (($lt = strpos($html, '<', $offset)) !== false) {
             if (substr_compare($html, '<!--', $lt, 4) === 0) {
@@ -58,13 +79,29 @@ final class MarkupScanner
                 }
 
                 $element = strtolower($name);
+                $depthBound = max($depthBound, $depth + 1);
 
                 if (in_array($element, self::UNKNOWN_VOID, true) && ! self::endTagFollows($html, $offset, $name)) {
                     $out .= substr($html, $copied, $offset - $copied).'</'.$name.'>';
                     $copied = $offset;
                 } elseif (! $selfClosing && in_array($element, self::RAW_TEXT, true)) {
                     $offset = self::rawTextEnd($html, $offset, $element);
+                } elseif (! $selfClosing && ! isset(self::VOID[$element]) && $depth <= self::MAX_DEPTH_BOUND) {
+                    $open[$element] = ($open[$element] ?? 0) + 1;
+                    $depth++;
                 }
+            } elseif (($html[$lt + 1] ?? '') === '/' && strspn($html, self::ASCII_LETTERS, $lt + 2, 1) === 1) {
+                $element = strtolower(substr($html, $lt + 2, strcspn($html, self::SPACE.'/><', $lt + 2)));
+
+                if (isset($open[$element])) {
+                    $depth--;
+
+                    if (--$open[$element] === 0) {
+                        unset($open[$element]);
+                    }
+                }
+
+                $offset = $lt + 1;
             } else {
                 $offset = $lt + 1;
             }
@@ -96,8 +133,8 @@ final class MarkupScanner
     /**
      * Tokenizes the start tag at $lt like the HTML tokenizer: attribute names end at whitespace, "/", ">" or "=",
      * quoted values at their quote, unquoted values at whitespace or ">". Returns null when the tag is not closed, else
-     * the offset after the tag, its name (only up to 8 bytes, longer names are ""), whether it is self-closing, and
-     * the tag text with its shorthands rewritten (null when it has none).
+     * the offset after the tag, its name, whether it is self-closing, and the tag text with its shorthands rewritten
+     * (null when it has none).
      *
      * @return array{int, string, bool, ?string}|null
      */
@@ -105,7 +142,7 @@ final class MarkupScanner
     {
         $at = $lt + 1;
         $nameLength = strcspn($html, self::SPACE.'/>', $at);
-        $name = $nameLength <= 8 ? substr($html, $at, $nameLength) : '';
+        $name = substr($html, $at, $nameLength);
         $at += $nameLength;
         $rewritten = '';
         $from = $lt;
