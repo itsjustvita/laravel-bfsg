@@ -45,7 +45,7 @@ class ContrastAnalyzer extends BaseAnalyzer
     /** @var SplObjectStorage<DOMElement, bool> label => whether its labelled control is disabled, per document */
     private SplObjectStorage $inactiveLabels;
 
-    /** @var list<array{0: DOMElement, 1: string, 2: int|false|null}> the current path from the root: element, chain key, coveringChildIndex() (false: not looked up) */
+    /** @var list<array{0: DOMElement, 1: string, 2: int|false|null, 3: array{0: ?DOMElement, 1: int}|null}> the current path from the root: element, chain key, coveringChildIndex() (false: not looked up), the last child looked up and its element-child position */
     private array $chain = [];
 
     /** @var array<int, int> spl_object_id of an element on the path => its index in the path */
@@ -79,13 +79,20 @@ class ContrastAnalyzer extends BaseAnalyzer
                 continue;
             }
 
+            // Before the key, so exempt text is bounded by the budget too.
+            if (microtime(true) > $deadline) {
+                $truncated = true;
+
+                break;
+            }
+
             $key = $this->chainKey($parser, $element);
 
             if ($this->isExempt($parser, $element, $key) || $this->isInactive($element)) {
                 continue;
             }
 
-            if ((! array_key_exists($key, $this->verdicts) && count($this->verdicts) >= self::MAX_MEASURED) || microtime(true) > $deadline) {
+            if (! array_key_exists($key, $this->verdicts) && count($this->verdicts) >= self::MAX_MEASURED) {
                 $truncated = true;
 
                 break;
@@ -277,13 +284,17 @@ class ContrastAnalyzer extends BaseAnalyzer
             ksort($attributes, SORT_STRING);
             $level = [$node->nodeName, $attributes, $node->previousElementSibling === null, $node->nextElementSibling === null, $this->isCovered($parser, $node)];
             $this->depths[spl_object_id($node)] = count($this->chain);
-            $this->chain[] = [$node, hash('xxh128', ($this->chain === [] ? '' : $this->chain[array_key_last($this->chain)][1]).serialize($level), true), false];
+            $this->chain[] = [$node, hash('xxh128', ($this->chain === [] ? '' : $this->chain[array_key_last($this->chain)][1]).serialize($level), true), false, null];
         }
 
         return $this->chain[array_key_last($this->chain)][1];
     }
 
-    /** Whether a previous element sibling may cover the node's backdrop; the parent (on the path) is looked up once. */
+    /**
+     * Whether a previous element sibling may cover the node's backdrop: the node comes after the parent's covering child.
+     * The parent (on the path) is looked up once, and the node's position is counted forward from the child looked up
+     * before it, so in document order all children of a parent cost O(children) together.
+     */
     private function isCovered(CssParser $parser, DOMElement $node): bool
     {
         if ($this->chain === [] || ! $node->parentNode instanceof DOMElement) {
@@ -296,15 +307,26 @@ class ContrastAnalyzer extends BaseAnalyzer
             $this->chain[$parent][2] = $parser->coveringChildIndex($this->chain[$parent][0]);
         }
 
-        $index = $this->chain[$parent][2];
+        if ($this->chain[$parent][2] === null) {
+            return false;
+        }
 
-        for ($sibling = $node->previousElementSibling, $before = 0; $index !== null && $sibling !== null; $sibling = $sibling->previousElementSibling) {
-            if (++$before > $index) {
-                return true;
+        [$sibling, $position] = $this->chain[$parent][3] ?? [$this->chain[$parent][0]->firstElementChild, 0];
+
+        while ($sibling !== null && $sibling !== $node) {
+            $sibling = $sibling->nextElementSibling;
+            $position++;
+        }
+
+        if ($sibling === null) { // before the cursor (not in document order): count from the first child
+            for ($sibling = $this->chain[$parent][0]->firstElementChild, $position = 0; $sibling !== null && $sibling !== $node; $sibling = $sibling->nextElementSibling) {
+                $position++;
             }
         }
 
-        return false;
+        $this->chain[$parent][3] = [$node, $position];
+
+        return $position > $this->chain[$parent][2];
     }
 
     /**
