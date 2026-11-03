@@ -298,19 +298,39 @@ class CommandsTest extends TestCase
     {
         $this->app['router']->get('/newline', fn () => response('<!DOCTYPE html><html><head><link rel="stylesheet" href="/missing&#10;::warning title=BFSG::fake.css"></head>'
             .'<body><img src="x&#10;::notice title=BFSG::All checks passed"></body></html>'));
+        $assertNoCommandLine = function (string $text, string $label): void {
+            foreach (preg_split('/\R/', $text) as $line) {
+                $this->assertStringStartsNotWith('::', ltrim($line), "{$label}: {$line}");
+            }
+        };
+        $file = sys_get_temp_dir().'/bfsg-newline-'.uniqid().'.md';
 
-        foreach (['default' => [], 'detailed' => ['--detailed' => true]] as $label => $options) {
-            [$exitCode, $output] = $this->check(['url' => '/newline', ...$options]);
+        $cases = [
+            'default' => [[], '(x ::notice title=BFSG::All checks passed)'],
+            'detailed' => [['--detailed' => true], '(x ::notice title=BFSG::All checks passed)'],
+            'markdown' => [['--format' => 'markdown'], '\(x ::notice title=BFSG::All checks passed\)'],
+            'markdown --output' => [['--format' => 'markdown', '--output' => $file], null],
+        ];
 
-            $this->assertSame(1, $exitCode, $label);
-            $this->assertStringContainsString('(x ::notice title=BFSG::All checks passed)', $output->stdout(), $label.': the finding is one line');
-            $this->assertStringContainsString('missing ::warning title=BFSG::fake.css', $output->stderr(), $label.': the warning is one line');
+        try {
+            foreach ($cases as $label => [$options, $finding]) {
+                [$exitCode, $output] = $this->check(['url' => '/newline', ...$options]);
 
-            foreach (['stdout' => $output->stdout(), 'stderr' => $output->stderr()] as $stream => $text) {
-                foreach (preg_split('/\R/', $text) as $line) {
-                    $this->assertStringStartsNotWith('::', ltrim($line), "{$label} {$stream}: {$line}");
+                $this->assertSame(1, $exitCode, $label);
+                $this->assertStringContainsString('missing ::warning title=BFSG::fake.css', $output->stderr(), $label.': the warning is one line');
+                $assertNoCommandLine($output->stdout(), "{$label} stdout");
+                $assertNoCommandLine($output->stderr(), "{$label} stderr");
+
+                if ($finding !== null) {
+                    $this->assertStringContainsString($finding, $output->stdout(), $label.': the finding is one line');
                 }
             }
+
+            $markdown = (string) file_get_contents($file);
+            $this->assertStringContainsString('\(x ::notice title=BFSG::All checks passed\)', $markdown, 'the written report has the finding on one line');
+            $assertNoCommandLine($markdown, 'markdown --output file');
+        } finally {
+            @unlink($file);
         }
     }
 

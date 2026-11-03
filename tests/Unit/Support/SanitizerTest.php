@@ -59,6 +59,12 @@ class SanitizerTest extends TestCase
         );
     }
 
+    public function test_markdown_is_one_line(): void
+    {
+        $this->assertSame('x ::notice title=BFSG::All checks passed', Sanitizer::markdown("x \n\t ::notice title=BFSG::All checks passed"));
+        $this->assertSame('a b c d', Sanitizer::markdown("a\r\nb\u{2028}c\n\nd"));
+    }
+
     public function test_truncate_is_multibyte_safe_and_marks_the_cut(): void
     {
         $this->assertSame('Straße 😀', Sanitizer::truncate('Straße 😀', 8));

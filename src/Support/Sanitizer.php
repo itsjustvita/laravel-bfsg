@@ -24,10 +24,15 @@ final class Sanitizer
         return (string) preg_replace(self::CONTROLS, '', mb_scrub($text, 'UTF-8'));
     }
 
-    /** terminal(), then & < > as HTML entities, then inline-markup punctuation backslash-escaped: always literal text. */
+    /**
+     * Inline text: terminal(), one line (line breaks with their surrounding whitespace become one space, so page text
+     * never starts a line, e.g. "::notice::" in a CI log or step summary), & < > as HTML entities, then inline-markup
+     * punctuation backslash-escaped: always literal text.
+     */
     public static function markdown(string $text): string
     {
-        $text = str_replace(['&', '<', '>'], ['&amp;', '&lt;', '&gt;'], self::terminal($text));
+        $text = (string) preg_replace('/\s*\R\s*/u', ' ', self::terminal($text));
+        $text = str_replace(['&', '<', '>'], ['&amp;', '&lt;', '&gt;'], $text);
 
         return (string) preg_replace(self::MARKDOWN_PUNCTUATION, '\\\\$0', $text);
     }
