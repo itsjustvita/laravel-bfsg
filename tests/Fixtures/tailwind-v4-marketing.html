@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Launch faster with Rocketship | Rocketship</title>
     <style>
+        @layer properties;
         @layer theme, base, components, utilities;
         @layer theme {
             :root { --color-gray-400: oklch(70.7% 0.022 261.325); --color-indigo-600: oklch(51.1% 0.262 276.966); --font-sans: ui-sans-serif, system-ui; }
         }
+        @layer theme{:root,:host{--color-blue-600:oklch(54.6% .245 262.881);--color-gray-950:oklch(13% .028 261.692)}}
         @layer theme{:root{--color-gray-300:oklch(87.2% .01 258.338)}}
         @layer base {
             *, ::after, ::before { box-sizing: border-box; border: 0 solid; margin: 0; padding: 0; }
@@ -33,7 +35,15 @@
             @media (width >= 40rem) { .sm\:text-6xl { font-size: 3.75rem; line-height: 1; } }
             @media print { .print\:hidden { display: none; } }
             @supports (color: oklch(0 0 0)) { .text-muted-modern { color: oklch(55% 0 0); } }
+            .bg-blue-600{background-color:var(--color-blue-600)}
+            .bg-black\/5{background-color:color-mix(in oklab, #000 5%, transparent)}
+            .shadow-sm{--tw-shadow:0 1px 3px 0 var(--tw-shadow-color,#0000001a);box-shadow:var(--tw-inset-shadow),var(--tw-ring-shadow),var(--tw-shadow)}
+            .hover\:bg-blue-700{&:hover{@media (hover:hover){background-color:oklch(48.8% .243 264.376)}}}
+            @media (prefers-color-scheme: dark){.dark\:bg-gray-950{background-color:var(--color-gray-950)}}
+            @media (prefers-color-scheme: dark){.dark\:text-white{color:#fff}}
         }
+        @layer properties{*,::before,::after{--tw-shadow:0 0 #0000;--tw-ring-color:initial}}
+        @property --tw-shadow{syntax:"*";inherits:false;initial-value:0 0 #0000}
     </style>
 </head>
 <body class="bg-white">
@@ -53,6 +63,11 @@
     </section>
     <section aria-label="Legal" class="bg-white">
         <p class="text-sm text-gray-300" id="v4-muted">Prices exclude VAT.</p>
+    </section>
+    <section aria-label="Updates" class="bg-white dark:bg-gray-950">
+        <p id="v4-dark" class="text-gray-900 dark:text-white">New: dark mode for every dashboard.</p>
+        <span id="v4-badge" class="bg-black/5 text-gray-900 shadow-sm">Beta</span>
+        <a href="/changelog" class="bg-blue-600 hover:bg-blue-700 text-white">Changelog for version 2</a>
     </section>
     <section aria-label="Testimonials">
         <figure>

@@ -37,7 +37,7 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
         $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p');
         $this->assertSame(['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff'], $violation->params);
-        $this->assertSame(['approximate' => false, 'ratio' => 1.61, 'large' => false], $violation->meta);
+        $this->assertSame(['approximate' => false, 'ratio' => 1.61, 'large' => false, 'occurrences' => 1, 'selectors' => []], $violation->meta);
         $this->assertSame([], $violation->tags);
     }
 
@@ -64,10 +64,11 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
     {
         $violations = $this->analyze($this->page('.muted { color: #aaa }', '<div class="muted" id="d">Div text</div><section class="muted">x <em>y</em></section><small class="muted">z</small>'));
 
-        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'div#d.muted');
-        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'section.muted');
-        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'em');
-        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'small.muted');
+        // One colour signature: one finding on the first element, the others in meta.selectors (spec D3).
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'div#d.muted');
+        $this->assertViolationCount($violations, 'contrast.insufficient', 1);
+        $this->assertSame(4, $violation->meta['occurrences']);
+        $this->assertSame(['/html[1]/body[1]/section[1]', '/html[1]/body[1]/section[1]/em[1]', '/html[1]/body[1]/small[1]'], $violation->meta['selectors']);
     }
 
     public function test_non_rendered_text_is_skipped(): void
@@ -186,7 +187,7 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
     public function test_analysis_stops_at_the_element_cap_with_one_notice(): void
     {
-        $html = '<div>'.str_repeat('<p>x</p>', ContrastAnalyzer::MAX_MEASURED + 5).'</div>';
+        $html = '<div>'.implode('', array_map(fn (int $i) => '<p id="p'.$i.'">x</p>', range(1, ContrastAnalyzer::MAX_MEASURED + 5))).'</div>';
 
         $violations = $this->analyze($html);
 
@@ -292,17 +293,13 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
             fn ($violation) => $violation->key === 'contrast.insufficient',
         );
 
-        $this->assertNotEmpty($violations);
-
-        foreach ($violations as $violation) {
-            $this->assertSame(Severity::Error, $violation->severity, (string) $violation->element);
-            $this->assertFalse($violation->meta['approximate'], (string) $violation->element);
-        }
-
-        foreach (['a', 'button'] as $element) {
-            $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: $element, severity: Severity::Error);
-            $this->assertSame('#d1d5db', $violation->params['foreground'], $element);
-        }
+        // One definite colour signature for all three (spec D3): the link and the button are further occurrences.
+        $this->assertCount(1, $violations);
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.text-gray-300', severity: Severity::Error);
+        $this->assertFalse($violation->meta['approximate']);
+        $this->assertSame('#d1d5db', $violation->params['foreground']);
+        $this->assertSame(3, $violation->meta['occurrences']);
+        $this->assertSame(['/html[1]/body[1]/p[1]/a[1]', '/html[1]/body[1]/p[1]/button[1]'], $violation->meta['selectors']);
     }
 
     public function test_light_theme_media_is_the_base_theme(): void
@@ -355,7 +352,7 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame('1.4.3', $violation->rule);
         $this->assertSame(['approximate'], $violation->tags);
         $this->assertSame(['foreground' => '#000000', 'background' => '#ffffff'], $violation->params);
-        $this->assertSame(['approximate', 'ratio', 'large'], array_keys($violation->meta));
+        $this->assertSame(['approximate', 'ratio', 'large', 'occurrences', 'selectors'], array_keys($violation->meta));
         $this->assertTrue($violation->meta['approximate']);
         $this->assertSame(21.0, $violation->meta['ratio']);
         $this->assertNoViolation($violations, 'contrast.insufficient');
@@ -493,5 +490,66 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
         $violation = $this->assertHasViolation($this->analyze($this->page('', $sprite.'<main><p style="color:#aaa">x</p></main>')), 'contrast.insufficient', severity: Severity::Error);
         $this->assertSame([], $violation->tags);
+    }
+
+    // AN4 (spec C7, D3): identical failures give one finding, the different footer note its own.
+    public function test_identical_failures_are_grouped(): void
+    {
+        $violations = $this->analyze($this->page('.date{color:#aaa}', str_repeat('<p class="date">1.1.</p>', 300).'<p class="note" style="color:#bbb">x</p>'));
+
+        $this->assertViolationCount($violations, 'contrast.insufficient', 2);
+        [$dates, $note] = array_values(array_filter($violations, fn ($violation) => $violation->key === 'contrast.insufficient'));
+        $this->assertSame(['p.date', '/html[1]/body[1]/p[1]'], [$dates->element, $dates->selector]);
+        $this->assertSame(300, $dates->meta['occurrences']);
+        $this->assertCount(ContrastAnalyzer::MAX_GROUPED_SELECTORS, $dates->meta['selectors']);
+        $this->assertSame(20, ContrastAnalyzer::MAX_GROUPED_SELECTORS);
+        $this->assertSame(['/html[1]/body[1]/p[2]', '/html[1]/body[1]/p[21]'], [$dates->meta['selectors'][0], $dates->meta['selectors'][19]]);
+        $this->assertSame(['p.note', 1, []], [$note->element, $note->meta['occurrences'], $note->meta['selectors']]);
+        $this->assertSame('#bbbbbb', $note->params['foreground']);
+    }
+
+    public function test_different_thresholds_are_not_grouped(): void
+    {
+        $violations = $this->analyze($this->page('.t{color:#aaa}', '<p class="t" style="font-size:30px">Large</p><p class="t" style="font-size:16px">Normal</p>'));
+
+        $this->assertViolationCount($violations, 'contrast.insufficient', 2);
+        $this->assertSame([3.0, 4.5], array_map(fn ($violation) => $violation->params['required'], $violations));
+    }
+
+    public function test_unverifiable_findings_are_grouped(): void
+    {
+        $violations = $this->analyze($this->page('.hero{background-image:url(/hero.jpg)}', str_repeat('<div class="hero"><p style="color:#000">Welcome</p></div>', 5)));
+
+        $this->assertViolationCount($violations, 'contrast.unverifiable', 1);
+        $violation = $this->assertHasViolation($violations, 'contrast.unverifiable', severity: Severity::Notice);
+        $this->assertSame(5, $violation->meta['occurrences']);
+        $this->assertCount(4, $violation->meta['selectors']);
+    }
+
+    // C7: MAX_MEASURED counts distinct style chains, so repeated markup does not stop the analysis before the footer.
+    public function test_the_cap_counts_distinct_style_chains(): void
+    {
+        $html = $this->page('.date{color:#aaa} .note{color:#bbb}', '<main>'.str_repeat('<div class="card"><h3>T</h3><p class="date">1.1.</p></div>', ContrastAnalyzer::MAX_MEASURED + 100).'</main><footer><p class="note">x</p></footer>');
+
+        $violations = $this->analyze($html);
+
+        $this->assertNoViolation($violations, 'contrast.analysis_truncated');
+        $this->assertSame(ContrastAnalyzer::MAX_MEASURED + 100, $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.date')->meta['occurrences']);
+        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.note');
+    }
+
+    // A memoised measurement is reused only by the same style chain: a twin whose previous sibling covers its backdrop, or
+    // whose label names a disabled control, is not the earlier twin (black text: the exact twins pass).
+    public function test_memoised_twins_keep_their_own_backdrop_and_exemption(): void
+    {
+        $twins = fn (string $twin, string $other) => str_repeat('<div class="w">'.$twin.'</div>', 2).'<div class="w">'.$other.'</div><div class="w">'.$twin.'</div>';
+
+        $covered = $this->analyze($this->page('.abs{position:absolute;inset:0}', $twins('<span class="abs"></span><p>Welcome</p>', '<img class="abs" src="/hero.jpg" alt=""><p>Welcome</p>')));
+        $this->assertSame('/html[1]/body[1]/div[3]/p[1]', $this->assertHasViolation($covered, 'contrast.unverifiable')->selector);
+
+        $labels = $this->analyze($this->page('label{color:#bbb}', $twins('<label>Name <input></label>', '<label>Name <input disabled></label>')));
+        $violation = $this->assertHasViolation($labels, 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame(3, $violation->meta['occurrences']);
+        $this->assertNotContains('/html[1]/body[1]/div[3]/label[1]', [$violation->selector, ...$violation->meta['selectors']]);
     }
 }

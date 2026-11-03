@@ -10,11 +10,17 @@ use SplObjectStorage;
 
 class ContrastAnalyzer extends BaseAnalyzer
 {
-    /** Hard cap of measured text elements per document. */
+    /** Hard cap of measured style chains (chainKey()) per document; text with an already measured chain reuses its verdict. */
     public const MAX_MEASURED = 500;
+
+    /** Selectors of further occurrences listed in a grouped finding's `meta.selectors` (spec D3). */
+    public const MAX_GROUPED_SELECTORS = 20;
 
     /** Wall-clock budget per document, in seconds (the same as an index build without a deadline). */
     public const TIME_BUDGET_SECONDS = CssParser::INDEX_TIME_BUDGET_SECONDS;
+
+    /** Exempt style chains remembered per document (16-byte keys); beyond it, exemption is checked per element. */
+    private const MAX_EXEMPT_CHAINS = 5000;
 
     /** [normal, large] thresholds per level. */
     private const THRESHOLDS = ['AA' => [4.5, 3.0], 'AAA' => [7.0, 4.5]];
@@ -36,6 +42,21 @@ class ContrastAnalyzer extends BaseAnalyzer
     /** @var SplObjectStorage<DOMElement, bool> label => whether its labelled control is disabled, per document */
     private SplObjectStorage $inactiveLabels;
 
+    /** @var list<array{0: DOMElement, 1: string, 2: int|false|null}> the current path from the root: element, chain key, coveringChildIndex() (false: not looked up) */
+    private array $chain = [];
+
+    /** @var array<int, int> spl_object_id of an element on the path => its index in the path */
+    private array $depths = [];
+
+    /** @var array<string, array<string, mixed>|null> chain key => its finding (verdict(); null: passes), per document */
+    private array $verdicts = [];
+
+    /** @var array<string, true> chain keys of exempt text, per document (at most MAX_EXEMPT_CHAINS) */
+    private array $exemptChains = [];
+
+    /** @var array<string, array{element: DOMElement, finding: array<string, mixed>, occurrences: int, selectors: list<string>}> colour signature => group, in document order */
+    private array $groups = [];
+
     public function __construct(private ?CssParser $cssParser = null, private ?string $level = null) {}
 
     protected function inspect(): void
@@ -44,15 +65,22 @@ class ContrastAnalyzer extends BaseAnalyzer
         $parser = ($this->cssParser?->parse($this->document) ?? $this->document->cssParser())->buildIndex($deadline);
         $level = $this->level();
         $measured = 0;
+        $truncated = false;
         $this->inactiveLabels = new SplObjectStorage;
 
         foreach ($this->query('//*[text()[normalize-space()]]') as $element) {
-            if (in_array(Element::tag($element), self::SKIPPED_TAGS, true) || $this->ownText($element) === '' || $this->isExempt($parser, $element)) {
+            if (in_array(Element::tag($element), self::SKIPPED_TAGS, true) || $this->ownText($element) === '') {
                 continue;
             }
 
-            if ($measured >= self::MAX_MEASURED || microtime(true) > $deadline) {
-                $this->report('analysis_truncated', Severity::Notice, '1.4.3', null, ['limit' => $measured]);
+            $key = $this->chainKey($parser, $element);
+
+            if ($this->isExempt($parser, $element, $key) || $this->isInactive($element)) {
+                continue;
+            }
+
+            if ((! array_key_exists($key, $this->verdicts) && count($this->verdicts) >= self::MAX_MEASURED) || microtime(true) > $deadline) {
+                $truncated = true;
 
                 break;
             }
@@ -61,26 +89,98 @@ class ContrastAnalyzer extends BaseAnalyzer
             $this->measure($parser, $element, $level);
         }
 
-        $this->inactiveLabels = new SplObjectStorage; // releases the document's labels
+        foreach ($this->groups as ['element' => $element, 'finding' => $finding, 'occurrences' => $occurrences, 'selectors' => $selectors]) {
+            $meta = [...$finding['meta'], 'occurrences' => $occurrences, 'selectors' => $selectors];
+
+            if ($finding['unverifiable']) {
+                $this->report('unverifiable', $finding['severity'], $finding['rule'], $element, $finding['params'], $meta, tags: $finding['tags']);
+            } else {
+                $this->report('insufficient', $finding['severity'], $finding['rule'], $element, $finding['params'], $meta, tags: $finding['tags']);
+            }
+        }
+
+        if ($truncated) {
+            $this->report('analysis_truncated', Severity::Notice, '1.4.3', null, ['limit' => $measured]);
+        }
+
+        // releases the document's elements
+        $this->inactiveLabels = new SplObjectStorage;
+        $this->chain = $this->depths = $this->verdicts = $this->exemptChains = $this->groups = [];
     }
 
     /**
-     * Text that is not measured: not rendered (aria-hidden text is visible and measured), hidden by the stylesheets, fully
-     * transparent (CssParser::isTransparent(): an exact opacity 0 at every viewport), or part of an inactive user
-     * interface component, which 1.4.3 exempts.
+     * Text that is not measured because of its style chain: not rendered (aria-hidden text is visible and measured), hidden
+     * by the stylesheets, or fully transparent (CssParser::isTransparent(): an exact opacity 0 at every viewport). Text of
+     * an inactive component, which 1.4.3 exempts, depends on more than the chain (a label's control): isInactive().
      */
-    private function isExempt(CssParser $parser, DOMElement $element): bool
+    private function isExempt(CssParser $parser, DOMElement $element, string $key): bool
     {
-        return Element::isNotRendered($element) || $parser->hidesElement($element) || $parser->isTransparent($element) || $this->isInactive($element);
+        if (isset($this->exemptChains[$key])) {
+            return true;
+        }
+
+        if (array_key_exists($key, $this->verdicts)) {
+            return false;
+        }
+
+        $exempt = Element::isNotRendered($element) || $parser->hidesElement($element) || $parser->isTransparent($element);
+
+        if ($exempt && count($this->exemptChains) < self::MAX_EXEMPT_CHAINS) {
+            $this->exemptChains[$key] = true;
+        }
+
+        return $exempt;
     }
 
     /**
-     * The verdict (spec D2). A failure is an error when it is definite, else a warning tagged `approximate`: an unknown
-     * colour or a truncated index (resolveColors()['uncertainty']), or an unknown size with a ratio that meets the
-     * large-text threshold. A pass with an unknown colour is only the notice `unverifiable`, at any level (R36). At level
-     * AAA, any other AA pass that fails AAA is the notice tagged `aaa`.
+     * Measures the text and adds it to the group of its colour signature (spec D3). The verdict is memoised per style chain
+     * (chainKey()): text with the same chain has the same colours, size and verdict.
      */
     protected function measure(CssParser $parser, DOMElement $element, string $level): void
+    {
+        $key = $this->chainKey($parser, $element);
+
+        if (! array_key_exists($key, $this->verdicts)) {
+            $this->verdicts[$key] = $this->verdict($parser, $element, $level);
+        }
+
+        if ($this->verdicts[$key] === null) {
+            return;
+        }
+
+        $finding = $this->verdicts[$key];
+        $signature = implode('|', [
+            $finding['unverifiable'] ? 'unverifiable' : 'insufficient',
+            $finding['rule'],
+            $finding['severity']->value,
+            $finding['params']['foreground'],
+            $finding['params']['background'],
+            $finding['params']['required'] ?? '',
+            $finding['meta']['approximate'] ? 'approximate' : 'exact',
+        ]);
+
+        if (! isset($this->groups[$signature])) {
+            $this->groups[$signature] = ['element' => $element, 'finding' => $finding, 'occurrences' => 1, 'selectors' => []];
+
+            return;
+        }
+
+        $this->groups[$signature]['occurrences']++;
+
+        if (count($this->groups[$signature]['selectors']) < self::MAX_GROUPED_SELECTORS) {
+            $this->groups[$signature]['selectors'][] = $this->document->selectorFor($element);
+        }
+    }
+
+    /**
+     * The verdict (spec D2), null when the text passes. A failure is an error when it is definite, else a warning tagged
+     * `approximate`: an unknown colour or a truncated index (resolveColors()['uncertainty']), or an unknown size with a ratio
+     * that meets the large-text threshold. A pass with an unknown colour is only the notice `unverifiable`, at any level
+     * (R36). At level AAA, any other AA pass that fails AAA is the notice tagged `aaa`.
+     *
+     * @return array{unverifiable: bool, severity: Severity, rule: string, params: array<string, scalar>, meta: array<string, mixed>, tags: list<string>}|null
+     */
+    private function verdict(CssParser $parser, DOMElement $element, string $level): ?array
     {
         $colors = $parser->resolveColors($element);
         $ratio = $colors['foreground']->contrastRatio($colors['background']);
@@ -91,13 +191,18 @@ class ContrastAnalyzer extends BaseAnalyzer
 
         if ($failure === null) {
             if (array_intersect(self::UNKNOWN_COLOUR, $colors['uncertainty']) !== []) {
-                $this->report('unverifiable', Severity::Notice, '1.4.3', $element, $hex, ['approximate' => true, 'ratio' => round($ratio, 2), 'large' => $large], tags: ['approximate']);
-
-                return;
+                return [
+                    'unverifiable' => true,
+                    'severity' => Severity::Notice,
+                    'rule' => '1.4.3',
+                    'params' => $hex,
+                    'meta' => ['approximate' => true, 'ratio' => round($ratio, 2), 'large' => $large],
+                    'tags' => ['approximate'],
+                ];
             }
 
             if ($level !== 'AAA' || ($failure = $this->failure($ratio, $large, 'AAA', $colors['uncertainty'])) === null) {
-                return;
+                return null;
             }
 
             $aaa = true;
@@ -110,19 +215,79 @@ class ContrastAnalyzer extends BaseAnalyzer
             $tags[] = 'approximate';
         }
 
-        $this->report(
-            'insufficient',
-            match (true) {
+        return [
+            'unverifiable' => false,
+            'severity' => match (true) {
                 $aaa => Severity::Notice,
                 $approximate => Severity::Warning,
                 default => Severity::Error,
             },
-            $aaa ? '1.4.6' : '1.4.3',
-            $element,
-            ['ratio' => number_format($ratio, 2), 'required' => $required, ...$hex],
-            ['approximate' => $approximate, 'ratio' => round($ratio, 2), 'large' => $large],
-            tags: $tags,
-        );
+            'rule' => $aaa ? '1.4.6' : '1.4.3',
+            'params' => ['ratio' => number_format($ratio, 2), 'required' => $required, ...$hex],
+            'meta' => ['approximate' => $approximate, 'ratio' => round($ratio, 2), 'large' => $large],
+            'tags' => $tags,
+        ];
+    }
+
+    /**
+     * The style chain key: a 16-byte hash over every level from the root to the element of its tag, all attributes sorted by
+     * name, whether it is its parent's first and last element child, and whether a previous sibling may cover its backdrop
+     * (CssParser::coveringChildIndex()). The supported selectors see nothing else, so text with the same key has the same
+     * colours, size and verdict. The path's keys are kept while the document-order walk stays below it, so each element is
+     * hashed once and memory stays O(depth).
+     */
+    private function chainKey(CssParser $parser, DOMElement $element): string
+    {
+        $new = [];
+
+        for ($node = $element; $node instanceof DOMElement && ! isset($this->depths[spl_object_id($node)]); $node = $node->parentNode) {
+            $new[] = $node;
+        }
+
+        $depth = $node instanceof DOMElement ? $this->depths[spl_object_id($node)] + 1 : 0;
+
+        while (count($this->chain) > $depth) {
+            unset($this->depths[spl_object_id(array_pop($this->chain)[0])]);
+        }
+
+        foreach (array_reverse($new) as $node) {
+            $attributes = [];
+
+            foreach ($node->attributes as $attribute) {
+                $attributes[$attribute->nodeName] = $attribute->value;
+            }
+
+            ksort($attributes, SORT_STRING);
+            $level = [$node->nodeName, $attributes, $node->previousElementSibling === null, $node->nextElementSibling === null, $this->isCovered($parser, $node)];
+            $this->depths[spl_object_id($node)] = count($this->chain);
+            $this->chain[] = [$node, hash('xxh128', ($this->chain === [] ? '' : $this->chain[array_key_last($this->chain)][1]).serialize($level), true), false];
+        }
+
+        return $this->chain[array_key_last($this->chain)][1];
+    }
+
+    /** Whether a previous element sibling may cover the node's backdrop; the parent (on the path) is looked up once. */
+    private function isCovered(CssParser $parser, DOMElement $node): bool
+    {
+        if ($this->chain === [] || ! $node->parentNode instanceof DOMElement) {
+            return false;
+        }
+
+        $parent = array_key_last($this->chain);
+
+        if ($this->chain[$parent][2] === false) {
+            $this->chain[$parent][2] = $parser->coveringChildIndex($this->chain[$parent][0]);
+        }
+
+        $index = $this->chain[$parent][2];
+
+        for ($sibling = $node->previousElementSibling, $before = 0; $index !== null && $sibling !== null; $sibling = $sibling->previousElementSibling) {
+            if (++$before > $index) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

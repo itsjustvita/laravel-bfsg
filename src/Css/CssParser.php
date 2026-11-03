@@ -2696,6 +2696,25 @@ class CssParser
     }
 
     /**
+     * Element-child index of the parent's first child that may cover the backdrop of the children after it
+     * (coveringSiblingIndex(), the per-level `backdrop` test of resolveColors()); null when none does.
+     */
+    public function coveringChildIndex(DOMElement $parent): ?int
+    {
+        if ($this->document === null || ! $parent->ownerDocument?->isSameNode($this->document->dom())) {
+            return null;
+        }
+
+        $key = $this->nodeKey($parent);
+
+        if (! array_key_exists($key, $this->coveringMedia)) {
+            $this->coveringMedia[$key] = $this->coveringSiblingIndex($parent, $key);
+        }
+
+        return $this->coveringMedia[$key];
+    }
+
+    /**
      * Whether a previous element sibling of the element may cover its backdrop (see coveringSiblingIndex()). The parent's
      * children are looked up once; the positional step then stops after that index.
      */

@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use ItsJustVita\LaravelBfsg\Violation;
@@ -152,6 +153,30 @@ class FixtureExpectationsTest extends TestCase
         }
 
         $this->assertSame('#d1d5dc', $byElement['p#v4-muted.text-sm.text-gray-300']->params['foreground']);
+    }
+
+    /**
+     * Review Focus 3, a compiled Tailwind v4 build: an `@layer properties` reset with `--tw-*: initial`, `@property`,
+     * nested `&:hover` with `@media (hover: hover)`, a color-mix() opacity modifier, oklch tokens and a
+     * prefers-color-scheme dark variant. No flood of manual checks, and no error on the translucent badge or the
+     * dark-variant text (wherever grouping puts them).
+     */
+    public function test_tailwind_v4_build_gives_no_unverifiable_flood(): void
+    {
+        $html = (string) file_get_contents(__DIR__.'/../Fixtures/tailwind-v4-marketing.html');
+        $violations = (new Bfsg)->analyze($html)->all();
+        $document = HtmlDocument::fromHtml($html);
+        $targets = array_map(fn (string $id) => $document->selectorFor($document->elementsById()[$id]), ['v4-dark', 'v4-badge']);
+        $errors = [];
+
+        foreach ($violations as $violation) {
+            if ($violation->key === 'contrast.insufficient' && $violation->severity === Severity::Error) {
+                $errors = [...$errors, (string) $violation->selector, ...$violation->meta['selectors']];
+            }
+        }
+
+        $this->assertLessThanOrEqual(1, count(array_filter($violations, fn (Violation $violation) => $violation->key === 'contrast.unverifiable')));
+        $this->assertSame([], array_values(array_intersect($targets, $errors)));
     }
 
     /**
