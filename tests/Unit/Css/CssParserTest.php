@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Css;
 
 use DOMElement;
+use ItsJustVita\LaravelBfsg\Css\Color;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
@@ -799,6 +800,268 @@ class CssParserTest extends TestCase
         $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .c{background-color:inherit}', '<div class="p"><div><p class="c" id="t">x</p></div></div>'), 'the parent\'s own background is transparent');
         $this->assertSame(['#000000', '#404040', false], $this->colors('.p{background:rgba(0,0,0,.5)} .c{background-color:inherit}', $nested), 'the parent\'s own translucent colour, composited again');
         $this->assertSame(['#000000', '#123456', false], $this->colors('.p{background:#123456} .m{background-color:inherit} .c{background-color:inherit}', '<div class="p"><div class="m"><p class="c" id="t">x</p></div></div>'), 'an inherited inherit');
+    }
+
+    /** @return array{foreground: Color, background: Color, approximate: bool, uncertainty: list<string>} resolveColors() of the first element $xpath selects */
+    private function resolved(string $css, string $body, string $xpath): array
+    {
+        [$parser, $document] = $this->parsed($css, $body);
+        $colors = $parser->resolveColors($document->query($xpath)[0]);
+
+        $this->assertSame($colors['uncertainty'] !== [], $colors['approximate'], 'approximate is exactly "some uncertainty"');
+
+        return $colors;
+    }
+
+    public function test_background_image_is_backdrop(): void
+    {
+        $colors = $this->resolved('.hero{background-image:url(/h.jpg)}', '<div class="hero"><h1 style="color:#fff">W</h1></div>', '//h1');
+
+        $this->assertSame(['backdrop'], $colors['uncertainty']);
+        $this->assertSame('#ffffff', $colors['background']->toHex(), 'url() without a colour: the nearest solid ancestor background');
+    }
+
+    public function test_background_shorthand_with_only_url_is_backdrop(): void
+    {
+        $colors = $this->resolved('.hero{background:url(/h.jpg) center/cover}', '<div class="hero"><h1 style="color:#fff">W</h1></div>', '//h1');
+
+        $this->assertSame(['backdrop'], $colors['uncertainty']);
+        $this->assertSame('#ffffff', $colors['background']->toHex());
+    }
+
+    public function test_gradient_is_backdrop_with_first_stop_estimate(): void
+    {
+        $colors = $this->resolved('.g{background-image:linear-gradient(#000, #fff)}', '<div class="g"><p style="color:#fff">x</p></div>', '//p');
+
+        $this->assertSame('#000000', $colors['background']->toHex());
+        $this->assertSame(['backdrop'], $colors['uncertainty']);
+    }
+
+    public function test_covering_media_sibling_is_backdrop(): void
+    {
+        $colors = $this->resolved(
+            '.absolute{position:absolute} .relative{position:relative}',
+            '<div class="relative"><img class="absolute" src="a.jpg" alt=""><div class="relative"><p class="text-white" style="color:#fff">Hi</p></div></div>',
+            '//p',
+        );
+
+        $this->assertSame(['backdrop'], $colors['uncertainty']);
+    }
+
+    public function test_background_image_none_is_certain(): void
+    {
+        $colors = $this->resolved('.x{background-image:none}', '<div class="x"><p>x</p></div>', '//p');
+
+        $this->assertSame([], $colors['uncertainty']);
+        $this->assertFalse($colors['approximate']);
+    }
+
+    public function test_unparsed_colour_is_colour_uncertainty(): void
+    {
+        $colors = $this->resolved('p{background:light-dark(#000,#fff);color:#fff}', '<p>x</p>', '//p');
+
+        $this->assertSame(['colour'], $colors['uncertainty']);
+    }
+
+    public function test_truncated_index_is_limit(): void
+    {
+        $css = '';
+
+        for ($i = 0; $i <= CssParser::MAX_INDEXED_RULES; $i++) {
+            $css .= ".u{$i} { color: #111 } .n{$i} { margin: 0 } ";
+        }
+
+        [$parser, $document] = $this->parsed($css.'p { color: red }', '<p id="t" class="u1">x</p>');
+        $colors = $parser->resolveColors($this->target($document));
+
+        $this->assertTrue($parser->isTruncated());
+        $this->assertContains('limit', $colors['uncertainty']);
+        $this->assertSame(['limit'], $colors['uncertainty'], 'nothing else is uncertain');
+        $this->assertTrue($colors['approximate']);
+    }
+
+    public function test_opacity_scales_text(): void
+    {
+        [$parser, $document] = $this->parsed('', '<div style="opacity:.3"><p style="color:#000">x</p></div>');
+        $paragraph = $document->query('//p')[0];
+        $colors = $parser->resolveColors($paragraph);
+
+        $this->assertSame('#b3b3b3', $colors['foreground']->toHex());
+        $this->assertSame('#ffffff', $colors['background']->toHex());
+        $this->assertSame([], $colors['uncertainty']);
+        $this->assertEqualsWithDelta(0.3, $parser->opacity($paragraph), 1e-9);
+    }
+
+    public function test_opacity_is_the_clamped_product_of_the_ancestors(): void
+    {
+        [$parser, $document] = $this->parsed(
+            '.half{opacity:50%} .fade{opacity:.5} .over{opacity:2} .under{opacity:-1} .same{opacity:inherit} :root{--o:.5} .var{opacity:var(--o)}',
+            '<div class="half"><div class="fade"><p id="a">a</p><p id="b" class="over">b</p><p id="c" class="same">c</p></div></div>'
+                .'<p id="d" class="under">d</p><div class="var"><p id="e">e</p></div><p id="f">f</p>',
+        );
+        $opacity = fn (string $id): float => $parser->opacity($document->elementsById()[$id]);
+
+        $this->assertEqualsWithDelta(0.25, $opacity('a'), 1e-9);
+        $this->assertEqualsWithDelta(0.25, $opacity('b'), 1e-9, 'an opacity above 1 is clamped to 1');
+        $this->assertEqualsWithDelta(0.125, $opacity('c'), 1e-9, 'inherit takes the parent\'s own opacity');
+        $this->assertEqualsWithDelta(0.0, $opacity('d'), 1e-9, 'a negative opacity is clamped to 0');
+        $this->assertEqualsWithDelta(0.5, $opacity('e'), 1e-9, 'var() is substituted');
+        $this->assertEqualsWithDelta(1.0, $opacity('f'), 1e-9);
+    }
+
+    public function test_unknown_opacity_is_colour_uncertainty(): void
+    {
+        $colors = $this->resolved('p{opacity:var(--nope);color:#000}', '<p>x</p>', '//p');
+
+        $this->assertSame(['colour'], $colors['uncertainty']);
+        $this->assertSame('#000000', $colors['foreground']->toHex(), 'an unknown opacity counts as 1');
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function backgroundImages(): array
+    {
+        return [
+            'image-set' => ['image-set("a.png" 1x, "a2.png" 2x)'],
+            '-webkit-image-set' => ['-webkit-image-set(url(a.png) 1x)'],
+            'cross-fade' => ['cross-fade(url(a.png), url(b.png), 50%)'],
+            'element' => ['element(#hero)'],
+            'paint' => ['paint(checkerboard)'],
+            'image' => ['image("a.png")'],
+            'radial-gradient' => ['radial-gradient(circle, #000, #fff)'],
+            'repeating-conic-gradient' => ['repeating-conic-gradient(#000 0 25%, #fff 0 50%)'],
+            '-webkit-linear-gradient' => ['-webkit-linear-gradient(top, #000, #fff)'],
+            'upper case URL' => ['URL(a.png)'],
+            'second layer' => ['none, url(a.png)'],
+        ];
+    }
+
+    #[DataProvider('backgroundImages')]
+    public function test_image_functions_are_backdrop_never_colour(string $image): void
+    {
+        $longhand = $this->resolved(".x{background-image:$image}", '<div class="x"><p>x</p></div>', '//p');
+        $shorthand = $this->resolved(".x{background:$image}", '<div class="x"><p>x</p></div>', '//p');
+
+        $this->assertSame(['backdrop'], $longhand['uncertainty'], 'background-image');
+        $this->assertSame(['backdrop'], $shorthand['uncertainty'], 'background');
+    }
+
+    public function test_backdrop_ends_at_the_opaque_background_used(): void
+    {
+        $this->assertSame([], $this->resolved('.hero{background-image:url(/h.jpg)} .card{background:#fff}', '<div class="hero"><div class="card"><p>x</p></div></div>', '//p')['uncertainty'], 'an opaque card hides the image behind it');
+        $this->assertSame(['backdrop'], $this->resolved('.hero{background-image:url(/h.jpg)} .card{background:rgba(255,255,255,.8)}', '<div class="hero"><div class="card"><p>x</p></div></div>', '//p')['uncertainty'], 'a translucent card does not');
+        $this->assertSame([], $this->resolved('.absolute{position:absolute} .card{background-color:#fff}', '<div><img class="absolute" src="a.jpg" alt=""><div class="x"><div class="card"><p>x</p></div></div></div>', '//p')['uncertainty'], 'covering media beyond the opaque background');
+        $this->assertSame(['colour'], $this->resolved('.hero{background-image:url(/h.jpg)} .card{background:#fff} p{background:var(--nope)}', '<div class="hero"><div class="card"><p>x</p></div></div>', '//p')['uncertainty'], 'an unresolvable background of its own: the card behind it is the estimate, the image stays hidden');
+
+        $own = $this->resolved('.hero{background:#000 url(/h.jpg)}', '<div class="hero"><p style="color:#fff">x</p></div>', '//p');
+        $this->assertSame(['backdrop'], $own['uncertainty'], 'an image on the element that supplies the opaque colour paints over it');
+        $this->assertSame('#000000', $own['background']->toHex(), 'its colour is the estimate');
+
+        $inherited = $this->resolved('.hero{background-image:url(/h.jpg)} .card{background-color:#fff;background-image:inherit}', '<div class="hero"><div class="card"><p>x</p></div></div>', '//p');
+        $this->assertSame(['backdrop'], $inherited['uncertainty'], 'an inherited image paints over the card');
+    }
+
+    public function test_translucent_gradient_composites_over_the_colour(): void
+    {
+        $colors = $this->resolved('.x{background:linear-gradient(rgba(0,0,0,.5), rgba(0,0,0,.5)), url(a.jpg) #fff}', '<div class="x"><p style="color:#fff">x</p></div>', '//p');
+
+        $this->assertSame('#808080', $colors['background']->toHex(), 'the first stop over the final layer\'s colour');
+        $this->assertSame(['backdrop'], $colors['uncertainty']);
+    }
+
+    public function test_shorthand_colour_comes_from_the_final_layer(): void
+    {
+        $colour = fn (string $background): string => $this->resolved(".x{background:$background;color:#123456}", '<div class="x"><p>x</p></div>', '//p')['background']->toHex();
+
+        $this->assertSame('#123456', $colour('url(a.png), currentcolor url("b,c.png")'), 'currentcolor next to an image');
+        $this->assertSame('#fafafa', $colour('url(a.png) no-repeat, rgb(250, 250, 250) url(b.png)'), 'commas inside functions and quotes do not split');
+        $this->assertSame('#ffffff', $colour('#000 url(a.png), url(b.png)'), 'a colour outside the final layer is invalid');
+    }
+
+    public function test_only_out_of_flow_previous_media_siblings_are_backdrop(): void
+    {
+        $page = fn (string $media): array => $this->resolved('.abs{position:absolute} .fix{position:fixed} .rel{position:relative}', $media, '//p')['uncertainty'];
+
+        $this->assertSame([], $page('<div><img src="a.jpg" alt=""><p>x</p></div>'), 'an in-flow image');
+        $this->assertSame([], $page('<div><img class="rel" src="a.jpg" alt=""><p>x</p></div>'));
+        $this->assertSame([], $page('<div><p>x</p><img class="abs" src="a.jpg" alt=""></div>'), 'a following sibling');
+        $this->assertSame([], $page('<div><span class="abs">s</span><p>x</p></div>'), 'not a media element');
+        $this->assertSame(['backdrop'], $page('<div><video class="fix"></video><span>s</span><p>x</p></div>'));
+        $this->assertSame(['backdrop'], $page('<div><picture style="position:absolute"><img src="a.jpg" alt=""></picture><p>x</p></div>'));
+        $this->assertSame(['backdrop'], $page('<div><canvas class="abs"></canvas><div><p>x</p></div></div>'), 'a previous sibling of an ancestor');
+        $this->assertSame(['backdrop'], $page('<div><svg class="abs"></svg><p>x</p></div>'));
+        $this->assertSame(['backdrop'], $page('<div><img src="a.jpg" alt=""><img class="abs" src="b.jpg" alt=""><img src="c.jpg" alt=""><p>x</p></div>'), 'behind other media');
+    }
+
+    public function test_media_siblings_beyond_the_examined_ones_may_cover(): void
+    {
+        $static = str_repeat('<img src="a.jpg" alt="">', 64);
+
+        $this->assertSame([], $this->resolved('', "<div>$static<p>x</p></div>", '//p')['uncertainty'], 'every examined image is in flow');
+        $this->assertSame(['backdrop'], $this->resolved('', "<div>$static<img src=\"b.jpg\" alt=\"\"><p>x</p></div>", '//p')['uncertainty'], 'an unexamined image may cover: never silent');
+        $this->assertSame([], $this->resolved('', "<div><p>x</p>$static<img src=\"b.jpg\" alt=\"\"></div>", '//p')['uncertainty'], 'it is not a previous sibling');
+    }
+
+    public function test_parent_keys_are_the_parents_node_paths(): void
+    {
+        $fixtures = glob(__DIR__.'/../../Fixtures/*.html') ?: [];
+        $this->assertNotSame([], $fixtures);
+        $checked = 0;
+
+        foreach ([...$fixtures, null] as $fixture) {
+            $html = $fixture === null
+                ? '<!doctype html><html><body><svg:rect></svg:rect><div><p>a</p><p>b<span>c</span></p><x-card><img></x-card></div><table><tr><td>t</td></tr></table></body></html>'
+                : (string) file_get_contents($fixture);
+            $document = HtmlDocument::fromHtml($html);
+            $parser = (new CssParser)->parse($document);
+
+            foreach ($document->query('//*[parent::*]') as $element) {
+                $key = (fn () => $this->nodeKey($element))->call($parser);
+                $this->assertSame($element->parentNode->getNodePath(), (fn () => $this->parentKey($key, $element->parentNode))->call($parser), $key);
+                $checked++;
+            }
+        }
+
+        $this->assertGreaterThan(100, $checked);
+    }
+
+    public function test_foreground_uncertainty_is_only_inherited(): void
+    {
+        $this->assertSame([], $this->resolved('div{color:var(--nope)} p{color:#111}', '<div><p>x</p></div>', '//p')['uncertainty'], 'an own colour does not depend on the parent\'s');
+        $this->assertSame(['colour'], $this->resolved('div{color:var(--nope)}', '<div><p>x</p></div>', '//p')['uncertainty'], 'an inherited one does');
+    }
+
+    /**
+     * 3000 nested elements (12 chains of 250, below the flattening depth), each with a 1000-layer background list whose
+     * image is the last layer and which never paints opaquely (the walk goes up to the root), after 2000 covering images
+     * at one level.
+     */
+    #[Group('performance')]
+    public function test_hostile_backdrops_stay_linear_and_bounded(): void
+    {
+        $layers = str_repeat('none, ', 999);
+        $css = '.abs{position:absolute} .l{background-image:'.$layers.'url(a.png)} .s{background:'.$layers.'linear-gradient(transparent, #000) rgba(0,0,0,0)}';
+        $chain = fn (string $class): string => str_repeat("<div class=\"$class\">t", 250).str_repeat('</div>', 250);
+        $body = '<section>'.str_repeat('<img class="abs" src="a.png" alt="">', 2000).str_repeat($chain('l').$chain('s'), 6).'</section>';
+        $document = HtmlDocument::fromHtml('<html><head><style>'.$css.'</style></head><body>'.$body.'</body></html>');
+        $this->assertLessThan(2 * 1048576, strlen($css.$body));
+        $this->assertCount(3000, $document->query('//div'), 'no element was flattened away');
+
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+        $start = microtime(true);
+        $parser = (new CssParser)->parse($document);
+        $results = [];
+
+        foreach ($document->query('//div') as $element) {
+            $colors = $parser->resolveColors($element);
+            $results[$colors['background']->toHex().' '.implode(',', $colors['uncertainty'])] = true;
+        }
+
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(['#ffffff backdrop' => true], $results);
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('%.3f s', $elapsed));
+        $this->assertLessThan(32 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.1f MB', (memory_get_peak_usage(true) - $before) / 1048576));
     }
 
     public function test_custom_properties_resolve_from_the_root_with_fallbacks(): void

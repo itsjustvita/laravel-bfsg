@@ -47,8 +47,41 @@ class CssParser
     /** Longest rightmost compound a maybe rule's reduction looks into; a longer one covers every element. */
     private const MAX_REDUCED_COMPOUND_BYTES = 4096;
 
-    /** Colour and font properties (spec §6.1) plus display/visibility for CSS-hidden detection. */
-    public const INDEXED_PROPERTIES = ['color', 'background', 'background-color', 'font', 'font-size', 'font-weight', 'display', 'visibility'];
+    /**
+     * Colour and font properties (spec §6.1), display/visibility for CSS-hidden detection, and background-image, position
+     * and opacity for the backdrop and the text alpha (resolveColors()).
+     */
+    public const INDEXED_PROPERTIES = [
+        'color', 'background', 'background-color', 'background-image', 'font', 'font-size', 'font-weight', 'display', 'visibility',
+        'position', 'opacity',
+    ];
+
+    /** Why a resolveColors() measurement is uncertain, in the order they are listed (see resolveColors()). */
+    private const UNCERTAINTIES = ['backdrop', 'colour', 'limit'];
+
+    /**
+     * A function in a background layer that paints an image: url(), image(), image-set(), cross-fade(), element(),
+     * paint() and every *-gradient(), with an optional vendor prefix. Possessive runs and the lookbehind keep it linear.
+     */
+    private const IMAGE_FUNCTION = '/(?<![\w-])(?:-[a-z]++-)?(?:url|image-set|image|cross-fade|element|paint|(?:[a-z]++-)*+gradient)\(/i';
+
+    /** The first gradient function of a background value (see IMAGE_FUNCTION). */
+    private const GRADIENT_FUNCTION = '/(?<![\w-])(?:-[a-z]++-)?(?:[a-z]++-)*+gradient\(/i';
+
+    /** Elements that may cover a later sibling's backdrop when they are positioned out of flow (absolute or fixed). */
+    private const COVERING_MEDIA = 'self::img or self::picture or self::video or self::canvas or self::svg';
+
+    /** Media children of one element whose position is looked up; the one after them counts as covering (never silent). */
+    private const MAX_EXAMINED_MEDIA = 64;
+
+    /** A layer whose alpha is at least this paints opaquely: the elements behind it do not show through. */
+    private const OPAQUE_ALPHA = 1.0 - 1e-9;
+
+    /** Bytes of the background-value memo (layers()): the values plus LAYER_ENTRY_BYTES each; it starts over when full. */
+    private const MAX_LAYER_CACHE_BYTES = 8 * 1024 * 1024;
+
+    /** Bookkeeping counted per memo entry on top of its value: the bucket and the nested result arrays with their colours. */
+    private const LAYER_ENTRY_BYTES = 1024;
 
     /** At-rules whose body is unwrapped (their rules apply unconditionally for static analysis). */
     private const UNWRAPPED_AT_RULES = ['layer', 'supports', 'container', 'scope', 'document', '-moz-document'];
@@ -148,11 +181,23 @@ class CssParser
 
     protected ?HtmlDocument $document = null;
 
-    /** @var array<string, array{0: Color, 1: bool}> */
+    /** @var array<string, array{0: Color, 1: list<string>, 2: ?Color, 3: list<string>, 4: array{0: bool, 1: ?Color}}> node path => background() */
     private array $backgroundCache = [];
 
-    /** @var array<string, array{0: Color, 1: bool}> */
+    /** @var array<string, array{0: Color, 1: list<string>}> node path => foreground() */
     private array $foregroundCache = [];
+
+    /** @var array<string, array{0: float, 1: list<string>, 2: float}> node path => opacity product, its uncertainty, the element's own opacity */
+    private array $opacityCache = [];
+
+    /** @var array<string, ?int> node path of a parent => element-child index of its first covering media child (see coveringMediaIndex()) */
+    private array $coveringMedia = [];
+
+    /** @var array<string, array<'image'|'colour'|'final', array{0: mixed, 1: mixed}>> background value => its analysis (see layers()) */
+    private array $layerCache = [];
+
+    /** Bytes counted for layerCache. */
+    private int $layerCacheBytes = 0;
 
     /** @var array<string, float> */
     private array $fontSizeCache = [];
@@ -270,7 +315,8 @@ class CssParser
         $this->indexBuilds = 0;
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
-        $this->fontSizeBoundCache = $this->fontWeightCache = $this->visibilityCache = [];
+        $this->fontSizeBoundCache = $this->fontWeightCache = $this->visibilityCache = $this->opacityCache = $this->coveringMedia = $this->layerCache = [];
+        $this->layerCacheBytes = 0;
         $this->viewportHiding = false;
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
@@ -592,15 +638,23 @@ class CssParser
     /** @return array<string, array{value: string, important: bool}> cascaded declarations of the element itself */
     public function declarationsFor(DOMElement $element): array
     {
-        $key = $this->nodeKey($element);
+        return $this->declarations($element, $this->nodeKey($element));
+    }
 
+    /**
+     * declarationsFor() with the element's node key.
+     *
+     * @return array<string, array{value: string, important: bool}>
+     */
+    private function declarations(DOMElement $element, string $key): array
+    {
         if (isset($this->declarationCache[$key])) {
             return $this->declarationCache[$key];
         }
 
         $winners = [];
 
-        foreach ($this->matchingRules($element) as $rule) {
+        foreach ($this->matchingRules($element, $key) as $rule) {
             foreach ($rule['properties'] as $name => $declaration) {
                 $weight = [$declaration['important'] ? 1 : 0, 0, ...$rule['specificity'], $rule['order']];
                 $this->keepHeavier($winners, $name, $declaration, $weight);
@@ -618,24 +672,97 @@ class CssParser
     }
 
     /**
-     * Effective text and background colour of an element.
+     * Effective text and background colour of an element. The text colour's alpha is scaled by opacity() before it is
+     * composited over the background. `uncertainty` lists why the measurement is not exact, in this order:
+     * - `backdrop`: from the element up to the element that supplies the opaque background used, a background layer
+     *   (`background-image` or `background`) paints an image (IMAGE_FUNCTION: url(), image-set(), *-gradient(), …), or an
+     *   img, picture, video, canvas or svg positioned absolute or fixed is a previous element sibling of one of these
+     *   elements (beyond MAX_EXAMINED_MEDIA media siblings an unexamined one counts as well). Gradients are estimated by
+     *   their first stop; a url() without a colour by the backdrop behind it;
+     * - `colour`: an unresolvable or approximate var() substitution (substituteFor()), or a colour value Color can only
+     *   approximate, in the text colour, the background or the opacity;
+     * - `limit`: the index is truncated (isTruncated()).
+     * `approximate` is true exactly when `uncertainty` is not empty.
      *
-     * @return array{foreground: Color, background: Color, approximate: bool}
+     * @return array{foreground: Color, background: Color, approximate: bool, uncertainty: list<'backdrop'|'colour'|'limit'>}
      */
     public function resolveColors(DOMElement $element): array
     {
-        [$background, $bgApproximate] = $this->background($element);
-        [$foreground, $fgApproximate] = $this->foreground($element);
+        $key = $this->nodeKey($element);
+        [$background, $backgroundUncertainty] = $this->background($element, $key);
+        [$foreground, $foregroundUncertainty] = $this->foreground($element, $key);
+        [$opacity, $opacityUncertainty] = $this->opacityOf($element, $key);
+
+        if ($opacity < 1) {
+            $foreground = new Color($foreground->r, $foreground->g, $foreground->b, $foreground->a * $opacity);
+        }
 
         if ($foreground->a < 1) {
             $foreground = $foreground->over($background);
         }
 
+        $uncertainty = $this->uncertainty($backgroundUncertainty, $foregroundUncertainty, $opacityUncertainty, $this->truncated ? ['limit'] : []);
+
         return [
             'foreground' => $foreground,
             'background' => $background,
-            'approximate' => $bgApproximate || $fgApproximate || $this->truncated,
+            'approximate' => $uncertainty !== [],
+            'uncertainty' => $uncertainty,
         ];
+    }
+
+    /**
+     * The product of the cascaded `opacity` of the element and its ancestors, clamped to 0..1. Numbers and percentages
+     * count, var() substituted; inherit takes the parent's own opacity; initial, unset, revert and revert-layer are 1. Any
+     * other value counts as 1 and makes resolveColors() uncertain (`colour`).
+     */
+    public function opacity(DOMElement $element): float
+    {
+        return $this->opacityOf($element, $this->nodeKey($element))[0];
+    }
+
+    /**
+     * opacity() with its uncertainty and the element's own opacity.
+     *
+     * @return array{0: float, 1: list<string>, 2: float}
+     */
+    private function opacityOf(DOMElement $element, string $key): array
+    {
+        if (isset($this->opacityCache[$key])) {
+            return $this->opacityCache[$key];
+        }
+
+        $node = $element->parentNode;
+        [$parent, $inherited, $parentOwn] = $node instanceof DOMElement ? $this->opacityOf($node, $this->parentKey($key, $node)) : [1.0, [], 1.0];
+        $declared = $this->declarations($element, $key)['opacity']['value'] ?? null;
+
+        if ($declared === null) {
+            return $this->opacityCache[$key] = [$parent, $inherited, 1.0];
+        }
+
+        [$value, $approximate] = $this->substituteValue($element, $key, $declared);
+        $value = $value === null || strlen($value) > 64 ? '' : strtolower(trim($value)); // longer is no opacity: unknown
+        $own = match (true) {
+            $value === 'inherit' => $parentOwn,
+            in_array($value, ['initial', 'unset', 'revert', 'revert-layer'], true) => 1.0,
+            preg_match('/^[+-]?+(?:\d++(?:\.\d*+)?+|\.\d++)(?:e[+-]?+\d++)?+(%?+)$/D', $value, $m) === 1 => (float) $value / ($m[1] === '%' ? 100 : 1),
+            default => null,
+        };
+        $uncertainty = $this->uncertainty($inherited, $approximate || $own === null || ! is_finite($own) ? ['colour'] : []);
+        $own = $own === null || ! is_finite($own) ? 1.0 : max(0.0, min(1.0, $own));
+
+        return $this->opacityCache[$key] = [max(0.0, min(1.0, $parent * $own)), $uncertainty, $own];
+    }
+
+    /**
+     * The uncertainties named in the lists, once each, in the order of UNCERTAINTIES.
+     *
+     * @param  list<string>  ...$lists
+     * @return list<'backdrop'|'colour'|'limit'>
+     */
+    private function uncertainty(array ...$lists): array
+    {
+        return array_values(array_intersect(self::UNCERTAINTIES, array_merge(...$lists)));
     }
 
     /** Font size in px: the lower bound (fontSizeLowerBoundPx()) where there is one, else an estimate. */
@@ -682,7 +809,7 @@ class CssParser
         }
 
         $parent = $element->parentNode instanceof DOMElement ? $this->fontSizeLowerBoundPx($element->parentNode) : 16.0;
-        $declared = $this->winningDeclaration($element, 'font-size', 'font');
+        $declared = $this->winningDeclaration($element, $key, 'font-size', 'font');
 
         if ($declared === null) {
             return $this->fontSizeBoundCache[$key] = $this->defaultFontSize($element, $parent);
@@ -814,7 +941,7 @@ class CssParser
         }
 
         $parent = fn (): ?float => $element->parentNode instanceof DOMElement ? $this->fontWeight($element->parentNode) : 400.0;
-        $declared = $this->winningDeclaration($element, 'font-weight', 'font');
+        $declared = $this->winningDeclaration($element, $key, 'font-weight', 'font');
 
         if ($declared === null) {
             return $this->fontWeightCache[$key] = $this->defaultFontWeight($element, $parent);
@@ -1940,11 +2067,11 @@ class CssParser
     }
 
     /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
-    private function matchingRules(DOMElement $element): array
+    private function matchingRules(DOMElement $element, ?string $key = null): array
     {
         $this->buildIndex();
 
-        return array_map(fn (int $position) => $this->rules[$position], $this->index[$this->nodeKey($element)] ?? []);
+        return array_map(fn (int $position) => $this->rules[$position], $this->index[$key ?? $this->nodeKey($element)] ?? []);
     }
 
     /**
@@ -1960,95 +2087,321 @@ class CssParser
     }
 
     /**
-     * The backdrop of the element's text: its own background colour composited over the parent's backdrop (white at the
-     * root), whether that is approximate, and the element's own background colour (null: none) with its uncertainty.
+     * The backdrop of the element's text and its uncertainty (see resolveColors()). The element's own paint is the first
+     * stop of its first gradient over its own background colour. When that paint is opaque the element supplies the
+     * background used and nothing behind it counts; otherwise it is composited over the parent's backdrop (white at the
+     * root) and the parent's uncertainty carries over. Also returns the element's own background colour (null: none)
+     * with its uncertainty and its own image layers, which inherit takes.
      *
-     * @return array{0: Color, 1: bool, 2: ?Color, 3: bool}
+     * @return array{0: Color, 1: list<string>, 2: ?Color, 3: list<string>, 4: array{0: bool, 1: ?Color}}
      */
-    private function background(DOMElement $element): array
+    private function background(DOMElement $element, string $key): array
     {
-        $key = $this->nodeKey($element);
-
         if (isset($this->backgroundCache[$key])) {
             return $this->backgroundCache[$key];
         }
 
-        [$parent, $approximate, $parentOwn, $parentOwnApproximate] = $element->parentNode instanceof DOMElement
-            ? $this->background($element->parentNode)
-            : [new Color(255, 255, 255), false, null, false];
+        $node = $element->parentNode;
+        [$parent, $parentUncertainty, $parentColor, $parentColorUncertainty, $parentImage] = $node instanceof DOMElement
+            ? $this->background($node, $this->parentKey($key, $node))
+            : [new Color(255, 255, 255), [], null, [], [false, null]];
 
-        $value = $this->winningBackground($element);
+        [$color, $colorUncertainty] = $this->backgroundColor($element, $key, $parentColor, $parentColorUncertainty);
+        [$image, $imageUncertainty] = $this->backgroundImage($element, $key, $parentImage);
+        $backdrop = $image[0] || $this->hasCoveringSibling($element, $key) ? ['backdrop'] : [];
+        $uncertainty = $this->uncertainty($backdrop, $colorUncertainty, $imageUncertainty);
+        $paint = $color !== null && $color->a > 0 ? $color : null;
 
-        if ($value === null) {
-            return $this->backgroundCache[$key] = [$parent, $approximate, null, false];
+        if ($image[1] !== null && $image[1]->a > 0) {
+            $paint = $paint === null ? $image[1] : $image[1]->over($paint);
         }
 
-        [$value, $variablesApproximate] = $this->substituteValue($element, $key, $value);
-
-        if ($value === null) {
-            return $this->backgroundCache[$key] = [$parent, true, null, true];
+        if ($paint === null || $paint->a < self::OPAQUE_ALPHA) {
+            $paint = $paint === null ? $parent : $paint->over($parent);
+            $uncertainty = $this->uncertainty($uncertainty, $parentUncertainty);
         }
 
-        // CSS-wide keywords and currentcolor of background-color (or the whole `background` shorthand).
-        [$own, $ownApproximate] = match (strtolower(trim($value))) {
-            'inherit' => [$parentOwn, $parentOwnApproximate],
-            'initial', 'unset' => [null, false],
-            'currentcolor' => $this->foreground($element),
-            default => Color::fromBackground($value),
-        };
-        $ownApproximate = $ownApproximate || $variablesApproximate;
-
-        if ($own === null || $own->a <= 0) {
-            return $this->backgroundCache[$key] = [$parent, $approximate || $ownApproximate, $own, $ownApproximate];
-        }
-
-        return $this->backgroundCache[$key] = [$own->a < 1 ? $own->over($parent) : $own, $approximate || $ownApproximate, $own, $ownApproximate];
+        return $this->backgroundCache[$key] = [$paint, $uncertainty, $color, $colorUncertainty, $image];
     }
 
-    /** @return array{0: Color, 1: bool} */
-    private function foreground(DOMElement $element): array
+    /**
+     * The element's own background colour: the winning `background-color`, or the colour in the final layer of a winning
+     * `background` shorthand, var() substituted. inherit takes the parent's own colour, initial and unset none,
+     * currentcolor the text colour; an unresolvable substitution is unknown.
+     *
+     * @param  list<string>  $parentUncertainty
+     * @return array{0: ?Color, 1: list<string>} the colour (null: none or unknown) and its uncertainty
+     */
+    private function backgroundColor(DOMElement $element, string $key, ?Color $parentColor, array $parentUncertainty): array
     {
-        $key = $this->nodeKey($element);
+        $declared = $this->winningDeclaration($element, $key, 'background-color', 'background');
 
+        if ($declared === null) {
+            return [null, []];
+        }
+
+        [$value, $approximate] = $this->substituteValue($element, $key, $declared[0]);
+
+        if ($value === null) {
+            return [null, ['colour']];
+        }
+
+        $substitution = $approximate ? ['colour'] : [];
+        [$color, $unparsed, $keyword] = $this->layers($value, $declared[1] ? 'final' : 'colour');
+
+        // CSS-wide keywords and currentcolor.
+        switch ($keyword) {
+            case 'inherit':
+                return [$parentColor, $this->uncertainty($parentUncertainty, $substitution)];
+            case 'initial':
+            case 'unset':
+                return [null, $substitution];
+            case 'currentcolor':
+                [$foreground, $foregroundUncertainty] = $this->foreground($element, $key);
+
+                return [$foreground, $this->uncertainty($foregroundUncertainty, $substitution)];
+        }
+
+        return [$color, $this->uncertainty($substitution, $unparsed ? ['colour'] : [])];
+    }
+
+    /**
+     * The element's own image layers: whether the winning `background-image` or `background` paints an image
+     * (IMAGE_FUNCTION) and the first stop of its first gradient (null: none), var() substituted; when the substitution
+     * is unresolvable, the functions of the declared value still count. inherit takes the parent's layers.
+     *
+     * @param  array{0: bool, 1: ?Color}  $parentImage
+     * @return array{0: array{0: bool, 1: ?Color}, 1: list<string>} the layers and their uncertainty
+     */
+    private function backgroundImage(DOMElement $element, string $key, array $parentImage): array
+    {
+        $declared = $this->winningDeclaration($element, $key, 'background-image', 'background');
+
+        if ($declared === null) {
+            return [[false, null], []];
+        }
+
+        [$value, $approximate] = $this->substituteValue($element, $key, $declared[0]);
+        $uncertainty = $approximate ? ['colour'] : [];
+
+        if ($value !== null && strlen($value) <= 32 && strtolower(trim($value)) === 'inherit') {
+            return [$parentImage, $uncertainty];
+        }
+
+        return [$this->layers($value ?? $declared[0], 'image'), $uncertainty];
+    }
+
+    /**
+     * The analysis of a background value, memoised by the value: 'image' is imageLayers(); 'colour' is the colour of a
+     * `background-color` value and 'final' the colour in the final layer of a `background` shorthand (image functions
+     * left out), each with whether Color only approximates it and the text lowercased when it may be a keyword (else '').
+     * Elements that share a rule share its value, so a value is analysed about once. The memo holds at most
+     * MAX_LAYER_CACHE_BYTES and starts over when full; a longer value is not kept.
+     *
+     * @param  'image'|'colour'|'final'  $part
+     * @return array{0: mixed, 1: mixed, 2?: string}
+     */
+    private function layers(string $value, string $part): array
+    {
+        if (isset($this->layerCache[$value][$part])) {
+            return $this->layerCache[$value][$part];
+        }
+
+        $text = $part === 'final' ? $this->withoutImages($this->finalLayer($value)) : $value;
+        $result = $part === 'image' ? $this->imageLayers($value) : [...Color::fromBackground($text), strlen($text) > 64 ? '' : strtolower(trim($text))];
+
+        if (! isset($this->layerCache[$value])) {
+            $bytes = strlen($value) + self::LAYER_ENTRY_BYTES;
+
+            if ($bytes > self::MAX_LAYER_CACHE_BYTES) {
+                return $result;
+            }
+
+            if ($this->layerCacheBytes + $bytes > self::MAX_LAYER_CACHE_BYTES) {
+                $this->layerCache = [];
+                $this->layerCacheBytes = 0;
+            }
+
+            $this->layerCacheBytes += $bytes;
+        }
+
+        $this->layerCache[$value][$part] = $result;
+
+        return $result;
+    }
+
+    /**
+     * Whether a background value paints an image (IMAGE_FUNCTION), and the first stop of its first gradient (null: none,
+     * or a gradient longer than MAX_RESOLVED_LENGTH). Two linear regex scans and one bounded parenthesis scan.
+     *
+     * @return array{0: bool, 1: ?Color}
+     */
+    private function imageLayers(string $value): array
+    {
+        if (preg_match(self::IMAGE_FUNCTION, $value) !== 1) {
+            return [false, null];
+        }
+
+        if (preg_match(self::GRADIENT_FUNCTION, $value, $m, PREG_OFFSET_CAPTURE) !== 1) {
+            return [true, null];
+        }
+
+        $call = substr($value, $m[0][1], self::MAX_RESOLVED_LENGTH);
+        $end = $this->closingParenthesis($call, strlen($m[0][0]) - 1);
+
+        return [true, $end === null ? null : Color::fromBackground(substr($call, 0, $end + 1))[0]];
+    }
+
+    /** The final layer of a background value, the only one that may carry a colour: the text after its last comma outside parentheses and quotes (one backward scan). */
+    private function finalLayer(string $value): string
+    {
+        if (! str_contains($value, ',')) {
+            return $value;
+        }
+
+        $depth = 0;
+        $quote = null;
+
+        for ($i = strlen($value) - 1; $i >= 0; $i--) {
+            $char = $value[$i];
+
+            if ($quote !== null) {
+                $quote = $char === $quote ? null : $quote;
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === ')') {
+                $depth++;
+            } elseif ($char === '(') {
+                $depth = max(0, $depth - 1);
+            } elseif ($char === ',' && $depth === 0) {
+                return substr($value, $i + 1);
+            }
+        }
+
+        return $value;
+    }
+
+    /** The value with every image function call (IMAGE_FUNCTION through its closing parenthesis) replaced by a space; linear. */
+    private function withoutImages(string $value): string
+    {
+        $kept = '';
+        $position = 0;
+
+        while (preg_match(self::IMAGE_FUNCTION, $value, $m, PREG_OFFSET_CAPTURE, $position) === 1) {
+            $start = $m[0][1];
+            $end = $this->closingParenthesis($value, $start + strlen($m[0][0]) - 1);
+            $kept .= substr($value, $position, $start - $position).' ';
+
+            if ($end === null) {
+                return $kept;
+            }
+
+            $position = $end + 1;
+        }
+
+        return $kept.substr($value, $position);
+    }
+
+    /**
+     * Whether an img, picture, video, canvas or svg positioned absolute or fixed is a previous element sibling of the
+     * element; a media sibling beyond the MAX_EXAMINED_MEDIA that coveringMediaIndex() looks up counts as well. The
+     * parent's media children are looked up once; the positional step then stops after that index.
+     */
+    private function hasCoveringSibling(DOMElement $element, string $key): bool
+    {
+        $parent = $element->parentNode;
+
+        if (! $parent instanceof DOMElement || $this->document === null || ! $parent->ownerDocument?->isSameNode($this->document->dom())) {
+            return false;
+        }
+
+        $parentKey = $this->parentKey($key, $parent);
+
+        if (! array_key_exists($parentKey, $this->coveringMedia)) {
+            $this->coveringMedia[$parentKey] = $this->coveringMediaIndex($parent);
+        }
+
+        $index = $this->coveringMedia[$parentKey];
+
+        return $index !== null && $this->document->xpath()->evaluate('boolean(preceding-sibling::*['.($index + 1).'])', $element) === true;
+    }
+
+    /**
+     * Element-child index of the parent's first media child (COVERING_MEDIA) positioned out of flow (isOutOfFlow()); after
+     * MAX_EXAMINED_MEDIA media children without one, the index of the next media child (it may cover: never silent).
+     * Null when there is none.
+     */
+    private function coveringMediaIndex(DOMElement $parent): ?int
+    {
+        $media = $this->document?->query('*['.self::COVERING_MEDIA.'][position() <= '.(self::MAX_EXAMINED_MEDIA + 1).']', $parent) ?? [];
+
+        foreach ($media as $examined => $child) {
+            if ($examined >= self::MAX_EXAMINED_MEDIA || $this->isOutOfFlow($child)) {
+                return (int) $this->document?->xpath()->evaluate('count(preceding-sibling::*)', $child);
+            }
+        }
+
+        return null;
+    }
+
+    /** Whether the element's cascaded position is absolute or fixed, var() substituted; an unresolvable value counts. */
+    private function isOutOfFlow(DOMElement $element): bool
+    {
+        $declared = $this->declarationsFor($element)['position']['value'] ?? null;
+
+        if ($declared === null) {
+            return false;
+        }
+
+        $value = $this->substituteFor($element, $declared)[0];
+
+        return $value === null || (strlen($value) <= 64 && in_array(strtolower(trim($value)), ['absolute', 'fixed'], true));
+    }
+
+    /**
+     * The element's text colour: its winning `color` declaration, var() substituted, else the parent's (black at the
+     * root), with its uncertainty: `colour` for an unresolvable or approximate substitution or a colour Color cannot
+     * parse exactly (the parent's colour is then the estimate). Only an inherited colour carries the parent's uncertainty.
+     *
+     * @return array{0: Color, 1: list<string>}
+     */
+    private function foreground(DOMElement $element, string $key): array
+    {
         if (isset($this->foregroundCache[$key])) {
             return $this->foregroundCache[$key];
         }
 
-        [$parent, $approximate] = $element->parentNode instanceof DOMElement
-            ? $this->foreground($element->parentNode)
-            : [new Color(0, 0, 0), false];
+        $node = $element->parentNode;
+        [$parent, $inherited] = $node instanceof DOMElement
+            ? $this->foreground($node, $this->parentKey($key, $node))
+            : [new Color(0, 0, 0), []];
 
-        $value = $this->declarationsFor($element)['color']['value'] ?? null;
+        $value = $this->declarations($element, $key)['color']['value'] ?? null;
 
         if ($value === null) {
-            return $this->foregroundCache[$key] = [$parent, $approximate];
+            return $this->foregroundCache[$key] = [$parent, $inherited];
         }
 
-        [$value, $variablesApproximate] = $this->substituteValue($element, $key, $value);
+        [$value, $approximate] = $this->substituteValue($element, $key, $value);
+        $substitution = $approximate ? ['colour'] : [];
         $keyword = $value === null ? null : strtolower(trim($value));
 
         // inherit, unset (color inherits) and currentcolor (on `color` itself the inherited colour) are the parent's colour.
         if ($keyword === 'inherit' || $keyword === 'unset' || $keyword === 'currentcolor') {
-            return $this->foregroundCache[$key] = [$parent, $approximate || $variablesApproximate];
+            return $this->foregroundCache[$key] = [$parent, $this->uncertainty($inherited, $substitution)];
         }
 
         if ($keyword === 'initial') {
-            return $this->foregroundCache[$key] = [new Color(0, 0, 0), $approximate || $variablesApproximate];
+            return $this->foregroundCache[$key] = [new Color(0, 0, 0), $substitution];
         }
 
         $own = $value === null || Color::isUnresolvable($value) ? null : Color::parse($value);
 
         if ($own === null) {
-            return $this->foregroundCache[$key] = [$parent, true];
+            return $this->foregroundCache[$key] = [$parent, $this->uncertainty($inherited, ['colour'])];
         }
 
-        return $this->foregroundCache[$key] = [$own, $approximate || $variablesApproximate];
-    }
-
-    /** The value of whichever of background / background-color wins the cascade for the element. */
-    private function winningBackground(DOMElement $element): ?string
-    {
-        return $this->winningDeclaration($element, 'background-color', 'background')[0] ?? null;
+        return $this->foregroundCache[$key] = [$own, $substitution];
     }
 
     /**
@@ -2057,9 +2410,9 @@ class CssParser
      *
      * @return array{0: string, 1: bool}|null
      */
-    private function winningDeclaration(DOMElement $element, string $longhand, string $shorthand): ?array
+    private function winningDeclaration(DOMElement $element, string $key, string $longhand, string $shorthand): ?array
     {
-        $declarations = $this->declarationsFor($element);
+        $declarations = $this->declarations($element, $key);
         $long = $declarations[$longhand] ?? null;
         $short = $declarations[$shorthand] ?? null;
 
@@ -2067,7 +2420,7 @@ class CssParser
             return $long === null ? null : [$long['value'], false];
         }
 
-        $weights = $this->weightCache[$this->nodeKey($element)] ?? [];
+        $weights = $this->weightCache[$key] ?? [];
 
         return $long !== null && $weights[$longhand] >= $weights[$shorthand] ? [$long['value'], false] : [$short['value'], true];
     }
@@ -2771,6 +3124,17 @@ class CssParser
         $parts[] = $current;
 
         return array_values(array_filter(array_map('trim', $parts), fn (string $part) => $part !== ''));
+    }
+
+    /**
+     * The node key of the element's parent. A node path is the parent's path plus one step without a slash, so the parent's
+     * key is read off the element's own key; a key that is no node path falls back to nodeKey().
+     */
+    private function parentKey(string $key, DOMElement $parent): string
+    {
+        $slash = strrpos($key, '/');
+
+        return $slash !== false && $slash > 0 && $key[0] === '/' ? substr($key, 0, $slash) : $this->nodeKey($parent);
     }
 
     private function nodeKey(DOMElement $element): string
