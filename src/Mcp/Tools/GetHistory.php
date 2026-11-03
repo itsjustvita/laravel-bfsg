@@ -30,25 +30,27 @@ class GetHistory extends Tool
 
     public function handle(Request $request): Response
     {
-        try {
-            $query = BfsgReport::query()->latest()->latest('id');
+        return $this->safely(function () use ($request): Response {
+            try {
+                $query = BfsgReport::query()->latest()->latest('id');
 
-            if (($url = $this->stringArgument($request, 'url')) !== null) {
-                $query->forUrl($url);
+                if (($url = $this->stringArgument($request, 'url')) !== null) {
+                    $query->forUrl($url);
+                }
+
+                $reports = $query->limit(max(1, min(100, (int) $request->get('limit', 20))))->get();
+            } catch (Throwable $e) {
+                return Response::error('Database error: '.self::cleanError($e->getMessage()).'. Run php artisan migrate.');
             }
 
-            $reports = $query->limit(max(1, min(100, (int) $request->get('limit', 20))))->get();
-        } catch (Throwable $e) {
-            return Response::error('Database error: '.$e->getMessage().'. Run php artisan migrate.');
-        }
-
-        return Response::json(['reports' => $reports->map(fn (BfsgReport $report) => [
-            'id' => $report->id,
-            'url' => $report->url,
-            'total_violations' => $report->total_violations,
-            'score' => (int) round($report->score),
-            'grade' => $report->grade,
-            'created_at' => $report->created_at?->toIso8601String(),
-        ])->values()->all()]);
+            return $this->toolJson(['reports' => $reports->map(fn (BfsgReport $report) => [
+                'id' => $report->id,
+                'url' => $report->url,
+                'total_violations' => $report->total_violations,
+                'score' => (int) round($report->score),
+                'grade' => $report->grade,
+                'created_at' => $report->created_at?->toIso8601String(),
+            ])->values()->all()]);
+        });
     }
 }

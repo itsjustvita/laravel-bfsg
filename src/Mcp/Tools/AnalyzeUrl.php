@@ -5,7 +5,6 @@ namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\Bfsg;
-use ItsJustVita\LaravelBfsg\Http\FetchFailed;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Laravel\Mcp\Request;
@@ -32,26 +31,24 @@ class AnalyzeUrl extends Tool
 
     public function handle(Request $request): Response
     {
-        $url = $this->stringArgument($request, 'url');
+        return $this->safely(function () use ($request): Response {
+            $url = $this->stringArgument($request, 'url');
 
-        if ($url === null) {
-            return Response::error('The url parameter is required.');
-        }
+            if ($url === null) {
+                return $this->toolError('The url parameter is required.');
+            }
 
-        try {
-            $locale = $this->localeArgument($request);
-        } catch (InvalidArgumentException $e) {
-            return Response::error($e->getMessage());
-        }
+            try {
+                $locale = $this->localeArgument($request);
+            } catch (InvalidArgumentException $e) {
+                return $this->toolError($e->getMessage());
+            }
 
-        try {
+            // A FetchFailed becomes a tool error with its own message (safely())
             $page = $this->fetchPage($url);
-        } catch (FetchFailed $e) {
-            return Response::error($e->getMessage());
-        }
+            $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
 
-        $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
-
-        return Response::text((new ReportGenerator($result, $locale))->toJson());
+            return Response::text((new ReportGenerator($result, $locale))->toJson());
+        });
     }
 }

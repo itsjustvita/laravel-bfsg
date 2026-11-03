@@ -29,35 +29,37 @@ class CheckContrast extends Tool
 
     public function handle(Request $request): Response
     {
-        $foreground = $this->stringArgument($request, 'foreground');
-        $background = $this->stringArgument($request, 'background');
+        return $this->safely(function () use ($request): Response {
+            $foreground = $this->stringArgument($request, 'foreground');
+            $background = $this->stringArgument($request, 'background');
 
-        if ($foreground === null || $background === null) {
-            return Response::error('Both foreground and background must be colour strings.');
-        }
+            if ($foreground === null || $background === null) {
+                return $this->toolError('Both foreground and background must be colour strings.');
+            }
 
-        $text = Color::parse($foreground);
-        $surface = Color::parse($background);
+            $text = Color::parse($foreground);
+            $surface = Color::parse($background);
 
-        if ($text === null || $surface === null) {
-            return Response::error('Could not parse the colours. Use hex, rgb(), hsl(), hwb(), lab(), lch(), oklab(), oklch(), color(), color-mix() with literal colours, or a named colour.');
-        }
+            if ($text === null || $surface === null) {
+                return $this->toolError('Could not parse the colours. Use hex, rgb(), hsl(), hwb(), lab(), lch(), oklab(), oklch(), color(), color-mix() with literal colours, or a named colour.');
+            }
 
-        if ($text->a < 1) {
-            $text = $text->over($surface);
-        }
+            if ($text->a < 1) {
+                $text = $text->over($surface);
+            }
 
-        $ratio = $text->contrastRatio($surface);
+            $ratio = $text->contrastRatio($surface);
 
-        return Response::json([
-            'foreground' => $foreground,
-            'background' => $background,
-            'ratio' => round($ratio, 2),
-            'ratio_formatted' => number_format($ratio, 2).':1',
-            'aa_normal' => $ratio >= 4.5,
-            'aa_large' => $ratio >= 3.0,
-            'aaa_normal' => $ratio >= 7.0,
-            'aaa_large' => $ratio >= 4.5,
-        ]);
+            return $this->toolJson([
+                'foreground' => $foreground,
+                'background' => $background,
+                'ratio' => round($ratio, 2),
+                'ratio_formatted' => number_format($ratio, 2).':1',
+                'aa_normal' => $ratio >= 4.5,
+                'aa_large' => $ratio >= 3.0,
+                'aaa_normal' => $ratio >= 7.0,
+                'aaa_large' => $ratio >= 4.5,
+            ]);
+        });
     }
 }

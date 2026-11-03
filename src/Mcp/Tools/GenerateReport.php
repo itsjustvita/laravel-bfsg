@@ -6,7 +6,6 @@ use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\Bfsg;
-use ItsJustVita\LaravelBfsg\Http\FetchFailed;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
@@ -37,55 +36,53 @@ class GenerateReport extends Tool
 
     public function handle(Request $request): Response
     {
-        $url = $this->stringArgument($request, 'url');
-        $format = $this->stringArgument($request, 'format') ?? 'json';
+        return $this->safely(function () use ($request): Response {
+            $url = $this->stringArgument($request, 'url');
+            $format = $this->stringArgument($request, 'format') ?? 'json';
 
-        if ($url === null) {
-            return Response::error('The url parameter is required.');
-        }
-
-        if (! in_array($format, ReportGenerator::FORMATS, true)) {
-            return Response::error("Invalid format [{$format}]. Use one of: ".implode(', ', ReportGenerator::FORMATS).'.');
-        }
-
-        if ($format === 'pdf' && ! class_exists(Pdf::class)) {
-            return Response::error('PDF reports require barryvdh/laravel-dompdf: composer require barryvdh/laravel-dompdf');
-        }
-
-        try {
-            $locale = $this->localeArgument($request);
-        } catch (InvalidArgumentException $e) {
-            return Response::error($e->getMessage());
-        }
-
-        try {
-            $page = $this->fetchPage($url);
-        } catch (FetchFailed $e) {
-            return Response::error($e->getMessage());
-        }
-
-        $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
-        $report = (new ReportGenerator($result, $locale))->format($format);
-        $payload = ['format' => $format, 'summary' => $report->summary()];
-
-        try {
-            if ($format === 'pdf') {
-                $payload['path'] = $report->saveTo($report->defaultPath());
-            } else {
-                $payload['report'] = $report->render();
+            if ($url === null) {
+                return $this->toolError('The url parameter is required.');
             }
-        } catch (Throwable $e) {
-            return Response::error('Could not generate the report: '.$e->getMessage());
-        }
 
-        if ($request->get('save') === true) {
+            if (! in_array($format, ReportGenerator::FORMATS, true)) {
+                return $this->toolError("Invalid format [{$format}]. Use one of: ".implode(', ', ReportGenerator::FORMATS).'.');
+            }
+
+            if ($format === 'pdf' && ! class_exists(Pdf::class)) {
+                return $this->toolError('PDF reports require barryvdh/laravel-dompdf: composer require barryvdh/laravel-dompdf');
+            }
+
             try {
-                $payload['report_id'] = app(ReportRepository::class)->store($result, ['source' => 'mcp'])->id;
-            } catch (Throwable $e) {
-                $payload['save_error'] = 'Could not store the report: '.$e->getMessage();
+                $locale = $this->localeArgument($request);
+            } catch (InvalidArgumentException $e) {
+                return $this->toolError($e->getMessage());
             }
-        }
 
-        return Response::json($payload);
+            // A FetchFailed (the page is capped at UrlFetcher::MAX_PAGE_BYTES) becomes a tool error (safely())
+            $page = $this->fetchPage($url);
+            $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
+            $report = (new ReportGenerator($result, $locale))->format($format);
+            $payload = ['format' => $format, 'summary' => $report->summary()];
+
+            try {
+                if ($format === 'pdf') {
+                    $payload['path'] = $report->saveTo($report->defaultPath());
+                } else {
+                    $payload['report'] = $report->render();
+                }
+            } catch (Throwable $e) {
+                return Response::error('Could not generate the report: '.self::cleanError($e->getMessage()));
+            }
+
+            if ($request->get('save') === true) {
+                try {
+                    $payload['report_id'] = app(ReportRepository::class)->store($result, ['source' => 'mcp'])->id;
+                } catch (Throwable $e) {
+                    $payload['save_error'] = 'Could not store the report: '.self::cleanError($e->getMessage());
+                }
+            }
+
+            return $this->toolJson($payload);
+        });
     }
 }

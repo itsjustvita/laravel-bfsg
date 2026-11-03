@@ -95,9 +95,13 @@ class BfsgServiceProvider extends ServiceProvider
         // <x-bfsg-accessible-image>
         Blade::component('bfsg-accessible-image', AccessibleImage::class);
 
-        // Auto-register MCP tools with Laravel Boost if available
+        // Auto-register MCP tools with Laravel Boost if available, unless bfsg.mcp.boost is false
         if (class_exists(BoostServiceProvider::class) && $this->mcpAvailable()) {
             $this->app->booted(function () {
+                if (! config('bfsg.mcp.boost', true)) {
+                    return;
+                }
+
                 $tools = config('boost.mcp.tools.include', []);
                 $bfsgTools = [
                     AnalyzeHtml::class,

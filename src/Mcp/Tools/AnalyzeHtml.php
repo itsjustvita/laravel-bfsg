@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Mcp\Tools;
 use Illuminate\Contracts\JsonSchema\JsonSchema;
 use InvalidArgumentException;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Mcp\Tools\Concerns\ToolHelpers;
 use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use Laravel\Mcp\Request;
@@ -24,27 +25,34 @@ class AnalyzeHtml extends Tool
     public function schema(JsonSchema $schema): array
     {
         return [
-            'html' => $schema->string()->description('The HTML to analyze (a full document or a fragment)')->required(),
+            'html' => $schema->string()->description('The HTML to analyze (a full document or a fragment, at most 5 MiB)')->required(),
             'locale' => $schema->string()->description('Locale of messages and suggestions, e.g. en or de (default: the configured locale)'),
         ];
     }
 
     public function handle(Request $request): Response
     {
-        $html = $this->stringArgument($request, 'html');
+        return $this->safely(function () use ($request): Response {
+            $html = $this->stringArgument($request, 'html');
 
-        if ($html === null) {
-            return Response::error('The html parameter is required.');
-        }
+            if ($html === null) {
+                return $this->toolError('The html parameter is required.');
+            }
 
-        try {
-            $locale = $this->localeArgument($request);
-        } catch (InvalidArgumentException $e) {
-            return Response::error($e->getMessage());
-        }
+            // The size limit of fetched pages (R10), checked before anything is parsed
+            if (strlen($html) > UrlFetcher::MAX_PAGE_BYTES) {
+                return $this->toolError('The html parameter is larger than '.(UrlFetcher::MAX_PAGE_BYTES >> 20).' MiB.');
+            }
 
-        $result = app(Bfsg::class)->analyze($html, ['locale' => $locale]);
+            try {
+                $locale = $this->localeArgument($request);
+            } catch (InvalidArgumentException $e) {
+                return $this->toolError($e->getMessage());
+            }
 
-        return Response::text((new ReportGenerator($result, $locale))->toJson());
+            $result = app(Bfsg::class)->analyze($html, ['locale' => $locale]);
+
+            return Response::text((new ReportGenerator($result, $locale))->toJson());
+        });
     }
 }

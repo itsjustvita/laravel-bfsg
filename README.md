@@ -545,7 +545,7 @@ or in `.mcp.json` in the project root:
 }
 ```
 
-`bfsg:mcp-server` registers the server with laravel/mcp under the handle `bfsg`, so `Mcp::local('bfsg', \ItsJustVita\LaravelBfsg\Mcp\BfsgMcpServer::class)` in `routes/ai.php` together with `php artisan mcp:start bfsg` works as well. With Laravel Boost installed, the tools are added to Boost's MCP server automatically.
+`bfsg:mcp-server` registers the server with laravel/mcp under the handle `bfsg`, so `Mcp::local('bfsg', \ItsJustVita\LaravelBfsg\Mcp\BfsgMcpServer::class)` in `routes/ai.php` together with `php artisan mcp:start bfsg` works as well. With Laravel Boost installed, the tools are added to Boost's MCP server automatically; set `bfsg.mcp.boost` (`BFSG_MCP_BOOST`) to `false` to keep them out of Boost.
 
 | Tool | Arguments | Result |
 |---|---|---|
@@ -556,6 +556,8 @@ or in `.mcp.json` in the project root:
 | `get_history` | `url`, `limit` | stored reports |
 | `get_report` | `report_id` | one stored report with its findings |
 | `generate_report` | `url`, `format` (`json`, `markdown`, `html`, `pdf`), `locale`, `save` | the summary and the rendered report (a file path for `pdf`) |
+
+A tool never ends the server. A failure comes back as a tool error (`isError`): a page that cannot be fetched with the fetch error, anything unexpected as `Analysis failed: <message>`, which is also passed to the application's exception handler (the log). Error texts are valid UTF-8 without control characters; credentials in URLs are removed and long texts shortened. The `html` of `analyze_html` is limited to 5 MiB, like a fetched page.
 
 **Network access.** `analyze_url` and `generate_report` fetch what the assistant asks for, so they are restricted:
 
@@ -605,6 +607,7 @@ All settings live in `config/bfsg.php` (`php artisan vendor:publish --tag=bfsg-c
 | `bfsg.mcp.allowed_hosts` | | `null` | Hosts the MCP tools may fetch; `null` = any public host (see [MCP server](#mcp-server)) |
 | `bfsg.mcp.verify_ssl` | | `true` | TLS verification of the MCP tools; only an explicit false turns it off |
 | `bfsg.mcp.allow_proxy` | `BFSG_MCP_ALLOW_PROXY` | `false` | Let the MCP tools fetch through a proxy, without address pinning (see [MCP server](#mcp-server)) |
+| `bfsg.mcp.boost` | `BFSG_MCP_BOOST` | `true` | Add the MCP tools to Laravel Boost's MCP server when Boost is installed |
 
 ## Analyzers
 

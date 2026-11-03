@@ -111,4 +111,19 @@ class BfsgServiceProviderTest extends TestCase
 
         $this->assertSame(['App\\Mcp\\ExistingTool', AnalyzeHtml::class, AnalyzeUrl::class, CheckContrast::class, ListAnalyzers::class, GetHistory::class, GetReport::class, GenerateReport::class], config('boost.mcp.tools.include'));
     }
+
+    /** The Boost stub class would otherwise stay defined for every later test of the process. */
+    #[RunInSeparateProcess]
+    public function test_boost_registration_can_be_disabled(): void
+    {
+        $this->requireMcp();
+
+        require_once __DIR__.'/../Support/Stubs/BoostServiceProvider.php';
+        config()->set('boost.mcp.tools.include', ['App\\Mcp\\ExistingTool']);
+        config()->set('bfsg.mcp.boost', false);
+
+        (new BfsgServiceProvider($this->app))->boot();
+
+        $this->assertSame(['App\\Mcp\\ExistingTool'], config('boost.mcp.tools.include'));
+    }
 }

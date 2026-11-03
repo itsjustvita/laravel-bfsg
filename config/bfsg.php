@@ -112,11 +112,14 @@ return [
     | is null or [], a fetch that would go through a proxy (HTTPS_PROXY, https_proxy, http_proxy, ALL_PROXY,
     | all_proxy or, in the CLI, HTTP_PROXY, as Guzzle and curl read them, unless NO_PROXY covers the host) is
     | refused; true allows it with a warning. bfsg:check is not affected.
+    |
+    | boost: with Laravel Boost installed, the tools are also added to Boost's MCP server; false keeps them out.
     */
     'mcp' => [
         'allowed_hosts' => null,
         'verify_ssl' => true,
         'allow_proxy' => env('BFSG_MCP_ALLOW_PROXY', false),
+        'boost' => env('BFSG_MCP_BOOST', true),
     ],
 
     /*

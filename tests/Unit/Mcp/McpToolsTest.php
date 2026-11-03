@@ -5,7 +5,9 @@ namespace ItsJustVita\LaravelBfsg\Tests\Unit\Mcp;
 use GuzzleHttp\Handler\ProxyEnvironment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Analyzers\BaseAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Http\FetchFailed;
@@ -29,6 +31,7 @@ use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use Laravel\Mcp\Server\Testing\TestResponse;
 use Laravel\Mcp\Server\Transport\FakeTransporter;
 use PHPUnit\Framework\Attributes\DataProvider;
+use RuntimeException;
 
 class McpToolsTest extends TestCase
 {
@@ -185,6 +188,100 @@ class McpToolsTest extends TestCase
 
         BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://example.com/api'])->assertHasErrors(['not an HTML page']);
         BfsgMcpServer::tool(AnalyzeUrl::class, [])->assertHasErrors(['The url parameter is required.']);
+    }
+
+    public function test_unexpected_exception_returns_an_error(): void
+    {
+        // RT1: laravel/mcp re-throws whatever a tool throws when app.debug is on, and that ends the stdio server
+        config()->set('app.debug', true);
+        Exceptions::fake();
+        $this->app->instance(Bfsg::class, new class extends Bfsg
+        {
+            public function analyze(string $html, array $options = []): AnalysisResult
+            {
+                throw new RuntimeException('kaputt');
+            }
+        });
+        $this->app['router']->get('/mcp-page', fn () => response(self::BROKEN));
+
+        BfsgMcpServer::tool(AnalyzeHtml::class, ['html' => self::BROKEN])->assertHasErrors(['Analysis failed: kaputt']);
+        BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => '/mcp-page'])->assertHasErrors(['Analysis failed: kaputt']);
+        BfsgMcpServer::tool(GenerateReport::class, ['url' => '/mcp-page'])->assertHasErrors(['Analysis failed: kaputt']);
+        BfsgMcpServer::tool(ListAnalyzers::class)->assertOk();
+
+        // The exception goes to the application's exception handler (the log), never to the client or stdout
+        Exceptions::assertReported(fn (RuntimeException $e) => $e->getMessage() === 'kaputt');
+    }
+
+    public function test_unexpected_exception_messages_lose_credentials_and_control_characters_and_are_shortened(): void
+    {
+        Exceptions::fake();
+        $this->app->instance(Bfsg::class, new class("Connection to mysql://root:hunter2@db.internal:3306/app failed\x1b]0;PWNED\x07 \xff".str_repeat('x', 400)) extends Bfsg
+        {
+            public function __construct(private string $failure)
+            {
+                parent::__construct();
+            }
+
+            public function analyze(string $html, array $options = []): AnalysisResult
+            {
+                throw new RuntimeException($this->failure);
+            }
+        });
+
+        $text = BfsgMcpServer::tool(AnalyzeHtml::class, ['html' => self::BROKEN])
+            ->assertHasErrors(['Analysis failed: Connection to mysql://db.internal:3306/app failed]0;PWNED'])
+            ->text();
+
+        $this->assertStringNotContainsString('hunter2', $text);
+        $this->assertDoesNotMatchRegularExpression('/[\x00-\x08\x0B-\x1F\x7F]/', $text);
+        $this->assertTrue(mb_check_encoding($text, 'UTF-8'));
+        $this->assertStringEndsWith('…', $text);
+        $this->assertSame(300, mb_strlen($text) - mb_strlen('Analysis failed: '));
+    }
+
+    public function test_a_fetch_error_keeps_its_reason_behind_a_long_url_and_is_not_reported(): void
+    {
+        Exceptions::fake();
+        Http::fake(fn () => Http::response('', 404));
+
+        $text = BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => 'https://docs.example.com/'.str_repeat('b', 3000)])
+            ->assertHasErrors(['failed with HTTP 404.'])
+            ->text();
+
+        $this->assertStringStartsWith('Fetching https://docs.example.com/bbb', $text);
+        $this->assertLessThan(200, mb_strlen($text));
+        Exceptions::assertNothingReported();
+    }
+
+    public function test_analyze_html_rejects_html_larger_than_5_mib_before_parsing(): void
+    {
+        // R10: pasted HTML gets the size limit of fetched pages
+        $parsed = [];
+        $this->app->instance(Bfsg::class, new class($parsed) extends Bfsg
+        {
+            /** @param list<int> $parsed */
+            public function __construct(private array &$parsed)
+            {
+                parent::__construct();
+            }
+
+            public function analyze(string $html, array $options = []): AnalysisResult
+            {
+                $this->parsed[] = strlen($html);
+
+                return parent::analyze('<p>x</p>', $options);
+            }
+        });
+
+        BfsgMcpServer::tool(AnalyzeHtml::class, ['html' => str_repeat('a', UrlFetcher::MAX_PAGE_BYTES + 1)])->assertHasErrors(['The html parameter is larger than 5 MiB.']);
+        BfsgMcpServer::tool(AnalyzeHtml::class, ['html' => str_repeat('a', UrlFetcher::MAX_PAGE_BYTES)])->assertOk();
+        $this->assertSame([UrlFetcher::MAX_PAGE_BYTES], $parsed);
+
+        // generate_report takes no HTML: UrlFetcher holds the pages it fetches to the same limit
+        $this->app['router']->get('/mcp-huge', fn () => response(str_repeat('a', UrlFetcher::MAX_PAGE_BYTES + 1)));
+        BfsgMcpServer::tool(GenerateReport::class, ['url' => '/mcp-huge'])->assertHasErrors(['is larger than '.UrlFetcher::MAX_PAGE_BYTES.' bytes']);
+        $this->assertSame([UrlFetcher::MAX_PAGE_BYTES], $parsed);
     }
 
     public function test_check_contrast(): void
