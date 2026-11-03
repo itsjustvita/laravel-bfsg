@@ -266,13 +266,13 @@ class CommandsTest extends TestCase
     public function test_page_control_characters_never_reach_the_terminal(): void
     {
         $this->app['router']->get('/esc', fn () => response('<!DOCTYPE html><html><head><link rel="stylesheet" href="/missing'."\x1b]0;PWNED\x07".'.css"></head>'
-            ."<body><img src=\"a\x1b]0;PWNED\x07\x1b[2J.png\"></body></html>"));
+            ."<body><img src=\"a\x1b]0;PWNED\x07\x1b[2J.png\"><img src=\"b\u{9B}31m\u{202E}c.png\"></body></html>"));
 
         $cases = [
             'cli' => [[], 'a]0;PWNED[2J.png'],
             'detailed' => [['--detailed' => true], 'a]0;PWNED[2J.png'],
             'markdown' => [['--format' => 'markdown'], 'a\]0;PWNED\[2J.png'],
-            'json (unchanged: json_encode escapes control characters)' => [['--format' => 'json'], 'a\u001b]0;PWNED\u0007\u001b[2J.png'],
+            'json (control characters as \u escapes)' => [['--format' => 'json'], 'a\u001b]0;PWNED\u0007\u001b[2J.png'],
         ];
 
         foreach ($cases as $label => [$options, $finding]) {
@@ -281,9 +281,36 @@ class CommandsTest extends TestCase
             $this->assertSame(1, $exitCode, $label);
             $this->assertStringContainsString($finding, $output->stdout(), $label.': the finding is still shown');
             $this->assertStringContainsString('missing]0;PWNED.css', $output->stderr(), $label.': the stylesheet warning is still shown');
-            $this->assertStringNotContainsString("\x1b", $output->stdout(), $label);
-            $this->assertStringNotContainsString("\x1b", $output->stderr(), $label);
-            $this->assertStringNotContainsString("\x07", $output->stdout().$output->stderr(), $label);
+
+            foreach (["\x1b" => 'ESC', "\x07" => 'BEL', "\u{9B}" => 'C1 CSI (c2 9b)', "\u{202E}" => 'RLO (e2 80 ae)'] as $control => $name) {
+                $this->assertStringNotContainsString($control, $output->stdout(), "{$label}: no {$name} on stdout");
+                $this->assertStringNotContainsString($control, $output->stderr(), "{$label}: no {$name} on stderr");
+            }
+        }
+
+        [, $output] = $this->check(['url' => '/esc', '--format' => 'json']);
+        $sources = array_map(fn (array $violation) => $violation['params']['src'] ?? null, json_decode($output->stdout(), true, flags: JSON_THROW_ON_ERROR)['violations']['images']);
+        $this->assertContains("b\u{9B}31m\u{202E}c.png", $sources, 'the JSON escapes are lossless');
+        $this->assertStringContainsString('b\u009b31m\u202ec.png', $output->stdout());
+    }
+
+    public function test_page_newlines_never_start_a_ci_workflow_command_line(): void
+    {
+        $this->app['router']->get('/newline', fn () => response('<!DOCTYPE html><html><head><link rel="stylesheet" href="/missing&#10;::warning title=BFSG::fake.css"></head>'
+            .'<body><img src="x&#10;::notice title=BFSG::All checks passed"></body></html>'));
+
+        foreach (['default' => [], 'detailed' => ['--detailed' => true]] as $label => $options) {
+            [$exitCode, $output] = $this->check(['url' => '/newline', ...$options]);
+
+            $this->assertSame(1, $exitCode, $label);
+            $this->assertStringContainsString('(x ::notice title=BFSG::All checks passed)', $output->stdout(), $label.': the finding is one line');
+            $this->assertStringContainsString('missing ::warning title=BFSG::fake.css', $output->stderr(), $label.': the warning is one line');
+
+            foreach (['stdout' => $output->stdout(), 'stderr' => $output->stderr()] as $stream => $text) {
+                foreach (preg_split('/\R/', $text) as $line) {
+                    $this->assertStringStartsNotWith('::', ltrim($line), "{$label} {$stream}: {$line}");
+                }
+            }
         }
     }
 

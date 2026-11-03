@@ -134,7 +134,15 @@ class ReportGenerator
             $report['violations'],
         );
 
-        return json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR)."\n";
+        $json = json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+
+        // JSON_UNESCAPED_UNICODE keeps text readable but would pass C1 controls (U+009B is a CSI) and bidi
+        // overrides/isolates raw to a terminal or CI log. They only occur inside string literals: \uXXXX is lossless.
+        return (string) preg_replace_callback(
+            '/[\x{0080}-\x{009F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u',
+            fn (array $match): string => sprintf('\\u%04x', mb_ord($match[0], 'UTF-8')),
+            $json,
+        )."\n";
     }
 
     public function render(): string

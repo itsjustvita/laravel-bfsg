@@ -582,10 +582,13 @@ class BfsgCheckCommand extends Command
         $this->stderr()->writeln('<comment>'.self::escape($message).'</comment>');
     }
 
-    /** Every printed text may carry page content (messages, URLs, warnings): control characters out, then formatter tags. */
+    /**
+     * Every printed text may carry page content (messages, URLs, warnings): control characters out, one line (page
+     * text must never start a line: CI runners act on lines such as "::notice::"), then formatter tags.
+     */
     private static function escape(string $text): string
     {
-        return OutputFormatter::escape(Sanitizer::terminal($text));
+        return OutputFormatter::escape((string) preg_replace('/\s*\R\s*/u', ' ', Sanitizer::terminal($text)));
     }
 
     /** stderr of a console output; the output itself otherwise (tests with a buffered output). */

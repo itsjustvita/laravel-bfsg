@@ -162,10 +162,10 @@ class BfsgHistoryCommand extends Command
         return Command::SUCCESS;
     }
 
-    /** Stored URLs and options are page or user text: control characters out, then formatter tags. */
+    /** Stored URLs and options are page or user text: control characters out, one line (no "::command" lines for CI), then formatter tags. */
     private static function escape(string $text): string
     {
-        return OutputFormatter::escape(Sanitizer::terminal($text));
+        return OutputFormatter::escape((string) preg_replace('/\s*\R\s*/u', ' ', Sanitizer::terminal($text)));
     }
 
     /** Scores are whole numbers (ScoreCalculator); the decimal column may still hold v2 fractions. */
