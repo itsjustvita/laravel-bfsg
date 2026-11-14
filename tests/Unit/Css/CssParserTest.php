@@ -58,7 +58,8 @@ class CssParserTest extends TestCase
     public function test_rules_carry_their_layer_rank(): void
     {
         $css = '@layer a, b; @layer b{.b{color:red}} @layer a{.a{color:red}} .u{color:red} @layer a.c{.c{color:red}} '
-            .'@layer{.anon{color:red}} @layer b{@layer d{.d{color:red}}} @layer x, y{.invalid{color:red}} @layer 1x{.invalid{color:red}}';
+            .'@layer{.anon{color:red}} @layer b{@layer d{.d{color:red}}} @layer x, y{.invalid{color:red}} @layer 1x{.invalid{color:red}}'
+            .' @layer -{.invalid{color:red}} @layer a.-{.invalid{color:red}} @layer x\\.y{.invalid{color:red}}';
         $rules = array_column((new CssParser)->parseStylesheet($css), 'layer', 'selector');
 
         // Post-order of a(c), b(d), anon: a.c 0, a 1, b.d 2, b 3, anon 4.

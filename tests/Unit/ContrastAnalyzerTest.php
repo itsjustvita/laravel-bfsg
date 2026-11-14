@@ -665,6 +665,37 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
     }
 
+    /** @return array<string, array{0: string, 1: ?array{0: Severity, 1: string}}> the head's style elements and the expected finding's severity and ratio (null: none) */
+    public static function conditionalLayerDeclarations(): array
+    {
+        $dark = '@media (prefers-color-scheme: dark){@layer %s{p{color:#111}}}';
+        $wide = '@media (min-width:640px){@layer %s{p{color:#111}}}';
+
+        return [
+            'a layer first declared in dark mode only' => ['<style>'.sprintf($dark, 'b').' @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Error, '1.36']],
+            'the mirror: dark mode does not put a first' => ['<style>'.sprintf($dark, 'a').' @layer b{p{color:#ddd}} @layer a{p{color:#111}}</style>', null],
+            'a dark-mode sheet' => ['<style media="(prefers-color-scheme: dark)">@layer b{p{color:#111}}</style><style>@layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Error, '1.36']],
+            'an order that depends on the viewport' => ['<style>'.sprintf($wide, 'b').' @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Warning, '1.36']],
+            'a viewport declaration in the base order' => ['<style>@layer a, b; '.sprintf($wide, 'b').' @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Error, '1.36']],
+            '@container is always accommodated' => ['<style>@container (min-width:1px){@layer b{p{color:#111}}} @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', null],
+        ];
+    }
+
+    // C4 review: layers declared only under a condition that is false for the default preferences do not take a place in
+    // the base layer order; an order that a viewport condition could change is approximate (`limit`).
+    #[DataProvider('conditionalLayerDeclarations')]
+    public function test_layers_declared_under_a_condition(string $styles, ?array $expected): void
+    {
+        $violations = $this->analyze('<html><head>'.$styles.'</head><body><p>Text</p></body></html>');
+
+        if ($expected === null) {
+            $this->assertSame([], $violations);
+        } else {
+            $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p', severity: $expected[0]);
+            $this->assertSame($expected[1], $violation->params['ratio']);
+        }
+    }
+
     /** @return array<string, array{0: string, 1: bool}> CSS around a layered Tailwind sr-only and whether `<span class="sr-only x">` is exempt */
     public static function layeredSrOnly(): array
     {

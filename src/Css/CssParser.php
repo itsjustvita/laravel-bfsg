@@ -143,6 +143,17 @@ class CssParser
      */
     public const MAX_LAYER_NAMES = 4096;
 
+    /**
+     * Whether the rules of a group rule apply in the base cascade (baseCascadeApplies()), which decides whether a layer
+     * they declare takes its place in the base layer order: always, only at some viewports, or never (a preference
+     * media query that fails with PREFERENCE_DEFAULTS). Ordered: a nested group takes the stronger of its own and its parent's.
+     */
+    private const IN_BASE = 0;
+
+    private const IN_BASE_AT_SOME_VIEWPORTS = 1;
+
+    private const NOT_IN_BASE = 2;
+
     /** Media features of user preferences: rules behind a query that fails with their defaults are not part of the base cascade (another theme). */
     public const PREFERENCE_FEATURES = ['prefers-color-scheme', 'prefers-contrast', 'forced-colors', 'inverted-colors', 'prefers-reduced-transparency'];
 
@@ -265,6 +276,18 @@ class CssParser
 
     /** Id of the layer the rules being parsed belong to (0: unlayered). */
     private int $currentLayer = 0;
+
+    /** Whether the rules being parsed apply in the base cascade (IN_BASE, IN_BASE_AT_SOME_VIEWPORTS, NOT_IN_BASE). */
+    private int $layerContext = self::IN_BASE;
+
+    /** Appearances of layers counted so far (layerAppears()). */
+    private int $layerAppearances = 0;
+
+    /** @var array<int, int> layer id => number of its first appearance where its rules apply in the base cascade (IN_BASE) */
+    private array $baseAppearance = [];
+
+    /** @var array<int, int> layer id => number of its first appearance where its rules may apply (IN_BASE or IN_BASE_AT_SOME_VIEWPORTS) */
+    private array $anyAppearance = [];
 
     protected bool $indexed = false;
 
@@ -428,8 +451,8 @@ class CssParser
         $this->document = $document;
         $this->rules = [];
         $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = $this->positioned = [];
-        $this->customIndexEntries = $this->nestedRuleBytes = $this->layerNames = 0;
-        $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = [];
+        $this->customIndexEntries = $this->nestedRuleBytes = $this->layerNames = $this->layerAppearances = 0;
+        $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = [];
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
@@ -663,7 +686,7 @@ class CssParser
 
     /**
      * Tokenize one stylesheet into qualified rules. Comments are stripped; @media is kept for
-     * all/screen only; @layer, @supports, @container are unwrapped; every other at-rule is dropped.
+     * all/screen only; @supports and @container are unwrapped, @layer into its cascade layer; every other at-rule is dropped.
      * Nested style rules are flattened (see parseRuleBody()). Each rule carries the rank of its cascade layer
      * (rankLayers()); the layer names are shared with the sheets parse() read and earlier calls since.
      * $condition is the condition of the whole sheet (its media attribute, see HtmlDocument::mediaCondition());
@@ -688,6 +711,11 @@ class CssParser
         $rules = [];
         $position = 0;
         $this->currentLayer = 0;
+        $this->layerContext = match ($condition) {
+            'preference' => self::NOT_IN_BASE,
+            'viewport' => self::IN_BASE_AT_SOME_VIEWPORTS,
+            default => self::IN_BASE,
+        };
         $this->parseBlock(self::stripComments($css), $position, $rules, $orderOffset, $condition !== null, $condition);
 
         return $rules;
@@ -695,8 +723,12 @@ class CssParser
 
     /**
      * Replace the layer id of each rule by its rank (CSS Cascade 5): layers in order of first appearance, a sub-layer
-     * inside its parent and below the parent's own rules (a post-order walk of the layer tree, children by id, which is
-     * their order of first appearance), unlayered rules PHP_INT_MAX. Iterative: a dotted name may nest any number of levels.
+     * inside its parent and below the parent's own rules (a post-order walk of the layer tree), unlayered rules
+     * PHP_INT_MAX. Iterative: a dotted name may nest any number of levels. The appearance that counts is the first where
+     * the layer's rules apply in the base cascade (CSS Cascade 5: a layer under a false condition is not declared); a
+     * layer that appears only at some viewports takes its first such appearance, one that appears only under a false
+     * condition (whose rules are not in the base cascade) comes last. When the appearances at some viewports would order
+     * siblings differently, the order depends on the viewport: truncated (`limit`).
      *
      * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
      * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>
@@ -707,6 +739,24 @@ class CssParser
 
         foreach ($this->layerParents as $id => $parent) {
             $children[$parent][] = $id;
+        }
+
+        foreach ($children as $parent => $siblings) {
+            $keys = [];
+
+            foreach ($siblings as $id) {
+                $keys[$id] = [$this->baseAppearance[$id] ?? $this->anyAppearance[$id] ?? PHP_INT_MAX, $id];
+            }
+
+            usort($siblings, fn (int $a, int $b): int => $keys[$a] <=> $keys[$b]);
+            $children[$parent] = $siblings;
+            $previous = 0;
+
+            foreach ($siblings as $id) {
+                $any = $this->anyAppearance[$id] ?? PHP_INT_MAX;
+                $this->truncated = $this->truncated || $any < $previous;
+                $previous = $any;
+            }
         }
 
         $ranks = [0 => PHP_INT_MAX];
@@ -776,13 +826,16 @@ class CssParser
         return $this->isLayerName($name) ? $this->layerNamed($name) : null;
     }
 
-    /** Whether the text is a (dotted) layer name: identifier segments without whitespace, brackets, quotes or other delimiters, none starting with a digit. */
+    /**
+     * Whether the text is a (dotted) layer name: identifier segments without whitespace, brackets, quotes or other
+     * delimiters, none starting with a digit or being a lone `-`. Escapes are not supported: a backslash makes it invalid.
+     */
     private function isLayerName(string $name): bool
     {
         foreach (explode('.', $name) as $segment) {
             $digit = ltrim($segment, '-');
 
-            if ($segment === '' || strcspn($segment, " \t\r\n\f,;:!\"'()[]{}<>+~*=/|#$%&?@^`") !== strlen($segment) || ($digit !== '' && ctype_digit($digit[0]) && strlen($segment) - strlen($digit) < 2)) {
+            if ($segment === '' || $segment === '-' || strcspn($segment, " \t\r\n\f,;:!\"'()[]{}<>+~*=/|#$%&?@^`\\") !== strlen($segment) || ($digit !== '' && ctype_digit($digit[0]) && strlen($segment) - strlen($digit) < 2)) {
                 return false;
             }
         }
@@ -806,10 +859,28 @@ class CssParser
     }
 
     /**
-     * The id of the sub-layer $name of a layer (null: a new anonymous one), declared on first appearance. Beyond
-     * MAX_LAYER_NAMES a new name is the parent's overflow layer (truncated); a name below an overflow layer is that layer.
+     * The id of the sub-layer $name of a layer (null: a new anonymous one), declared on first appearance, which is
+     * counted (see rankLayers()) unless its rules are not in the base cascade. Beyond MAX_LAYER_NAMES a new name is the
+     * parent's overflow layer (truncated); a name below an overflow layer is that layer.
      */
     private function layerNode(int $parent, ?string $name): int
+    {
+        $id = $this->internLayer($parent, $name);
+
+        if ($this->layerContext !== self::NOT_IN_BASE) {
+            $this->layerAppearances++;
+            $this->anyAppearance[$id] ??= $this->layerAppearances;
+
+            if ($this->layerContext === self::IN_BASE) {
+                $this->baseAppearance[$id] ??= $this->layerAppearances;
+            }
+        }
+
+        return $id;
+    }
+
+    /** layerNode() without counting the appearance. */
+    private function internLayer(int $parent, ?string $name): int
     {
         if (isset($this->isOverflowLayer[$parent])) {
             return $parent;
@@ -825,7 +896,7 @@ class CssParser
             $this->truncated = true;
 
             if (! isset($this->overflowLayers[$parent])) {
-                // At most one per declared layer: it is the parent's last sub-layer, as no name is declared after it.
+                // At most one per declared layer; no name is declared after it.
                 $this->overflowLayers[$parent] = $this->newLayer($parent);
                 $this->isOverflowLayer[$this->overflowLayers[$parent]] = true;
             }
@@ -1759,9 +1830,10 @@ class CssParser
                 $group = $this->groupRule($css, $position, $conditional, $condition, $depth, $depth > 0);
 
                 if ($group !== null) {
-                    [$outer, $this->currentLayer] = [$this->currentLayer, $group[2]];
+                    $outer = [$this->currentLayer, $this->layerContext];
+                    [$this->currentLayer, $this->layerContext] = [$group[2], $group[3]];
                     $this->parseBlock($css, $position, $rules, $orderOffset, $group[0], $group[1], $depth + 1);
-                    $this->currentLayer = $outer;
+                    [$this->currentLayer, $this->layerContext] = $outer;
                 }
 
                 continue;
@@ -1779,13 +1851,13 @@ class CssParser
 
     /**
      * Read the at-rule at $position. A group rule whose rules apply (@media for all/screen, @layer, UNWRAPPED_AT_RULES)
-     * leaves $position inside its block and returns its [conditional, condition, layer id]; any other at-rule is skipped,
+     * leaves $position inside its block and returns its [conditional, condition, layer id, layer context]; any other at-rule is skipped,
      * and so is a group rule nested MAX_AT_RULE_DEPTH levels deep (truncated) and an @layer block whose prelude is not
      * one layer name. An `@layer a, b;` statement declares its layers. Inside a block ($inBlock) a prelude ends at its
      * closing brace, which is left for the block's parser.
      *
      * @param  'preference'|'viewport'|null  $condition
-     * @return array{0: bool, 1: 'preference'|'viewport'|null, 2: int}|null
+     * @return array{0: bool, 1: 'preference'|'viewport'|null, 2: int, 3: int}|null the last: baseCascadeApplies() of the block, its parent's included
      */
     private function groupRule(string $css, int &$position, bool $conditional, ?string $condition, int $depth, bool $inBlock): ?array
     {
@@ -1829,6 +1901,8 @@ class CssParser
             return null; // `@layer a, b { … }` or an invalid name: the browser drops the block
         }
 
+        $context = max($this->layerContext, $this->baseCascadeApplies($name, $media));
+
         // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
         // features and container queries also put a condition on them (see the class description).
         $inner = match (true) {
@@ -1837,7 +1911,24 @@ class CssParser
             default => $condition,
         };
 
-        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer];
+        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer, $context];
+    }
+
+    /**
+     * Whether the rules of an applying group rule apply in the base cascade: a media query by its condition (null:
+     * always, 'viewport': at some viewports, 'preference': never). @container counts as always (CSS Cascade 5 lets
+     * container queries declare layers whatever they match), and so do @layer, @supports, @scope and @document for now.
+     *
+     * @param  'preference'|'viewport'|false|null  $media  HtmlDocument::mediaCondition() of an @media prelude, false for other at-rules
+     */
+    private function baseCascadeApplies(string $name, string|false|null $media): int
+    {
+        return match (true) {
+            $name !== 'media' => self::IN_BASE,
+            $media === 'preference' => self::NOT_IN_BASE,
+            $media === 'viewport' => self::IN_BASE_AT_SOME_VIEWPORTS,
+            default => self::IN_BASE,
+        };
     }
 
     /**
@@ -1884,9 +1975,10 @@ class CssParser
                     $this->truncated = true;
                     $this->skipBlock($css, $position);
                 } else {
-                    [$outer, $this->currentLayer] = [$this->currentLayer, $group[2]];
+                    $outer = [$this->currentLayer, $this->layerContext];
+                    [$this->currentLayer, $this->layerContext] = [$group[2], $group[3]];
                     $this->parseRuleBody($css, $position, $selectors, $rules, $orderOffset, $group[0], $group[1], $depth + 1, true);
-                    $this->currentLayer = $outer;
+                    [$this->currentLayer, $this->layerContext] = $outer;
                 }
 
                 $segment = $position;
