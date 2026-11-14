@@ -353,6 +353,29 @@ class AuthenticatedHttpClientTest extends TestCase
         }
     }
 
+    public function test_credentials_come_from_config_when_env_is_not_loaded(): void
+    {
+        config()->set('bfsg.authentication.email', 'cfg@example.com');
+        config()->set('bfsg.authentication.password', 'cfg-secret');
+        config()->set('bfsg.authentication.token', '');
+
+        $this->assertSame(['email' => 'cfg@example.com', 'password' => 'cfg-secret', 'token' => null], AuthenticatedHttpClient::credentialsFromEnv());
+    }
+
+    public function test_credentials_fall_back_to_env_when_config_keys_are_absent(): void
+    {
+        config()->set('bfsg.authentication', ['default_login_url' => '/login']);
+        putenv('BFSG_AUTH_EMAIL=ci@example.com');
+        putenv('BFSG_AUTH_PASSWORD=from-env');
+
+        try {
+            $this->assertSame(['email' => 'ci@example.com', 'password' => 'from-env', 'token' => null], AuthenticatedHttpClient::credentialsFromEnv());
+        } finally {
+            putenv('BFSG_AUTH_EMAIL');
+            putenv('BFSG_AUTH_PASSWORD');
+        }
+    }
+
     public function test_credential_headers_are_bound_to_one_origin(): void
     {
         Http::fake(['https://api.example.com/login' => Http::response(['token' => 'from-login'], 200), '*' => Http::response('', 200)]);

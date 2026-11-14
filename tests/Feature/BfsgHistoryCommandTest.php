@@ -129,6 +129,31 @@ class BfsgHistoryCommandTest extends TestCase
         $this->assertCount(1, BfsgReport::all());
     }
 
+    public function test_cleanup_with_url_deletes_only_that_urls_reports(): void
+    {
+        foreach (['https://a.example/x', 'https://b.example/y'] as $url) {
+            $report = BfsgReport::create(['url' => $url, 'total_violations' => 1, 'score' => 95, 'grade' => 'B']);
+            BfsgReport::where('id', $report->id)->update(['created_at' => now()->subDays(5)]);
+        }
+
+        $this->artisan('bfsg:history', ['--cleanup' => true, '--days' => '1', '--url' => 'https://a.example/x'])
+            ->assertExitCode(0)
+            ->expectsOutputToContain('https://a.example/x');
+
+        $this->assertSame(['https://b.example/y'], BfsgReport::pluck('url')->all());
+    }
+
+    public function test_cleanup_with_trend_exits_2(): void
+    {
+        $report = BfsgReport::create(['url' => 'https://a.example/x', 'total_violations' => 1, 'score' => 95, 'grade' => 'B']);
+        BfsgReport::where('id', $report->id)->update(['created_at' => now()->subDays(5)]);
+
+        $this->artisan('bfsg:history', ['--cleanup' => true, '--trend' => true, '--days' => '1', '--url' => 'https://a.example/x'])
+            ->assertExitCode(2);
+
+        $this->assertCount(1, BfsgReport::all());
+    }
+
     public function test_cleanup_nothing_to_delete(): void
     {
         $this->artisan('bfsg:history', ['--cleanup' => true])

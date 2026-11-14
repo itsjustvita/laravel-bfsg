@@ -76,9 +76,10 @@ class BfsgServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../lang' => $this->app->langPath('vendor/bfsg'),
             ], 'bfsg-lang');
-
-            $this->commands($this->commandClasses());
         }
+
+        // Outside the console too: Artisan::call() from a controller, a Filament action or a Livewire component needs them.
+        $this->commands($this->commandClasses());
 
         // Load migrations
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');

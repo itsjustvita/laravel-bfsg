@@ -597,6 +597,9 @@ All settings live in `config/bfsg.php` (`php artisan vendor:publish --tag=bfsg-c
 | `bfsg.fetch.max_stylesheets` | | `5` | Stylesheets inlined per page |
 | `bfsg.fetch.max_stylesheet_bytes` | | `524288` | Largest stylesheet inlined |
 | `bfsg.authentication.default_login_url` | | `/login` | Login page for `--auth`, and the page a redirect is recognised as "login page" by |
+| `bfsg.authentication.email` | `BFSG_AUTH_EMAIL` | `null` | Login e-mail for `--auth`; read from the config so it works after `config:cache` |
+| `bfsg.authentication.password` | `BFSG_AUTH_PASSWORD` | `null` | Login password for `--auth` |
+| `bfsg.authentication.token` | `BFSG_AUTH_TOKEN` | `null` | Bearer token for `--auth` |
 | `bfsg.middleware.enabled` | `BFSG_MIDDLEWARE_ENABLED` | `false` | Switches the middleware on |
 | `bfsg.middleware.log_violations` | | `true` | Log one line per page with findings |
 | `bfsg.middleware.log_channel` | | `null` | Log channel; `null` = the default channel |

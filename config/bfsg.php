@@ -151,5 +151,10 @@ return [
     */
     'authentication' => [
         'default_login_url' => '/login',
+
+        // Read here, not with env() at run time: .env is not loaded once `config:cache` has run.
+        'email' => env('BFSG_AUTH_EMAIL'),
+        'password' => env('BFSG_AUTH_PASSWORD'),
+        'token' => env('BFSG_AUTH_TOKEN'),
     ],
 ];

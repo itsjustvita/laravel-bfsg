@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
+use Illuminate\Support\Facades\Artisan;
 use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\BfsgServiceProvider;
@@ -20,6 +21,43 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 
 class BfsgServiceProviderTest extends TestCase
 {
+    private bool $hadRunningInConsole = false;
+
+    private mixed $runningInConsole = null;
+
+    protected function setUp(): void
+    {
+        $this->hadRunningInConsole = array_key_exists('APP_RUNNING_IN_CONSOLE', $_ENV);
+        $this->runningInConsole = $_ENV['APP_RUNNING_IN_CONSOLE'] ?? null;
+
+        if (str_contains($this->name(), 'not_running_in_console')) {
+            $_ENV['APP_RUNNING_IN_CONSOLE'] = false;
+        }
+
+        parent::setUp();
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->hadRunningInConsole) {
+            $_ENV['APP_RUNNING_IN_CONSOLE'] = $this->runningInConsole;
+        } else {
+            unset($_ENV['APP_RUNNING_IN_CONSOLE']);
+        }
+
+        parent::tearDown();
+    }
+
+    public function test_commands_are_registered_when_not_running_in_console(): void
+    {
+        $this->assertFalse($this->app->runningInConsole());
+
+        $commands = array_keys(Artisan::all());
+
+        $this->assertContains('bfsg:check', $commands);
+        $this->assertContains('bfsg:history', $commands);
+    }
+
     public function test_bfsg_is_registered_as_singleton(): void
     {
         $instance1 = app('bfsg');

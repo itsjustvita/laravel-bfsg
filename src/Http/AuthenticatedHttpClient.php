@@ -340,9 +340,22 @@ class AuthenticatedHttpClient
     /** @return array{email: ?string, password: ?string, token: ?string} BFSG_AUTH_EMAIL, BFSG_AUTH_PASSWORD, BFSG_AUTH_TOKEN */
     public static function credentialsFromEnv(): array
     {
-        $read = fn (string $name): ?string => is_string($value = Env::get($name)) && $value !== '' ? $value : null;
+        // The config comes first: .env is not loaded once the config is cached. A published 3.1.0 config lacks the keys, so the environment answers then.
+        $read = function (string $configValue, string $name): ?string {
+            foreach ([$configValue, Env::get($name)] as $value) {
+                if (is_string($value) && $value !== '') {
+                    return $value;
+                }
+            }
 
-        return ['email' => $read('BFSG_AUTH_EMAIL'), 'password' => $read('BFSG_AUTH_PASSWORD'), 'token' => $read('BFSG_AUTH_TOKEN')];
+            return null;
+        };
+
+        return [
+            'email' => $read((string) config('bfsg.authentication.email'), 'BFSG_AUTH_EMAIL'),
+            'password' => $read((string) config('bfsg.authentication.password'), 'BFSG_AUTH_PASSWORD'),
+            'token' => $read((string) config('bfsg.authentication.token'), 'BFSG_AUTH_TOKEN'),
+        ];
     }
 
     /** @param  array<string, string>  $headers */

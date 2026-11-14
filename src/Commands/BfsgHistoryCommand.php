@@ -52,6 +52,12 @@ class BfsgHistoryCommand extends Command
     private function dispatch(): int
     {
         if ($this->option('cleanup')) {
+            if ($this->option('trend')) {
+                $this->error('--cleanup cannot be combined with --trend.');
+
+                return self::OPERATIONAL_ERROR;
+            }
+
             return $this->cleanup();
         }
 
@@ -149,15 +155,25 @@ class BfsgHistoryCommand extends Command
     protected function cleanup(): int
     {
         $days = (int) $this->option('days');
-        $deleted = BfsgReport::query()->where('created_at', '<', now()->subDays($days))->delete();
+        $query = BfsgReport::query()->where('created_at', '<', now()->subDays($days));
+        $url = $this->option('url');
+
+        if (is_string($url) && $url !== '') {
+            $query->forUrl($url);
+        } else {
+            $url = null;
+        }
+
+        $deleted = $query->delete();
+        $scope = $url === null ? '' : ' for '.self::escape($url);
 
         if ($deleted === 0) {
-            $this->info('No old reports to clean up.');
+            $this->info('No old reports to clean up'.$scope.'.');
 
             return Command::SUCCESS;
         }
 
-        $this->info("Deleted {$deleted} reports older than {$days} days.");
+        $this->info("Deleted {$deleted} reports{$scope} older than {$days} days.");
 
         return Command::SUCCESS;
     }
