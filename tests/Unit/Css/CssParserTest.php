@@ -101,7 +101,7 @@ class CssParserTest extends TestCase
     {
         $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root{--fg:#111} @layer theme{:root{--fg:#ddd}} p{color:var(--fg)}', '<p id="t">x</p>'), 'root map');
         $this->assertSame(['#111111', '#ffffff', false], $this->colors('.t{--fg:#111} @layer x{p.t{--fg:#ddd}} p{color:var(--fg)}', '<p class="t" id="t">x</p>'), 'own declaration');
-        $this->assertSame(['#111111', '#ffffff', false], $this->colors('p.t{--fg:#111} @layer x{:has(.q) .t{--fg:#ddd}} p{color:var(--fg)}', '<p class="t" id="t">x</p>'), 'a layered maybe rule cannot beat an unlayered declaration');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('p.t{--fg:#111} @layer x{:has(.q) .t{--fg:#ddd}} p{color:var(--fg)}', '<p class="t" id="t">x</p><i class="q"></i>'), 'a layered maybe rule cannot beat an unlayered declaration');
         $this->assertSame(['#111111', '#ffffff', false], $this->colors('*{--fg:#111} @layer x{*{--fg:#ddd}} p{color:var(--fg)}', '<p id="t">x</p>'), 'universal rules: unlayered wins');
         $this->assertSame(['#111111', '#ffffff', false], $this->colors('@layer x{*{--fg:#111!important}} *{--fg:#ddd!important} p{color:var(--fg)}', '<p id="t">x</p>'), 'universal rules: a layered !important wins');
     }
@@ -1711,7 +1711,7 @@ class CssParserTest extends TestCase
     // C1: universal maybe rules (an empty reduction) are folded once; their heaviest declaration per property counts.
     public function test_universal_maybe_rules_make_every_element_uncertain_unless_outweighed(): void
     {
-        $body = '<div><p id="t">x</p></div>';
+        $body = '<div class="x"><p id="t">x</p><i class="q r"></i></div>';
         $this->assertSame(['colour'], $this->uncertaintyOf(':has(.q){color:#111}', $body));
         $this->assertSame(['colour'], $this->uncertaintyOf(':is(.x > *){color:#111}', $body), 'Tailwind v4 *: variants');
         $this->assertSame([], $this->uncertaintyOf('#t{color:#999} :has(.q){color:#111} :has(.r){color:#222}', $body));
@@ -1769,8 +1769,50 @@ class CssParserTest extends TestCase
         $this->assertTrue($hidden('.x{'.$sr.'}'));
         $this->assertFalse($hidden('.x{'.$sr.'} .wrap:has(b) .x{position:static}'), 'a maybe rule may reveal');
         $this->assertFalse($hidden('.x{'.$sr.'} .wrap:has(b) .x{clip:auto}'), 'a clipping-only maybe rule');
-        $this->assertFalse($hidden('.x{'.$sr.'} :has(.q){overflow:visible;clip:auto}'), 'a universal one reveals anything');
+        $this->assertFalse($hidden('.x{'.$sr.'} :has(b){overflow:visible;clip:auto}'), 'a universal one reveals anything');
         $this->assertTrue($hidden('.x{'.$sr.'} .wrap:has(b) .x{color:#111}'), 'no clipping property');
+    }
+
+    /** @return array<string, array{0: string, 1: bool}> R10: an unsupported selector setting color on #t, and whether it may match the document */
+    public static function existenceSelectors(): array
+    {
+        return [
+            'present class' => ['.on:has(b) p', true],
+            'absent class' => ['.off:has(b) p', false],
+            'absent id' => ['#nope:nth-child(1) p', false],
+            'absent class anywhere in the chain' => ['.off > .on ~ p', false],
+            ':is() with one possible argument' => [':is(.off, .on) p', true],
+            ':is() with no possible argument' => [':is(.off, .gone .on) p', false],
+            ':where() nested' => [':where(:is(.off), .gone) p', false],
+            ':has() needs its argument' => ['.on:has(.off) p', false],
+            ':not() never counts' => [':not(.off) p:nth-child(1)', true],
+            ':has(:not()) never counts' => ['.on:has(:not(.off)) p', true],
+            'other functions never count' => ['p:nth-child(1 of .off)', true],
+            'ASCII case-insensitive (quirks mode)' => ['.ON:has(b) p', true],
+            'escapes' => ['.\\32 xl\\:text-lg:has(b) p, .x\\:y:has(b) p', true],
+            'hex escape of the wrong class' => ['.\\32 xl\\:text-sm:has(b) p', false],
+            ':checked without a checked element' => ['.on:checked + p', false],
+            ':checked inside :not()' => ['.on:not(:checked) + p', true],
+            'a pseudo-element name is not a class' => ['.on:has(b) p:nth-last-child(1)', true],
+        ];
+    }
+
+    // R10: an unsupported rule whose required compounds name a class or id the document lacks cannot match and is dropped.
+    #[DataProvider('existenceSelectors')]
+    public function test_unsupported_rules_that_cannot_match_are_dropped(string $selector, bool $possible): void
+    {
+        [$parser, $document] = $this->parsed($selector.'{color:#111}', '<div class="on 2xl:text-lg x:y"><b>b</b><p id="t">x</p></div>');
+
+        $this->assertSame($possible, $parser->maybeDeclares($this->target($document), 'color'));
+    }
+
+    // R10: :checked can match a checked or selected element, and an option (a select selects its first by default).
+    public function test_checked_needs_a_checkable_element(): void
+    {
+        foreach (['<input type="checkbox" checked>' => true, '<select><option>a</option></select>' => true, '<input type="checkbox">' => false] as $control => $possible) {
+            [$parser, $document] = $this->parsed(':checked ~ p{color:#111}', $control.'<p id="t">x</p>');
+            $this->assertSame($possible, $parser->maybeDeclares($this->target($document), 'color'), $control);
+        }
     }
 
     public function test_custom_properties_from_unsupported_selectors_are_approximate(): void
@@ -1778,7 +1820,7 @@ class CssParserTest extends TestCase
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} li:nth-child(odd){--fg:#111} li{color:var(--fg)}', '<ul><li id="t">x</li></ul>'), 'odd rows may render another value');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} li:nth-child(odd){--fg:#111} p{color:var(--fg)}', '<div><p id="t">x</p></div>'), 'the maybe rule covers li elements only');
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :root:has(.on){--fg:#111} p{color:var(--fg)}', '<p id="t" class="on">x</p>'), ':root:has() reduces to :root, whose value every element inherits');
-        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .a ~ p{--fg:#111} p{color:var(--fg, #000)}', '<p id="t">x</p>'), 'the rightmost compound decides');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .a ~ p{--fg:#111} p{color:var(--fg, #000)}', '<i class="a"></i><p id="t">x</p>'), 'the rightmost compound decides');
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} div:nth-child(1){--fg:#111}', '<div><p id="t" style="color:var(--fg)">x</p></div>'), 'inherited from an element a maybe rule covers');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#111} li:nth-child(odd){--fg:#111} #t{--fg:#999} li{color:var(--fg)}', '<ul><li id="t">x</li></ul>'), 'a heavier definite declaration wins over the maybe rule');
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} .x:not(:hover){--fg:#111} p{color:var(--fg)}', '<p id="t" class="x">x</p>'), ':not(:hover) matches at rest');
@@ -1786,7 +1828,7 @@ class CssParserTest extends TestCase
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover{--fg:#111} a:focus-visible{--fg:#222} :active{--fg:#333} .y:hover .z{--fg:#444} p{color:var(--fg)}', '<p id="t" class="x z">x</p>'), 'user-action states are not the base state');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} *, ::before, ::after{--other:1} p::first-line{--fg:#111} p:after{--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'pseudo-element rules never style the element itself');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} .x:hover:nth-child(2){--fg:#111} .peer:hover ~ .peer-hover\\:x{--fg:#111} p{color:var(--fg)}', '<p id="t" class="x peer-hover:x">x</p>'), 'a state outside parentheses never matches at rest, whatever else is unsupported');
-        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :is(.dark .dark\\:x){--fg:#111} p{color:var(--fg)}', '<p id="t" class="dark:x">x</p>'), ':is() arguments reduce to their rightmost compound');
+        $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :is(.dark .dark\\:x){--fg:#111} p{color:var(--fg)}', '<div class="dark"><p id="t" class="dark:x">x</p></div>'), ':is() arguments reduce to their rightmost compound');
         $this->assertSame(['#999999', '#ffffff', false], $this->colors(':root{--fg:#999} :is(.dark .dark\\:x){--fg:#111} :is(:where(.dark) .dark\\:y, .z){--fg:#111} p{color:var(--fg)}', '<p id="t" class="dark">x</p>'), 'elements without the argument classes stay exact');
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} :is(:where(.dark) .dark\\:y, .z){--fg:#111} p{color:var(--fg)}', '<p id="t" class="z">x</p>'), 'the union of the arguments');
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} p:is(.a, :nth-child(2)){--fg:#111} p{color:var(--fg)}', '<p id="t">x</p>'), 'an argument that reduces to nothing leaves the rest of the compound');
@@ -1828,6 +1870,14 @@ class CssParserTest extends TestCase
         return $selector.str_repeat(':is('.implode(',', array_fill(0, 16, '.r')).')', 1030).'{--fg:#111} :root{--fg:#999}';
     }
 
+    /** An element carrying every class the rules name, so that none of them is dropped as unable to match (R10). */
+    private static function carrying(string $rules): string
+    {
+        preg_match_all('/\.([\w-]+)/', $rules, $m);
+
+        return '<i class="'.implode(' ', array_unique($m[1])).'"></i>';
+    }
+
     /** @return array<string, array{0: string}> */
     public static function hostileSelectorRules(): array
     {
@@ -1848,7 +1898,7 @@ class CssParserTest extends TestCase
     #[DataProvider('hostileSelectorRules')]
     public function test_selector_reduction_is_bounded(string $rules): void
     {
-        [$parser, $document] = $this->parsed($rules, '<p id="t" class="x">x</p>');
+        [$parser, $document] = $this->parsed($rules, '<p id="t" class="x">x</p>'.self::carrying($rules));
         memory_reset_peak_usage();
         $before = memory_get_usage(true);
 
@@ -1862,7 +1912,7 @@ class CssParserTest extends TestCase
     #[DataProvider('hostileSelectorRules')]
     public function test_selector_reduction_finishes_within_the_time_budget(string $rules): void
     {
-        [$parser, $document] = $this->parsed($rules, '<p id="t" class="x">x</p>');
+        [$parser, $document] = $this->parsed($rules, '<p id="t" class="x">x</p>'.self::carrying($rules));
 
         $start = microtime(true);
         $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');
@@ -1873,7 +1923,7 @@ class CssParserTest extends TestCase
     #[Group('performance')]
     public function test_a_long_compound_reduces_within_the_time_budget(): void
     {
-        [$parser, $document] = $this->parsed(self::longCompoundRule(), '<p id="t">x</p>');
+        [$parser, $document] = $this->parsed(self::longCompoundRule(), '<p id="t">x</p>'.self::carrying(self::longCompoundRule()));
 
         $start = microtime(true);
         $parser->buildIndex()->substituteFor($this->target($document), 'var(--fg)');

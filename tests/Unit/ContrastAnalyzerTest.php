@@ -852,14 +852,14 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
   --color-gray-600:oklch(44.6% .03 256.802);--color-gray-900:oklch(21% .034 264.665);--color-gray-950:oklch(13% .028 261.692)}}';
 
     /** Contrast report C1, repro A: Tailwind v4 class-based dark mode (`@custom-variant dark (&:where(.dark, .dark *))`). */
-    private function tailwindDarkPage(string $text, string $darkText): string
+    private function tailwindDarkPage(string $text, string $darkText, bool $dark = true, bool $variants = true): string
     {
-        return '<html lang="en" class="dark"><head><style>'.self::TAILWIND_V4_THEME.'
+        return '<html lang="en"'.($dark ? ' class="dark"' : '').'><head><style>'.self::TAILWIND_V4_THEME.'
 @layer utilities{
   .bg-white{background-color:var(--color-white)}
-  .text-'.$text.'{color:var(--color-'.$text.')}
+  .text-'.$text.'{color:var(--color-'.$text.')}'.($variants ? '
   .dark\:bg-gray-950{&:where(.dark,.dark *){background-color:var(--color-gray-950)}}
-  .dark\:text-'.$darkText.'{&:where(.dark,.dark *){color:var(--color-'.$darkText.')}}
+  .dark\:text-'.$darkText.'{&:where(.dark,.dark *){color:var(--color-'.$darkText.')}}' : '').'
 }</style></head>
 <body class="bg-white dark:bg-gray-950"><p class="text-'.$text.' dark:text-'.$darkText.'">Muted copy</p></body></html>';
     }
@@ -980,7 +980,76 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $css = self::TAILWIND_SR_ONLY.' .wrap:has(b) .sr-only{position:static}';
         $body = '<div class="wrap"><b>Bold</b><button type="button" class="text-gray-400"><span class="sr-only">Close menu</span></button></div>';
 
-        $this->assertHasViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient', element: 'span.sr-only');
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient', element: 'span.sr-only');
+        $this->assertSame([Severity::Warning, ['approximate']], [$violation->severity, $violation->tags], 'R10: the text may still be hidden');
+    }
+
+    // R10: a light page carries no `.dark`, so every dark: variant provably cannot match and is dropped as in 3.1.0.
+    public function test_tailwind_v4_class_dark_mode_on_a_light_page_is_unchanged(): void
+    {
+        foreach ([['gray-600', 'gray-500'], ['gray-400', 'gray-300']] as [$text, $darkText]) {
+            $this->assertEquals(
+                $this->analyze($this->tailwindDarkPage($text, $darkText, dark: false, variants: false)),
+                $this->analyze($this->tailwindDarkPage($text, $darkText, dark: false)),
+                "text-$text dark:text-$darkText",
+            );
+        }
+
+        $this->assertSame([], $this->analyze($this->tailwindDarkPage('gray-600', 'gray-500', dark: false)), 'no Notice');
+        $this->assertHasViolation($this->analyze($this->tailwindDarkPage('gray-400', 'gray-300', dark: false)), 'contrast.insufficient', severity: Severity::Error);
+    }
+
+    private const BOOTSTRAP_BUTTON = '.btn{color:var(--bs-btn-color);background-color:var(--bs-btn-bg)}
+.btn-primary{--bs-btn-color:#fff;--bs-btn-bg:#0d6efd;--bs-btn-active-color:#fff;--bs-btn-active-bg:#0a58ca}
+.btn-check:checked+.btn,.btn.active{color:var(--bs-btn-active-color);background-color:var(--bs-btn-active-bg)}';
+
+    // R10: `.btn-check:checked+.btn` matches nothing without a checked .btn-check, so a Bootstrap button stays exact.
+    public function test_bootstrap_checked_button_rule_needs_a_checked_btn_check(): void
+    {
+        $button = '<button class="btn btn-primary">Save</button>';
+
+        $this->assertSame([], $this->analyze($this->page(self::BOOTSTRAP_BUTTON, $button)), 'no .btn-check');
+        $this->assertSame([], $this->analyze($this->page(self::BOOTSTRAP_BUTTON, '<input type="checkbox" class="btn-check" id="c">'.$button)), 'nothing is checked');
+        $this->assertHasViolation($this->analyze($this->page(self::BOOTSTRAP_BUTTON, '<input type="checkbox" class="btn-check" id="c" checked>'.$button)), 'contrast.unverifiable', severity: Severity::Notice);
+    }
+
+    // R10: a negated class does not have to be present: the supported rule applies, the unsupported one stays a maybe rule.
+    public function test_negated_absent_class_keeps_the_rule(): void
+    {
+        $this->assertHasViolation($this->analyze($this->page(':not(.absent) p{color:#ddd}', '<div><p>Text</p></div>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertHasViolation($this->analyze($this->page(':not(.absent) p:first-of-type{color:#ddd}', '<div><p>Text</p></div>')), 'contrast.unverifiable', severity: Severity::Notice);
+    }
+
+    // R10, D2: a maybe rule that may clip the text to nothing leaves the failure approximate.
+    public function test_maybe_rule_that_may_clip_the_text_makes_a_failure_approximate(): void
+    {
+        $css = '.label{color:#aaa} .wrap:has(b) .label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}';
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<div class="wrap"><b>b</b><span class="label">Label</span></div>')), 'contrast.insufficient', severity: Severity::Warning);
+        $this->assertSame(['approximate'], $violation->tags);
+        $this->assertSame([], $this->analyze($this->page('.label{color:#111}'.substr($css, 18), '<div class="wrap"><b>b</b><span class="label">Label</span></div>')), 'a pass stays silent');
+    }
+
+    /** @return array<string, array{0: string, 1: bool}> R10: unsupported rules that may hide the text, and whether they make the failure approximate */
+    public static function maybeHidingRules(): array
+    {
+        return [
+            'display:none on the element' => ['.x:has(b) p{display:none}', true],
+            'visibility:hidden on an ancestor' => ['.x:has(b){visibility:hidden}', true],
+            'content-visibility:hidden on an ancestor' => ['.x:has(b){content-visibility:hidden}', true],
+            'outweighed' => ['p#t{display:block} .x:has(b) p{display:none}', false],
+            'only at some viewports' => ['@media (min-width:640px){.x:has(b) p{display:none}}', false],
+            'revealing' => ['.x:has(b) p{display:block;visibility:visible}', false],
+        ];
+    }
+
+    #[DataProvider('maybeHidingRules')]
+    public function test_maybe_rule_that_may_hide_the_text_makes_a_failure_approximate(string $rule, bool $approximate): void
+    {
+        $body = '<div class="x"><b>b</b><p id="t">Text</p></div>';
+        $violation = $this->assertHasViolation($this->analyze($this->page('p{color:#aaa} '.$rule, $body)), 'contrast.insufficient');
+
+        $this->assertSame($approximate ? [Severity::Warning, ['approximate']] : [Severity::Error, []], [$violation->severity, $violation->tags]);
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} '.$rule, $body)), 'a pass stays silent');
     }
 
     // C1: every fixture (only selectors 3.1.0 supports carry contrast properties there) keeps its recorded 3.1.0 findings.
