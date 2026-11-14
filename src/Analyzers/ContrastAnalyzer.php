@@ -138,8 +138,9 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     /**
      * Text that is not measured because of its style chain: not rendered (aria-hidden text is visible and measured), hidden
-     * by the stylesheets, or fully transparent (CssParser::isTransparent(): an exact opacity 0 at every viewport). Text of
-     * an inactive component, which 1.4.3 exempts, depends on more than the chain (a label's control): isInactive().
+     * by the stylesheets, fully transparent (CssParser::isTransparent(): an exact opacity 0 at every viewport) or clipped to
+     * nothing (CssParser::isVisuallyHidden(): `.sr-only` at every viewport; not visible to anyone, 1.4.3 Incidental). Text
+     * of an inactive component, which 1.4.3 exempts, depends on more than the chain (a label's control): isInactive().
      */
     private function isExempt(CssParser $parser, DOMElement $element, string $key): bool
     {
@@ -151,7 +152,8 @@ class ContrastAnalyzer extends BaseAnalyzer
             return false;
         }
 
-        $exempt = Element::isNotRendered($element) || $parser->hidesElement($element) || $parser->isTransparent($element);
+        $exempt = Element::isNotRendered($element) || $parser->hidesElement($element) || $parser->isTransparent($element)
+            || $parser->isVisuallyHidden($element);
 
         if ($exempt && count($this->exemptChains) < self::MAX_EXEMPT_CHAINS) {
             $this->exemptChains[$key] = true;

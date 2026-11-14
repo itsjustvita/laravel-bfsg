@@ -485,6 +485,74 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
     }
 
+    /** Tailwind UI's sr-only (v4) with the gray of its icon buttons (contrast report C2, repro A). */
+    private const TAILWIND_SR_ONLY = '.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip-path:inset(50%);white-space:nowrap;border-width:0}
+.text-gray-400{color:#99a1af}';
+
+    private const ICON_BUTTON = '<button type="button" class="text-gray-400"><span class="sr-only">Close menu</span>
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18 18 6"/></svg></button>';
+
+    // C2: text clipped to nothing is not visible to anyone (1.4.3 Incidental); the icon falls under 1.4.11.
+    public function test_tailwind_sr_only_text_is_not_measured(): void
+    {
+        $this->assertSame([], $this->analyze($this->page(self::TAILWIND_SR_ONLY, self::ICON_BUTTON)));
+    }
+
+    // C2, repro B: the spinner from the Bootstrap 5.3 docs; every declaration is !important.
+    public function test_bootstrap_visually_hidden_text_is_not_measured(): void
+    {
+        $css = '.visually-hidden,.visually-hidden-focusable:not(:focus):not(:focus-within){width:1px!important;
+  height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;
+  clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+.visually-hidden:not(caption),.visually-hidden-focusable:not(:focus):not(:focus-within):not(caption){position:absolute!important}
+.text-warning{color:#ffc107!important}';
+        $body = '<div class="spinner-border text-warning" role="status"><span class="visually-hidden">Loading...</span></div>';
+
+        $this->assertSame([], $this->analyze($this->page($css, $body)));
+    }
+
+    // C2: Tailwind v3 clips with the legacy clip property.
+    public function test_tailwind_v3_sr_only_with_clip_rect_is_not_measured(): void
+    {
+        $css = '.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}'
+            .' .text-gray-400{color:#99a1af}';
+
+        $this->assertSame([], $this->analyze($this->page($css, self::ICON_BUTTON)));
+    }
+
+    // C2: like opacity 0 (R37), a clip from a breakpoint rule holds only at some viewports, so the text is measured.
+    public function test_sr_only_inside_a_media_query_only_is_still_measured(): void
+    {
+        $css = '@media (min-width:640px){.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border-width:0}}'
+            .' .text-gray-400{color:#99a1af}';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, self::ICON_BUTTON)), 'contrast.insufficient', element: 'span.sr-only', severity: Severity::Error);
+        $this->assertSame('2.60', $violation->params['ratio']);
+    }
+
+    // C2: a focus variant does not apply at rest, a not-sr-only class on the element itself does.
+    public function test_not_sr_only_override_is_measured(): void
+    {
+        $css = self::TAILWIND_SR_ONLY.' .focus\:not-sr-only:focus{position:static;width:auto;height:auto;clip:auto;overflow:visible}'
+            .' .not-sr-only{position:static;width:auto;height:auto;clip:auto;overflow:visible}';
+        $button = fn (string $classes): string => '<button type="button" class="text-gray-400"><span class="'.$classes.'">Close menu</span></button>';
+
+        $this->assertSame([], $this->analyze($this->page($css, $button('sr-only focus:not-sr-only'))));
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, $button('sr-only not-sr-only'))), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('2.60', $violation->params['ratio']);
+    }
+
+    // C2: without absolute or fixed positioning a 1px box is not taken as clipped to nothing.
+    public function test_one_px_box_without_absolute_position_is_measured(): void
+    {
+        $css = '.tiny{width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%)} .text-gray-400{color:#99a1af}';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page($css, '<p class="tiny text-gray-400">x</p>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame('2.60', $violation->params['ratio']);
+    }
+
     // R38: an icon sprite sheet paints nothing, so it is no backdrop.
     public function test_svg_sprite_sheet_is_not_a_backdrop(): void
     {

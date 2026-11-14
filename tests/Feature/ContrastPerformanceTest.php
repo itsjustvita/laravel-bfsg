@@ -2,8 +2,10 @@
 
 namespace ItsJustVita\LaravelBfsg\Tests\Feature;
 
+use DOMElement;
 use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Tests\Support\BenchmarkPage;
 use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
@@ -64,5 +66,41 @@ class ContrastPerformanceTest extends TestCase
 
         $this->assertSame([], $violations, 'the whole list is measured and passes');
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('took %.2f s', $elapsed));
+    }
+
+    /** @return array<string, array{0: string, 1: bool}> the class of the outermost div and whether all text below it is clipped */
+    public static function deepDocumentRoots(): array
+    {
+        return ['clipped at the top' => ['sr-only', true], 'clipped nowhere' => ['', false]];
+    }
+
+    // C2: the clipping of the ancestors is memoised per element, so 5 000 text nodes below 2 000 levels (flattened to
+    // HtmlDocument::MAX_DEPTH) cost one walk up the ancestors in all, not one per text element.
+    #[Group('performance')]
+    #[DataProvider('deepDocumentRoots')]
+    public function test_visually_hidden_check_on_deep_ancestors_stays_in_budget(string $class, bool $hidden): void
+    {
+        $css = '.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border-width:0}'
+            .' .c{color:#767676}';
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Deep</title><style>'.$css.'</style></head><body><div class="'.$class.'">'
+            .str_repeat('<div class="c">t', 2000).str_repeat('<span>t</span>', 3000).str_repeat('</div>', 2001).'</body></html>';
+        $document = HtmlDocument::fromHtml($html);
+        $texts = array_reverse($document->query('//body//*[text()[normalize-space()]]')); // deepest first: the longest walks
+        $parser = (new CssParser)->parse($document)->buildIndex();
+
+        $start = microtime(true);
+        $results = array_unique(array_map(fn (DOMElement $element): bool => $parser->isVisuallyHidden($element), $texts));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame([$hidden], array_values($results));
+        $this->assertGreaterThan(3000, count($texts));
+        $this->assertLessThan(PerformanceBudget::seconds(0.5), $elapsed, sprintf('isVisuallyHidden() took %.2f s', $elapsed));
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame([], $violations, 'clipped text is exempt, the rest passes (#767676 is 4.54:1)');
+        $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 }

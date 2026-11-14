@@ -57,6 +57,22 @@ class CssParser
         'position', 'opacity',
     ];
 
+    /**
+     * Properties that clip an absolutely positioned element to nothing (isVisuallyHidden()), besides `position`, which is
+     * one of INDEXED_PROPERTIES. A rule that carries these but none of INDEXED_PROPERTIES and no custom property is
+     * indexed against MAX_CLIPPING_RULES, so it never pushes a colour rule out of MAX_INDEXED_RULES.
+     */
+    public const CLIPPING_PROPERTIES = ['clip', 'clip-path', 'overflow', 'overflow-x', 'overflow-y', 'width', 'height'];
+
+    /** Upper bound of indexed rules that carry only CLIPPING_PROPERTIES; beyond it isVisuallyHidden() is false for every element. */
+    public const MAX_CLIPPING_RULES = 2000;
+
+    /** Bytes of the isVisuallyHidden() memo: the node paths plus CLIPPED_ENTRY_BYTES each; it starts over when full. */
+    private const MAX_CLIPPED_CACHE_BYTES = 8 * 1024 * 1024;
+
+    /** PHP bookkeeping counted per isVisuallyHidden() memo entry on top of its key: hash bucket and slot at power-of-two capacity, key header (estimated about 100 bytes). */
+    private const CLIPPED_ENTRY_BYTES = 128;
+
     /** Why a resolveColors() measurement is uncertain, in the order they are listed (see resolveColors()). */
     private const UNCERTAINTIES = ['backdrop', 'colour', 'limit'];
 
@@ -228,6 +244,15 @@ class CssParser
     /** @var array<string, array{0: float, 1: list<string>, 2: float}> node path => opacity product, its uncertainty, the element's own opacity */
     private array $opacityCache = [];
 
+    /** @var array<string, bool> node path => isVisuallyHidden(), within MAX_CLIPPED_CACHE_BYTES */
+    private array $clippedCache = [];
+
+    /** Bytes counted for clippedCache. */
+    private int $clippedCacheBytes = 0;
+
+    /** Whether more than MAX_CLIPPING_RULES clipping-only rules exist: a skipped one might reveal, so nothing is visually hidden. */
+    private bool $clippingTruncated = false;
+
     /** @var array<string, ?int> node path of a parent => element-child index of its first covering child (see coveringSiblingIndex()) */
     private array $coveringMedia = [];
 
@@ -360,8 +385,9 @@ class CssParser
         $this->truncated = false;
         $this->backgroundCache = $this->foregroundCache = $this->fontSizeCache = $this->declarationCache = $this->weightCache = [];
         $this->fontSizeBoundCache = $this->fontWeightCache = $this->visibilityCache = $this->opacityCache = $this->coveringMedia = $this->layerCache = [];
-        $this->layerCacheBytes = 0;
-        $this->viewportHiding = false;
+        $this->layerCacheBytes = $this->clippedCacheBytes = 0;
+        $this->clippedCache = [];
+        $this->viewportHiding = $this->clippingTruncated = false;
         $this->selectorAttributes = null;
         $this->customProperties = null;
         $this->overriddenProperties = $this->resolvedProperties = [];
@@ -382,7 +408,7 @@ class CssParser
             }
         }
 
-        $counts = ['rule' => 0, 'custom' => 0];
+        $counts = ['rule' => 0, 'custom' => 0, 'clipping' => 0];
 
         foreach ($this->rules as $rule) {
             $kind = $this->indexKind($rule);
@@ -417,8 +443,8 @@ class CssParser
 
         $this->indexBuilds++;
         $deadline ??= microtime(true) + self::INDEX_TIME_BUDGET_SECONDS;
-        $counts = ['rule' => 0, 'custom' => 0];
-        $limits = ['rule' => self::MAX_INDEXED_RULES, 'custom' => self::MAX_CUSTOM_PROPERTY_RULES];
+        $counts = ['rule' => 0, 'custom' => 0, 'clipping' => 0];
+        $limits = ['rule' => self::MAX_INDEXED_RULES, 'custom' => self::MAX_CUSTOM_PROPERTY_RULES, 'clipping' => self::MAX_CLIPPING_RULES];
         $tokens = null;
         $keys = []; // spl_object_id => [element, node path] of the elements custom-property and maybe rules matched
 
@@ -431,7 +457,11 @@ class CssParser
             }
 
             if (++$counts[$kind] > $limits[$kind]) {
-                $this->truncated = true;
+                if ($kind === 'clipping') {
+                    $this->clippingTruncated = true; // it decides no colour: only isVisuallyHidden() gives up
+                } else {
+                    $this->truncated = true;
+                }
 
                 continue;
             }
@@ -863,6 +893,172 @@ class CssParser
         [$opacity, $uncertainty] = $this->opacityOf($element, $this->nodeKey($element));
 
         return $opacity <= 0.0 && $uncertainty === [];
+    }
+
+    /**
+     * Whether the element or an ancestor is visually hidden (`.sr-only`, `.visually-hidden`): `position: absolute|fixed`
+     * and clipped to nothing by `clip: rect()` with zero width or height, by `clip-path: inset()` of 50% or more, or by
+     * `overflow: hidden|clip` on both axes of a box at most 1px wide and high (clipsToNothing()). Like an opacity 0
+     * (opacity()), it holds only in the base cascade at every viewport: the hiding declarations of viewport rules never
+     * win, their revealing ones do; a maybe rule that declares one of the properties, a truncated index and more than
+     * MAX_CLIPPING_RULES clipping-only rules leave it false. Memoised per element: each ancestor is looked at once.
+     */
+    public function isVisuallyHidden(DOMElement $element): bool
+    {
+        $this->buildIndex();
+
+        if ($this->truncated || $this->clippingTruncated) {
+            return false; // a skipped rule might reveal
+        }
+
+        $unknown = [];
+        $node = $element;
+        $key = $this->nodeKey($element);
+
+        while (! isset($this->clippedCache[$key])) {
+            $unknown[] = [$node, $key];
+            $parent = $node->parentNode;
+
+            if (! $parent instanceof DOMElement) {
+                break;
+            }
+
+            [$node, $key] = [$parent, $this->parentKey($key, $parent)];
+        }
+
+        $hidden = $this->clippedCache[$key] ?? false;
+
+        foreach (array_reverse($unknown) as [$node, $key]) {
+            $hidden = $hidden || $this->clipsToNothing($node, $key);
+            $bytes = strlen($key) + self::CLIPPED_ENTRY_BYTES;
+
+            if ($this->clippedCacheBytes + $bytes > self::MAX_CLIPPED_CACHE_BYTES) {
+                $this->clippedCache = [];
+                $this->clippedCacheBytes = 0;
+            }
+
+            $this->clippedCache[$key] = $hidden;
+            $this->clippedCacheBytes += $bytes;
+        }
+
+        return $hidden;
+    }
+
+    /**
+     * Whether the element itself is positioned absolute or fixed and clipped to nothing (isVisuallyHidden()). The
+     * cascade is the element index, the custom-property-only rules and the style attribute, with the `overflow`
+     * shorthand split into its axes; a declaration of a viewport rule that would hide (clippingValue()) is left out.
+     */
+    private function clipsToNothing(DOMElement $element, string $key): bool
+    {
+        $deciding = array_fill_keys(['position', ...self::CLIPPING_PROPERTIES], true);
+
+        foreach ([...$this->maybeIndex[$key] ?? [], ...$this->universalMaybeRules] as $position) {
+            if (array_intersect_key($this->rules[$position]['properties'], $deciding) !== []) {
+                return false; // a maybe rule may reveal, and never hides
+            }
+        }
+
+        $winners = [];
+        $declared = [];
+
+        foreach ([...$this->index[$key] ?? [], ...$this->customIndex[$key] ?? [], ...$this->universalCustomRules] as $position) {
+            $rule = $this->rules[$position];
+            $declared[] = [array_intersect_key($rule['properties'], $deciding), [0, ...$rule['specificity'], $rule['order']], $rule['condition'] === 'viewport'];
+        }
+
+        $declared[] = [array_intersect_key($this->inlineStyle($element), $deciding), [1, 0, 0, 0, PHP_INT_MAX], false];
+
+        foreach ($declared as [$declarations, $weight, $viewport]) {
+            foreach ($declarations as $name => $declaration) {
+                $value = strlen($declaration['value']) > 256 ? '' : strtolower(trim($declaration['value']));
+                $values = $name === 'overflow' ? $this->overflowAxes($value) : [$name => $value];
+
+                foreach ($values as $longhand => $axisValue) {
+                    if (! $viewport || ! $this->clippingValue($longhand, $axisValue)) {
+                        $this->keepHeavier($winners, $longhand, ['value' => $axisValue, 'important' => $declaration['important']], [$declaration['important'] ? 1 : 0, ...$weight]);
+                    }
+                }
+            }
+        }
+
+        $hides = fn (string $name): bool => isset($winners[$name]) && $this->clippingValue($name, $winners[$name]['declaration']['value']);
+
+        return $hides('position') && ($hides('clip') || $hides('clip-path') || ($hides('overflow-x') && $hides('overflow-y') && $hides('width') && $hides('height')));
+    }
+
+    /**
+     * The axes of an `overflow` shorthand value: one keyword sets both, two set x and y; anything else is no clipping.
+     *
+     * @return array{overflow-x: string, overflow-y: string}
+     */
+    private function overflowAxes(string $value): array
+    {
+        $keywords = preg_split('/\s++/', $value, 3) ?: [];
+
+        return count($keywords) > 2 ? ['overflow-x' => '', 'overflow-y' => ''] : ['overflow-x' => $keywords[0], 'overflow-y' => $keywords[1] ?? $keywords[0]];
+    }
+
+    /**
+     * Whether one declaration (lower-cased, trimmed, overflow split into its axes) takes part in clipping to nothing:
+     * position absolute or fixed; overflow hidden or clip; a width or height of at most 1px (or a zero); a clip rect()
+     * whose bottom is not below its top or whose right is not right of its left (px edges and zeros only, auto and
+     * other units unknown); a clip-path inset() whose top and bottom or left and right insets add up to 100% or more
+     * (percentages and zeros only; a `round` radius is ignored). var() never clips.
+     */
+    private function clippingValue(string $name, string $value): bool
+    {
+        return match ($name) {
+            'position' => $value === 'absolute' || $value === 'fixed',
+            'overflow-x', 'overflow-y' => $value === 'hidden' || $value === 'clip',
+            'width', 'height' => ($size = $this->clipAmount($value, 'px')) !== null && $size <= 1.0,
+            'clip' => preg_match('/^rect\(([^()]*+)\)$/D', $value, $m) === 1 && $this->emptyRect($m[1]),
+            'clip-path' => preg_match('/^inset\(([^()]*+)\)$/D', $value, $m) === 1 && $this->emptyInset($m[1]),
+            default => false,
+        };
+    }
+
+    /** Whether clip: rect(top, right, bottom, left) (commas or spaces) has no area. */
+    private function emptyRect(string $arguments): bool
+    {
+        $edges = preg_split('/[\s,]++/', trim($arguments), 5) ?: [];
+
+        if (count($edges) !== 4) {
+            return false;
+        }
+
+        [$top, $right, $bottom, $left] = array_map(fn (string $edge): ?float => $this->clipAmount($edge, 'px'), $edges);
+
+        return ($top !== null && $bottom !== null && $bottom <= $top) || ($left !== null && $right !== null && $right <= $left);
+    }
+
+    /** Whether clip-path: inset(top right bottom left) leaves no area: opposite insets that add up to 100% or more. */
+    private function emptyInset(string $arguments): bool
+    {
+        $insets = preg_split('/\s++/', trim(explode('round', $arguments, 2)[0]), 5) ?: [];
+
+        if ($insets === [] || count($insets) > 4) {
+            return false;
+        }
+
+        // One to four values as in margin: top, right (= left), bottom (= top), left (= right).
+        $last = count($insets) - 1;
+        $insets = array_map(fn (string $inset): ?float => $this->clipAmount($inset, '%'), $insets);
+        [$top, $right, $bottom, $left] = [$insets[0], $insets[min(1, $last)], $insets[$last >= 2 ? 2 : 0], $insets[$last === 3 ? 3 : min(1, $last)]];
+
+        return ($top !== null && $bottom !== null && $top + $bottom >= 100.0) || ($left !== null && $right !== null && $left + $right >= 100.0);
+    }
+
+    /** A non-negative number in the unit, or a zero in any unit; null for anything else (lower-cased, trimmed input). */
+    private function clipAmount(string $value, string $unit): ?float
+    {
+        if (preg_match('/^\+?+(\d++(?:\.\d*+)?+|\.\d++)([a-z%]*+)$/D', $value, $m) !== 1) {
+            return null;
+        }
+
+        $number = (float) $m[1];
+
+        return $number === 0.0 || $m[2] === $unit ? $number : null;
     }
 
     /**
@@ -2489,24 +2685,27 @@ class CssParser
 
     /**
      * Which index a rule belongs to: 'rule' when it carries one of INDEXED_PROPERTIES, 'custom' when it carries
-     * custom properties but none of them, null when it is not indexed.
+     * custom properties but none of them, 'clipping' when it carries only CLIPPING_PROPERTIES among these (its own
+     * budget, in the element index), null when it is not indexed.
      *
      * @param  array{properties: array<string, array{value: string, important: bool}>}  $rule
-     * @return 'rule'|'custom'|null
+     * @return 'rule'|'custom'|'clipping'|null
      */
     private function indexKind(array $rule): ?string
     {
-        $custom = false;
+        $custom = $clipping = false;
 
         foreach ($rule['properties'] as $name => $declaration) {
             if (str_starts_with((string) $name, '--')) {
                 $custom = true;
             } elseif (in_array($name, self::INDEXED_PROPERTIES, true)) {
                 return 'rule';
+            } elseif (in_array($name, self::CLIPPING_PROPERTIES, true)) {
+                $clipping = true;
             }
         }
 
-        return $custom ? 'custom' : null;
+        return $custom ? 'custom' : ($clipping ? 'clipping' : null);
     }
 
     /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */

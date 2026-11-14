@@ -1032,6 +1032,112 @@ class CssParserTest extends TestCase
         $this->assertSame('#000000', $colors['foreground']->toHex(), 'an unknown opacity counts as 1');
     }
 
+    /** @return array<string, array{0: string, 1: bool}> the declarations of .x and whether they clip it to nothing (C2) */
+    public static function clippingDeclarations(): array
+    {
+        return [
+            'clip rect, commas' => ['position:absolute;clip:rect(0,0,0,0)', true],
+            'clip rect, spaces' => ['position:absolute;clip:rect(0 0 0 0)', true],
+            'clip rect, 1px edges' => ['position:absolute;clip:rect(1px,1px,1px,1px)', true],
+            'clip rect, zero height' => ['position:absolute;clip:rect(5px, 100px, 5px, 0)', true],
+            'clip rect, zero width' => ['position:fixed;clip:RECT(0px, 0px, 100px, 0px)', true],
+            'clip rect with an area' => ['position:absolute;clip:rect(0,10px,10px,0)', false],
+            'clip rect, auto edges' => ['position:absolute;clip:rect(auto,auto,auto,auto)', false],
+            'clip rect, em edges' => ['position:absolute;clip:rect(1em,1em,1em,1em)', false],
+            'clip auto' => ['position:absolute;clip:auto', false],
+            'clip-path inset(50%)' => ['position:absolute;clip-path:inset(50%)', true],
+            'clip-path inset(100%)' => ['position:fixed;clip-path:inset(100%)', true],
+            'clip-path inset, top and bottom' => ['position:absolute;clip-path:inset(0 0 100% 0)', true],
+            'clip-path inset, left and right' => ['position:absolute;clip-path:inset(0 60% 0 40%)', true],
+            'clip-path inset(49%)' => ['position:absolute;clip-path:inset(49%)', false],
+            'clip-path inset in px' => ['position:absolute;clip-path:inset(10px)', false],
+            'clip-path none' => ['position:absolute;clip-path:none', false],
+            'overflow hidden, 1px box' => ['position:absolute;width:1px;height:1px;overflow:hidden', true],
+            'overflow clip, 0 box' => ['position:absolute;width:0;height:0px;overflow:clip', true],
+            'overflow longhands' => ['position:absolute;width:1px;height:1px;overflow-x:hidden;overflow-y:clip', true],
+            'overflow, a longhand overrides' => ['position:absolute;width:1px;height:1px;overflow:hidden;overflow-y:visible', false],
+            'overflow, visible y axis' => ['position:absolute;width:1px;height:1px;overflow:hidden visible', false],
+            'overflow visible' => ['position:absolute;width:1px;height:1px;overflow:visible', false],
+            'overflow, 2px box' => ['position:absolute;width:2px;height:1px;overflow:hidden', false],
+            'overflow, no height' => ['position:absolute;width:1px;overflow:hidden', false],
+            'overflow, rem box' => ['position:absolute;width:.0625rem;height:.0625rem;overflow:hidden', false],
+            'static' => ['position:static;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%)', false],
+            'relative' => ['position:relative;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%)', false],
+            'no position' => ['width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%)', false],
+            'var() position' => ['--p:absolute;position:var(--p);clip:rect(0,0,0,0)', false],
+        ];
+    }
+
+    #[DataProvider('clippingDeclarations')]
+    public function test_visually_hidden_is_absolute_positioning_clipped_to_nothing(string $declarations, bool $hidden): void
+    {
+        [$parser, $document] = $this->parsed('.x{'.$declarations.'}', '<div><span id="t" class="x">x</span></div>');
+
+        $this->assertSame($hidden, $parser->isVisuallyHidden($this->target($document)));
+        $this->assertFalse($parser->isVisuallyHidden($document->query('//div')[0]), 'the parent is not clipped');
+    }
+
+    public function test_visually_hidden_holds_for_descendants_and_follows_the_cascade(): void
+    {
+        $sr = '.sr{position:absolute!important;clip:rect(0,0,0,0)!important}';
+        $hidden = function (string $css, string $body) {
+            [$parser, $document] = $this->parsed($css, $body);
+
+            return $parser->isVisuallyHidden($this->target($document));
+        };
+
+        $this->assertTrue($hidden($sr, '<div class="sr"><p><b id="t">x</b></p></div>'), 'an ancestor clips its descendants');
+        $this->assertTrue($hidden($sr.' #t.sr{position:static;clip:auto}', '<span id="t" class="sr">x</span>'), '!important beats specificity');
+        $this->assertTrue($hidden($sr, '<span id="t" class="sr" style="position:static">x</span>'), '!important beats a normal style attribute');
+        $this->assertFalse($hidden($sr, '<span id="t" class="sr" style="position:static!important">x</span>'));
+        $this->assertFalse($hidden('.sr{position:absolute;clip:rect(0,0,0,0)} .sr.on{position:static}', '<span id="t" class="sr on">x</span>'));
+        $this->assertTrue($hidden('.sr{position:absolute;clip:rect(0,0,0,0)} .sr:focus{position:static}', '<span id="t" class="sr">x</span>'), 'a user-action state does not apply at rest');
+        $this->assertTrue($hidden('', '<span id="t" style="position:absolute;width:1px;height:1px;overflow:hidden">x</span>'));
+    }
+
+    // C2: like opacity 0, only the base cascade hides; conditional and maybe rules can reveal, never hide.
+    public function test_visually_hidden_needs_the_base_cascade(): void
+    {
+        $sr = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)';
+        $hidden = function (string $css, string $classes = 'x') {
+            [$parser, $document] = $this->parsed($css, '<div class="wrap"><span id="t" class="'.$classes.'">x</span></div>');
+
+            return $parser->isVisuallyHidden($this->target($document));
+        };
+
+        $this->assertFalse($hidden('@media (min-width:640px){.x{'.$sr.'}}'), 'a breakpoint rule hides at some viewports only');
+        $this->assertFalse($hidden('@media (prefers-color-scheme:dark){.x{'.$sr.'}}'), 'a preference rule is another theme');
+        $this->assertFalse($hidden('.x{position:absolute} @media (min-width:640px){.x{clip:rect(0,0,0,0)}}'));
+        $this->assertFalse($hidden('.x{'.$sr.'} @media (min-width:640px){.x{position:static}}'), 'a breakpoint rule can reveal');
+        $this->assertTrue($hidden('.x{'.$sr.'} @media (min-width:640px){.y{clip:rect(0,0,0,0)}}', 'x y'), 'a hiding breakpoint rule changes nothing');
+        $this->assertTrue($hidden('.x{'.$sr.'} @media screen{.y{color:#111}}', 'x y'));
+        $this->assertFalse($hidden('.x{'.$sr.'} .wrap:has(> b) .x{--m:1;position:static}'), 'a maybe rule may reveal');
+        $this->assertFalse($hidden('.wrap:has(> b) .x{--m:1;'.$sr.'}'), 'a maybe rule never hides');
+    }
+
+    // C2: rules that only carry the clipping properties have their own budget, so a colour index stays as in 3.1.0.
+    public function test_clipping_rules_have_their_own_budget(): void
+    {
+        $colours = '';
+
+        for ($i = 1; $i < CssParser::MAX_INDEXED_RULES; $i++) {
+            $colours .= ".u$i{color:#111}";
+        }
+
+        // With .sr{position:absolute} exactly MAX_INDEXED_RULES rules carry INDEXED_PROPERTIES: not truncated.
+        $sr = '.sr{position:absolute} .sr{width:1px} .sr{height:1px} .sr{overflow:hidden}';
+        [$parser, $document] = $this->parsed($colours.$sr.str_repeat('.w{width:2px}', 10), '<span id="t" class="sr u1">x</span>');
+
+        $this->assertTrue($parser->isVisuallyHidden($this->target($document)));
+        $this->assertFalse($parser->isTruncated());
+
+        // Beyond the budget a skipped rule might reveal: nothing is taken as hidden, and the colours stay exact.
+        [$parser, $document] = $this->parsed($sr.str_repeat('.w{width:2px}', CssParser::MAX_CLIPPING_RULES), '<span id="t" class="sr u1">x</span>');
+
+        $this->assertFalse($parser->isVisuallyHidden($this->target($document)));
+        $this->assertFalse($parser->isTruncated());
+    }
+
     /** @return array<string, array{0: string}> */
     public static function backgroundImages(): array
     {
