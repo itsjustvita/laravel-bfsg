@@ -679,6 +679,13 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
             'an order that depends on the viewport' => ['<style>'.sprintf($wide, 'b').' @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Warning, '1.36']],
             'a viewport declaration in the base order' => ['<style>@layer a, b; '.sprintf($wide, 'b').' @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Error, '1.36']],
             '@container is always accommodated' => ['<style>@container (min-width:1px){@layer b{p{color:#111}}} @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', null],
+            // C5: a false @supports declares no layer; an undecidable one may (`limit`).
+            'a layer first declared under a false @supports' => ['<style>@supports not (display:grid){@layer b{p{color:#111}}} @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Error, '1.36']],
+            'an order an undecidable @supports could change' => ['<style>@supports (-webkit-touch-callout:none){@layer b{.z{color:red}}} @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Warning, '1.36']],
+            // R9 N1: a browser reads `x\.y` as one name and orders b, x.y, a: `a` wins and the text passes.
+            'an escaped layer name in the order statement' => ['<style>@layer b, x\\.y, a; @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Warning, '1.36']],
+            // R9 N2: below 500px `b` is first declared after `a`, so it wins and the text passes.
+            'viewport appearances that straddle a sibling' => ['<style>@media (min-width:1000px){@layer b{.z{color:red}}} @layer a{p{color:#ddd}} @media (max-width:500px){@layer b{p{color:#111}}}</style>', [Severity::Warning, '1.36']],
         ];
     }
 
@@ -1107,6 +1114,106 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
         $this->assertSame($approximate ? [Severity::Warning, ['approximate']] : [Severity::Error, []], [$violation->severity, $violation->tags]);
         $this->assertSame([], $this->analyze($this->page('p{color:#111} '.$rule, $body)), 'a pass stays silent');
+    }
+
+    // C5, repro A: the `@supports not (color:oklch(…))` fallbacks are false in every current browser, so the dark theme's
+    // oklch() values apply: #ffbe00 on #1d232a is 9.52:1, #00a96e on it 5.23:1.
+    public function test_daisyui4_dark_theme_is_not_measured_against_light_fallbacks(): void
+    {
+        $html = '<html lang="en" data-theme="dark"><head><style>
+:root{color-scheme:light;--wa:84.71% 0.199 83.87;--su:64.8% 0.150 160;--b1:100% 0 0;--bc:27.8078% 0.029596 256.847952}
+[data-theme=dark]{color-scheme:dark;--b1:25.3267% 0.015896 252.417568;--bc:74.6477% 0.0216 264.435964}
+:root,[data-theme]{background-color:var(--fallback-b1,oklch(var(--b1)/1));color:var(--fallback-bc,oklch(var(--bc)/1))}
+@supports not (color:oklch(0% 0 0)){:root{color-scheme:light;--fallback-wa:#ffc22d;--fallback-su:#00a96e;
+  --fallback-b1:#ffffff;--fallback-bc:#1f2937}}
+.bg-base-100{--tw-bg-opacity:1;background-color:var(--fallback-b1,oklch(var(--b1)/var(--tw-bg-opacity)))}
+.text-warning{--tw-text-opacity:1;color:var(--fallback-wa,oklch(var(--wa)/var(--tw-text-opacity)))}
+.text-success{--tw-text-opacity:1;color:var(--fallback-su,oklch(var(--su)/var(--tw-text-opacity)))}
+</style></head><body><div class="bg-base-100">
+<span class="text-warning">Warning text</span> <span class="text-success">Success</span></div></body></html>';
+
+        $this->assertSame([], $this->analyze($html));
+    }
+
+    // C5, repro B: `@supports not (display:grid)` is false in every current browser; a browser shows #111.
+    public function test_supports_not_grid_block_does_not_apply(): void
+    {
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} @supports not (display:grid){p{color:#eee}}', '<p>Text</p>')));
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} p{@supports not (display:grid){color:#eee}}', '<p>Text</p>')), 'nested');
+    }
+
+    /** @return array<string, array{0: string}> C5: @supports conditions the parser cannot decide (iOS only, selector(), an unknown value) */
+    public static function undecidableSupports(): array
+    {
+        return [
+            'vendor test' => ['(-webkit-touch-callout:none)'],
+            'not selector()' => ['not selector(:has(a))'],
+            'unknown value' => ['(display:nonsense-value)'],
+        ];
+    }
+
+    // C5, rule D2: a rule behind an undecidable @supports is a maybe rule: never a definite Error, never silent where a browser may fail.
+    #[DataProvider('undecidableSupports')]
+    public function test_vendor_supports_block_is_uncertain_not_definite(string $condition): void
+    {
+        $alone = $this->analyze($this->page('@supports '.$condition.'{p{color:#eee}}', '<p>Text</p>'));
+        $this->assertUncertainVerdict($alone, true);
+        $this->assertHasViolation($alone, 'contrast.unverifiable', severity: Severity::Notice);
+
+        $failing = $this->analyze($this->page('p{color:#eee} @supports '.$condition.'{p{color:#111}}', '<p>Text</p>'));
+        $violation = $this->assertHasViolation($failing, 'contrast.insufficient', severity: Severity::Warning);
+        $this->assertSame(['approximate'], $violation->tags);
+        $this->assertSame('1.16', $violation->params['ratio']);
+
+        $this->assertUncertainVerdict($this->analyze($this->page('p{color:#111} @supports '.$condition.'{p{color:#eee}}', '<p>Text</p>')), true);
+        $this->assertUncertainVerdict($this->analyze($this->page(':root{--fg:#111} @supports '.$condition.'{:root{--fg:#eee}} p{color:var(--fg)}', '<p>Text</p>')), true);
+        $this->assertUncertainVerdict($this->analyze($this->page(':root{--fg:#111} @supports '.$condition.'{:host{--fg:#eee}} p{color:var(--fg)}', '<p>Text</p>')), true);
+        $this->assertHasViolation($this->analyze($this->page('@supports '.$condition.'{:root{--fg:#111}} :root{--fg:#eee} p{color:var(--fg)}', '<p>Text</p>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertUncertainVerdict($this->analyze($this->page('p{color:#111} p{@supports '.$condition.'{color:#eee}}', '<p>Text</p>')), true);
+    }
+
+    // C5: an undecidable rule that cannot win (lighter than the definite winner) or cannot match changes nothing.
+    public function test_undecidable_supports_rule_that_cannot_win_keeps_the_verdict(): void
+    {
+        $this->assertHasViolation($this->analyze($this->page('p#t{color:#eee} @supports (-webkit-touch-callout:none){p{color:#111}}', '<p id="t">Text</p>')), 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} @supports (-webkit-touch-callout:none){.absent{color:#eee}}', '<p>Text</p>')));
+    }
+
+    // C5: @-moz-document (Firefox only) and @document blocks are dropped.
+    public function test_moz_document_block_is_dropped(): void
+    {
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} @-moz-document url-prefix(){p{color:#eee}}', '<p>Text</p>')));
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} @document url-prefix(){p{color:#eee}}', '<p>Text</p>')));
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} p{@-moz-document url-prefix(){color:#eee}}', '<p>Text</p>')), 'nested');
+    }
+
+    // C5: Tailwind v4's `@supports (color: color-mix(in lab, red, red))` pairs are true, so the modern colour applies as in 3.1.0.
+    public function test_tailwind_v4_color_mix_supports_pair_is_unchanged(): void
+    {
+        $fallback = '.text-gray-300\/90{color:#d1d5dccc}';
+        $modern = '.text-gray-300\/90{color:color-mix(in oklab, #d1d5dc 90%, transparent)}';
+        $body = '<p class="text-gray-300/90">Muted</p>';
+
+        $wrapped = $this->analyze($this->page($fallback.'@supports (color: color-mix(in lab, red, red)){'.$modern.'}', $body));
+        $violation = $this->assertHasViolation($wrapped, 'contrast.insufficient', severity: Severity::Error);
+        $this->assertSame([], $violation->tags);
+        $this->assertEquals($this->analyze($this->page($fallback.$modern, $body)), $wrapped);
+    }
+
+    // C5: Tailwind v4's @property fallback block sits behind an undecidable @supports; it declares only `--tw-*` initial
+    // values that colours do not read, so it adds no finding and keeps every verdict definite.
+    public function test_tailwind_v4_property_fallback_block_adds_no_noise(): void
+    {
+        $utilities = '@layer properties; @layer theme, base, components, utilities;'.self::TAILWIND_V4_THEME.'@layer utilities{.bg-white{background-color:var(--color-white)}'
+            .'.text-gray-400{color:var(--color-gray-400)} .text-gray-900{color:var(--color-gray-900)}'
+            .'.shadow-sm{--tw-shadow:0 1px 3px 0 var(--tw-shadow-color,#0000001a);box-shadow:var(--tw-inset-shadow),var(--tw-inset-ring-shadow),var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow)}}';
+        $fallback = '@layer properties{@supports ((-webkit-hyphens:none) and (not (margin-trim:inline))) or ((-moz-orient:inline) and (not (color:rgb(from red r g b)))){'
+            .'*,:before,:after,::backdrop{--tw-shadow:0 0 #0000;--tw-shadow-color:initial;--tw-inset-shadow:0 0 #0000;--tw-ring-color:initial;--tw-ring-shadow:0 0 #0000;--tw-inset-ring-shadow:0 0 #0000;--tw-ring-offset-shadow:0 0 #0000;--tw-font-weight:initial}}}';
+        $body = '<div class="bg-white"><p class="text-gray-900 shadow-sm">Readable</p><p class="text-gray-400">Muted</p></div>';
+
+        $without = $this->analyze($this->page($utilities, $body));
+        $this->assertHasViolation($without, 'contrast.insufficient', element: 'p.text-gray-400', severity: Severity::Error);
+        $this->assertEquals($without, $this->analyze($this->page($utilities.$fallback, $body)));
     }
 
     // C1: every fixture (only selectors 3.1.0 supports carry contrast properties there) keeps its recorded 3.1.0 findings.

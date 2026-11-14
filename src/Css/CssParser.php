@@ -13,12 +13,15 @@ use Throwable;
  * supported selector subset, and computes text/background colours and font metrics.
  *
  * A rule is an array{selector: string, properties: array<string, array{value: string, important: bool}>,
- * specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}.
+ * specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}.
  * `layer`: the rank of its cascade layer (CSS Cascade 5), PHP_INT_MAX for an unlayered rule (see cascadeWeight()).
  * `conditional`: the rule sits behind a media feature, @supports or @container. `condition` (from @media, <style media>
  * or an inlined <link media>; see HtmlDocument::mediaCondition()): 'preference' behind a media query that fails with the
  * default user preferences (PREFERENCE_DEFAULTS), else 'viewport' behind one that depends on another media feature and
- * behind @container, else null. Preference rules are not part of the base cascade.
+ * behind @container, else null. Preference rules are not part of the base cascade. `maybe`: the rule sits behind
+ * an @supports condition SupportsCondition cannot decide, so it may or may not apply: it is a maybe rule (as one whose
+ * selector cannot be evaluated, see indexMaybeRule()), never part of the base cascade. Rules behind a false @supports
+ * condition, @document and @-moz-document are dropped.
  */
 class CssParser
 {
@@ -177,8 +180,11 @@ class CssParser
     /** Bookkeeping counted per memo entry on top of its value: the bucket and the nested result arrays with their colours. */
     private const LAYER_ENTRY_BYTES = 1024;
 
-    /** At-rules whose body is unwrapped (their rules apply unconditionally for static analysis); @layer is unwrapped into its layer (groupRule()). */
-    private const UNWRAPPED_AT_RULES = ['supports', 'container', 'scope', 'document', '-moz-document'];
+    /**
+     * At-rules whose body is unwrapped (their rules apply unconditionally for static analysis); @layer is unwrapped into
+     * its layer and @supports by its condition (groupRule()).
+     */
+    private const UNWRAPPED_AT_RULES = ['container', 'scope'];
 
     /**
      * Distinct layer names of a parse (each segment of a dotted name and each anonymous layer counts). Beyond it a new
@@ -189,8 +195,9 @@ class CssParser
 
     /**
      * Whether the rules of a group rule apply in the base cascade (baseCascadeApplies()), which decides whether a layer
-     * they declare takes its place in the base layer order: always, only at some viewports, or never (a preference
-     * media query that fails with PREFERENCE_DEFAULTS). Ordered: a nested group takes the stronger of its own and its parent's.
+     * they declare takes its place in the base layer order: always, only at some viewports or in some browsers (an
+     * undecidable @supports condition), or never (a preference media query that fails with PREFERENCE_DEFAULTS, a
+     * false @supports condition). Ordered: a nested group takes the stronger of its own and its parent's.
      */
     private const IN_BASE = 0;
 
@@ -270,7 +277,7 @@ class CssParser
     /** `bolder` and `lighter` (CSS Fonts): [parent weight below, bolder, lighter] per row; null keeps the parent's weight. */
     private const RELATIVE_WEIGHTS = [[100, 400, null], [350, 400, 100], [550, 700, 100], [750, 900, 400], [900, 900, 700], [PHP_FLOAT_MAX, null, 700]];
 
-    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
+    /** @var list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}> */
     protected array $rules = [];
 
     /** @var array<string, list<int>> node path => positions in rules() of the matching rules that carry one of INDEXED_PROPERTIES */
@@ -353,6 +360,12 @@ class CssParser
 
     /** @var array<int, int> layer id => number of its first appearance where its rules may apply (IN_BASE or IN_BASE_AT_SOME_VIEWPORTS) */
     private array $anyAppearance = [];
+
+    /** @var array<int, int> layer id => number of its last appearance where its rules may apply */
+    private array $lastAppearance = [];
+
+    /** Whether the rules being parsed sit behind an @supports condition SupportsCondition cannot decide (their `maybe`). */
+    private bool $undecided = false;
 
     protected bool $indexed = false;
 
@@ -520,7 +533,7 @@ class CssParser
         $this->universalMaybeWeights = $this->documentTokens = null;
         $this->maybeHidingCache = $this->hidingClippingCache = [];
         $this->universalMaybeHiding = [];
-        $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = [];
+        $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = $this->lastAppearance = [];
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
@@ -563,7 +576,7 @@ class CssParser
                 $counts[$kind]++;
             }
 
-            if ($rule['condition'] === 'viewport' && $this->hidingDeclarations($rule['properties']) !== []) {
+            if ($rule['condition'] === 'viewport' && ! $rule['maybe'] && $this->hidingDeclarations($rule['properties']) !== []) {
                 $this->viewportHiding = true;
             }
         }
@@ -600,6 +613,25 @@ class CssParser
         // The two indexes are the one cascade that declarationsFor() and the custom properties share.
         foreach ($this->rules as $position => $rule) {
             $kind = $this->indexKind($rule);
+
+            if ($this->undecidedRule($rule)) {
+                // C5: behind an undecidable @supports condition the rule may apply; within the maybe budgets.
+                $custom = $this->declaresCustomProperties($rule);
+
+                if ($this->document !== null && ($custom || $this->declaresMaybeProperties($rule)) && ! $this->cannotMatch($rule['selector'])) {
+                    if (microtime(true) > $deadline) {
+                        $this->truncated = true;
+
+                        break;
+                    }
+
+                    // A root selector covers the document element (:host included, which resolves through the root custom properties).
+                    $selector = in_array(strtolower($rule['selector']), self::ROOT_SELECTORS, true) ? ':root' : $rule['selector'];
+                    $this->indexMaybeRule($position, $rule, $custom, $tokens, $keys, $this->simpleSelectorToXpath($selector), $selector);
+                }
+
+                continue;
+            }
 
             if ($kind === null && strtolower(trim($rule['properties']['content-visibility']['value'] ?? '')) === 'hidden' && $this->inBaseCascade($rule) && $this->document !== null) {
                 // Read only from maybe rules, and only `hidden` (maybeHidden()): within the subset it changes nothing and counts against no budget.
@@ -707,7 +739,7 @@ class CssParser
         return $document->styleSheets();
     }
 
-    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}> */
     public function rules(): array
     {
         return $this->rules;
@@ -771,14 +803,15 @@ class CssParser
 
     /**
      * Tokenize one stylesheet into qualified rules. Comments are stripped; @media is kept for
-     * all/screen only; @supports and @container are unwrapped, @layer into its cascade layer; every other at-rule is dropped.
+     * all/screen only; @container and @scope are unwrapped, @layer into its cascade layer, @supports by its condition (a
+     * false one is dropped, an undecidable one gives maybe rules); every other at-rule is dropped.
      * Nested style rules are flattened (see parseRuleBody()). Each rule carries the rank of its cascade layer
      * (rankLayers()); the layer names are shared with the sheets parse() read and earlier calls since.
      * $condition is the condition of the whole sheet (its media attribute, see HtmlDocument::mediaCondition());
      * blocks nested more than MAX_AT_RULE_DEPTH levels deep are dropped and mark the parser truncated.
      *
      * @param  'preference'|'viewport'|null  $condition
-     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>
+     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>
      */
     public function parseStylesheet(string $css, int $orderOffset = 0, ?string $condition = null): array
     {
@@ -789,13 +822,14 @@ class CssParser
      * parseStylesheet() with the layer ids in `layer` (0: unlayered), before rankLayers().
      *
      * @param  'preference'|'viewport'|null  $condition
-     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>
+     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>
      */
     private function sheetRules(string $css, int $orderOffset, ?string $condition): array
     {
         $rules = [];
         $position = 0;
         $this->currentLayer = 0;
+        $this->undecided = false;
         $this->layerContext = match ($condition) {
             'preference' => self::NOT_IN_BASE,
             'viewport' => self::IN_BASE_AT_SOME_VIEWPORTS,
@@ -812,11 +846,13 @@ class CssParser
      * PHP_INT_MAX. Iterative: a dotted name may nest any number of levels. The appearance that counts is the first where
      * the layer's rules apply in the base cascade (CSS Cascade 5: a layer under a false condition is not declared); a
      * layer that appears only at some viewports takes its first such appearance, one that appears only under a false
-     * condition (whose rules are not in the base cascade) comes last. When the appearances at some viewports would order
-     * siblings differently, the order depends on the viewport: truncated (`limit`).
+     * condition (whose rules are not in the base cascade) comes last. When the appearances at some viewports (or behind
+     * an undecidable @supports) would order siblings differently, the order depends on the viewport: truncated (`limit`).
+     * So does a layer without a base appearance that appears again after the next sibling's appearance (its first and
+     * last appearances straddle the sibling, so it may rank either side of it).
      *
-     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
-     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>  $rules
+     * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>
      */
     private function rankLayers(array $rules): array
     {
@@ -837,9 +873,11 @@ class CssParser
             $children[$parent] = $siblings;
             $previous = 0;
 
-            foreach ($siblings as $id) {
+            foreach ($siblings as $i => $id) {
                 $any = $this->anyAppearance[$id] ?? PHP_INT_MAX;
-                $this->truncated = $this->truncated || $any < $previous;
+                $next = isset($siblings[$i + 1]) ? $keys[$siblings[$i + 1]][0] : PHP_INT_MAX;
+                $straddles = ! isset($this->baseAppearance[$id]) && ($this->lastAppearance[$id] ?? 0) > $next;
+                $this->truncated = $this->truncated || $any < $previous || $straddles;
                 $previous = $any;
             }
         }
@@ -885,6 +923,8 @@ class CssParser
                 $name = trim($comma === false ? substr($list, $start) : substr($list, $start, $comma - $start));
 
                 if (! $declare && ! $this->isLayerName($name)) {
+                    $this->truncated = $this->truncated || $this->isEscapedLayerName($name);
+
                     return;
                 }
 
@@ -908,7 +948,13 @@ class CssParser
             return $this->layerNode($this->currentLayer, null);
         }
 
-        return $this->isLayerName($name) ? $this->layerNamed($name) : null;
+        if ($this->isLayerName($name)) {
+            return $this->layerNamed($name);
+        }
+
+        $this->truncated = $this->truncated || $this->isEscapedLayerName($name);
+
+        return null;
     }
 
     /**
@@ -926,6 +972,16 @@ class CssParser
         }
 
         return true;
+    }
+
+    /**
+     * Whether a name isLayerName() rejects would be a layer name with its escapes read (`x\.y` is the one name `x.y` to a
+     * browser): the layer order is then unknown (R9). Each escape (a hex escape with its optional whitespace, or a
+     * backslash and the character after it) counts as one letter; bounded quantifiers only, linear.
+     */
+    private function isEscapedLayerName(string $name): bool
+    {
+        return str_contains($name, '\\') && $this->isLayerName((string) preg_replace('/\\\\(?:[0-9a-fA-F]{1,6}[ \t\r\n\f]?|[\s\S])/', 'e', $name));
     }
 
     /** The id of a (dotted) layer name in the current layer, declaring each segment that is new. */
@@ -955,6 +1011,7 @@ class CssParser
         if ($this->layerContext !== self::NOT_IN_BASE) {
             $this->layerAppearances++;
             $this->anyAppearance[$id] ??= $this->layerAppearances;
+            $this->lastAppearance[$id] = $this->layerAppearances;
 
             if ($this->layerContext === self::IN_BASE) {
                 $this->baseAppearance[$id] ??= $this->layerAppearances;
@@ -2183,7 +2240,7 @@ class CssParser
      * Parse the rules from $position to the end of $css or, inside a group rule ($depth > 0), through its closing brace.
      * One pass: every block is read by the level that parses it (or skips it), so nesting adds no re-reading.
      *
-     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>  $rules
      * @param  'preference'|'viewport'|null  $condition
      */
     private function parseBlock(string $css, int &$position, array &$rules, int $orderOffset, bool $conditional = false, ?string $condition = null, int $depth = 0): void
@@ -2207,10 +2264,10 @@ class CssParser
                 $group = $this->groupRule($css, $position, $conditional, $condition, $depth, $depth > 0);
 
                 if ($group !== null) {
-                    $outer = [$this->currentLayer, $this->layerContext];
-                    [$this->currentLayer, $this->layerContext] = [$group[2], $group[3]];
+                    $outer = [$this->currentLayer, $this->layerContext, $this->undecided];
+                    [$this->currentLayer, $this->layerContext, $this->undecided] = [$group[2], $group[3], $group[4]];
                     $this->parseBlock($css, $position, $rules, $orderOffset, $group[0], $group[1], $depth + 1);
-                    [$this->currentLayer, $this->layerContext] = $outer;
+                    [$this->currentLayer, $this->layerContext, $this->undecided] = $outer;
                 }
 
                 continue;
@@ -2227,14 +2284,17 @@ class CssParser
     }
 
     /**
-     * Read the at-rule at $position. A group rule whose rules apply (@media for all/screen, @layer, UNWRAPPED_AT_RULES)
-     * leaves $position inside its block and returns its [conditional, condition, layer id, layer context]; any other at-rule is skipped,
-     * and so is a group rule nested MAX_AT_RULE_DEPTH levels deep (truncated) and an @layer block whose prelude is not
-     * one layer name. An `@layer a, b;` statement declares its layers. Inside a block ($inBlock) a prelude ends at its
-     * closing brace, which is left for the block's parser.
+     * Read the at-rule at $position. A group rule whose rules apply (@media for all/screen, @layer, @supports unless its
+     * condition is false, UNWRAPPED_AT_RULES) leaves $position inside its block and returns its [conditional, condition,
+     * layer id, layer context, undecided]; any other at-rule is skipped (@document, @-moz-document and an @supports
+     * whose condition is false among them: a browser applies none of them), and so is a group rule nested
+     * MAX_AT_RULE_DEPTH levels deep (truncated) and an @layer block whose prelude is not one layer name. An
+     * `@layer a, b;` statement declares its layers. Inside a block ($inBlock) a prelude ends at its closing brace, which
+     * is left for the block's parser. The layer context is baseCascadeApplies() of the block, its parent's included;
+     * `undecided` whether its rules are maybe rules (behind an undecidable @supports, its parent's included).
      *
      * @param  'preference'|'viewport'|null  $condition
-     * @return array{0: bool, 1: 'preference'|'viewport'|null, 2: int, 3: int}|null the last: baseCascadeApplies() of the block, its parent's included
+     * @return array{0: bool, 1: 'preference'|'viewport'|null, 2: int, 3: int, 4: bool}|null
      */
     private function groupRule(string $css, int &$position, bool $conditional, ?string $condition, int $depth, bool $inBlock): ?array
     {
@@ -2256,11 +2316,12 @@ class CssParser
         }
 
         $media = $name === 'media' ? HtmlDocument::mediaCondition($prelude) : false;
+        $supports = $name === 'supports' ? SupportsCondition::evaluate($prelude) : true;
 
-        if ($media === false && $name !== 'layer' && ! in_array($name, self::UNWRAPPED_AT_RULES, true)) {
+        if ($supports === false || ($media === false && $name !== 'layer' && $name !== 'supports' && ! in_array($name, self::UNWRAPPED_AT_RULES, true))) {
             $this->skipBlock($css, $position);
 
-            return null; // @font-face, @keyframes, @page, @property, @starting-style, print media, …
+            return null; // @font-face, @keyframes, @page, @property, @starting-style, @document, print media, a false @supports, …
         }
 
         if ($depth >= self::MAX_AT_RULE_DEPTH) {
@@ -2278,7 +2339,7 @@ class CssParser
             return null; // `@layer a, b { … }` or an invalid name: the browser drops the block
         }
 
-        $context = max($this->layerContext, $this->baseCascadeApplies($name, $media));
+        $context = max($this->layerContext, $this->baseCascadeApplies($name, $media, $supports));
 
         // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
         // features and container queries also put a condition on them (see the class description).
@@ -2288,19 +2349,24 @@ class CssParser
             default => $condition,
         };
 
-        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer, $context];
+        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer, $context, $this->undecided || $supports === null];
     }
 
     /**
      * Whether the rules of an applying group rule apply in the base cascade: a media query by its condition (null:
-     * always, 'viewport': at some viewports, 'preference': never). @container counts as always (CSS Cascade 5 lets
-     * container queries declare layers whatever they match), and so do @layer, @supports, @scope and @document for now.
+     * always, 'viewport': at some viewports, 'preference': never), an @supports rule by its condition (true: always,
+     * null: in some browsers, which orders layers as 'viewport' does; false: never, such a block is dropped before).
+     * Container queries count as always (CSS Cascade 5 lets them declare layers whatever they match), and so do the
+     * blocks of @layer and @scope.
      *
      * @param  'preference'|'viewport'|false|null  $media  HtmlDocument::mediaCondition() of an @media prelude, false for other at-rules
+     * @param  ?bool  $supports  SupportsCondition::evaluate() of an @supports prelude, true for other at-rules
      */
-    private function baseCascadeApplies(string $name, string|false|null $media): int
+    private function baseCascadeApplies(string $name, string|false|null $media, ?bool $supports = true): int
     {
         return match (true) {
+            $supports === false => self::NOT_IN_BASE,
+            $supports === null => self::IN_BASE_AT_SOME_VIEWPORTS,
             $name !== 'media' => self::IN_BASE,
             $media === 'preference' => self::NOT_IN_BASE,
             $media === 'viewport' => self::IN_BASE_AT_SOME_VIEWPORTS,
@@ -2316,7 +2382,7 @@ class CssParser
      * declarations after a nested block count against MAX_NESTED_RULE_BYTES.
      *
      * @param  list<string>|string  $selectors
-     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>  $rules
      * @param  'preference'|'viewport'|null  $condition
      */
     private function parseRuleBody(string $css, int &$position, array|string $selectors, array &$rules, int $orderOffset, bool $conditional, ?string $condition, int $depth, bool $nested): void
@@ -2352,10 +2418,10 @@ class CssParser
                     $this->truncated = true;
                     $this->skipBlock($css, $position);
                 } else {
-                    $outer = [$this->currentLayer, $this->layerContext];
-                    [$this->currentLayer, $this->layerContext] = [$group[2], $group[3]];
+                    $outer = [$this->currentLayer, $this->layerContext, $this->undecided];
+                    [$this->currentLayer, $this->layerContext, $this->undecided] = [$group[2], $group[3], $group[4]];
                     $this->parseRuleBody($css, $position, $selectors, $rules, $orderOffset, $group[0], $group[1], $depth + 1, true);
-                    [$this->currentLayer, $this->layerContext] = $outer;
+                    [$this->currentLayer, $this->layerContext, $this->undecided] = $outer;
                 }
 
                 $segment = $position;
@@ -2396,7 +2462,7 @@ class CssParser
      * MAX_NESTED_RULE_BYTES: the first block that does not fit fills the budget and is dropped (truncated).
      *
      * @param  list<string>|string  $selectors  a prelude is split only when there are declarations
-     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}>  $rules
+     * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>  $rules
      * @param  'preference'|'viewport'|null  $condition
      */
     private function addRules(string $declarations, array|string $selectors, array &$rules, int $orderOffset, bool $conditional, ?string $condition, bool $nested): void
@@ -2436,6 +2502,7 @@ class CssParser
                 'sheet' => 0,
                 'conditional' => $conditional,
                 'condition' => $condition,
+                'maybe' => $this->undecided,
             ];
         }
     }
@@ -2772,6 +2839,9 @@ class CssParser
 
         foreach ($this->rules as $rule) {
             if (! $this->inBaseCascade($rule)) {
+                // A rule behind an undecidable @supports may override any of its names (C5).
+                $this->overriddenProperties += $this->undecidedRule($rule) ? array_fill_keys(array_filter(array_keys($rule['properties']), fn ($name): bool => str_starts_with((string) $name, '--')), true) : [];
+
                 continue;
             }
 
@@ -3150,7 +3220,8 @@ class CssParser
         $names = [];
 
         foreach ($this->rules as $position => $rule) {
-            foreach ($this->inBaseCascade($rule) ? $rule['properties'] : [] as $name => $declaration) {
+            // The names of the maybe rules behind an undecidable @supports count too: they may be the only declarations (C5).
+            foreach ($this->inBaseCascade($rule) || $this->undecidedRule($rule) ? $rule['properties'] : [] as $name => $declaration) {
                 if (str_starts_with((string) $name, '--')) {
                     $names[$name] = true;
                     $this->declarers[$name][] = $position;
@@ -3281,14 +3352,26 @@ class CssParser
     /**
      * Whether a rule takes part in the base cascade, which declarationsFor(), the custom properties (per element and the
      * root map) and the index budgets share: every rule except those behind a user-preference media query (dark mode,
-     * forced colours, …: another theme, not the default one). Rules behind other media features, behind @supports and
-     * behind @container count as if their condition held.
+     * forced colours, …: another theme, not the default one) and those behind an undecidable @supports condition (maybe
+     * rules, see undecidedRule()). Rules behind other media features, behind a true @supports condition and behind a
+     * container query count as if their condition held.
      *
-     * @param  array{condition?: 'preference'|'viewport'|null}  $rule
+     * @param  array{condition?: 'preference'|'viewport'|null, maybe?: bool}  $rule
      */
     private function inBaseCascade(array $rule): bool
     {
-        return ($rule['condition'] ?? null) !== 'preference';
+        return ($rule['condition'] ?? null) !== 'preference' && ! ($rule['maybe'] ?? false);
+    }
+
+    /**
+     * Whether a rule sits behind an undecidable @supports condition and outside a preference media query: it may apply
+     * at rest, so it is a maybe rule (indexMaybeRule()) whatever its selector.
+     *
+     * @param  array{condition?: 'preference'|'viewport'|null, maybe?: bool}  $rule
+     */
+    private function undecidedRule(array $rule): bool
+    {
+        return ($rule['maybe'] ?? false) && ($rule['condition'] ?? null) !== 'preference';
     }
 
     /** @param  array{properties: array<string, array{value: string, important: bool}>}  $rule */
@@ -3343,14 +3426,27 @@ class CssParser
      * rightmost compound, looking into :is() and :where() arguments (every element when nothing is left). Left out:
      * pseudo-element rules, which never style the element itself; selectors with a user-action state outside parentheses
      * (:hover, :focus, …), which never match the base state that is measured; and :host, which resolves through the root
-     * custom properties. Its entries count against the budget of indexCustomMatches().
+     * custom properties. Its entries count against the budget of indexCustomMatches(). A rule whose selector can be
+     * evaluated but whose @supports condition cannot ($expression: the XPath of $selector) covers exactly the elements it matches.
      *
      * @param  array{selector: string, properties: array<string, array{value: string, important: bool}>}  $rule
      * @param  array{class: array<string, list<DOMElement>>, id: array<string, list<DOMElement>>}|null  $tokens
      * @param  array<int, array{0: DOMElement, 1: string}>  $keys
      */
-    private function indexMaybeRule(int $position, array $rule, bool $custom, ?array &$tokens, array &$keys): void
+    private function indexMaybeRule(int $position, array $rule, bool $custom, ?array &$tokens, array &$keys, ?string $expression = null, ?string $selector = null): void
     {
+        if ($expression !== null) {
+            if ($custom ? $this->customIndexEntries >= self::MAX_CUSTOM_INDEX_ENTRIES : $this->maybeIndexEntries >= self::MAX_MAYBE_INDEX_ENTRIES) {
+                $this->truncated = true;
+            } elseif ($expression === '//*') {
+                $this->universalMaybeRules[] = $position;
+            } else {
+                $this->indexCustomMatches('maybeIndex', $position, $this->elementsMatching($selector ?? $rule['selector'], $expression, $tokens), $keys, $custom);
+            }
+
+            return;
+        }
+
         $selector = $rule['selector'];
 
         if (in_array(strtolower($selector), self::ROOT_SELECTORS, true)
@@ -3771,7 +3867,7 @@ class CssParser
         return $custom ? 'custom' : ($clipping ? 'clipping' : null);
     }
 
-    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null}> */
+    /** @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}> */
     private function matchingRules(DOMElement $element, ?string $key = null): array
     {
         $this->buildIndex();

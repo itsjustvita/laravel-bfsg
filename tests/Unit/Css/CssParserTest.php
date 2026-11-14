@@ -54,6 +54,38 @@ class CssParserTest extends TestCase
         $this->assertSame(['a', '.grid', '.card'], $this->selectors($css));
     }
 
+    // C5: a false @supports block is dropped, an undecidable one gives maybe rules, @document and @-moz-document are dropped.
+    public function test_supports_conditions_are_evaluated(): void
+    {
+        $css = '@supports not (display: grid) { .false { color: red } } @supports (display: grid) { .true { color: red } } '
+            .'@supports (-webkit-touch-callout: none) { .maybe { color: red } @supports not (display: grid) { .false { color: red } } } '
+            .'.n { @supports (x: y) { color: red } @supports not (color: red) { color: blue } } '
+            .'@-moz-document url-prefix() { .moz { color: red } } @document url-prefix() { .doc { color: red } } .after { color: red }';
+        $rules = (new CssParser)->parseStylesheet($css);
+
+        $this->assertSame(['.true' => false, '.maybe' => true, '.n' => true, '.after' => false], array_column($rules, 'maybe', 'selector'));
+        $this->assertSame('red', $rules[2]['properties']['color']['value'], 'the false block nested in .n is dropped');
+    }
+
+    // R9 N1: a layer name the parser rejects only for its escapes leaves the layer order unknown (truncated).
+    public function test_escaped_layer_names_make_the_order_approximate(): void
+    {
+        $parse = fn (string $css): CssParser => (new CssParser)->parse(HtmlDocument::fromHtml('<html><head><style>'.$css.'</style></head><body></body></html>'));
+
+        $this->assertTrue($parse('@layer b, x\\.y, a; @layer a{p{color:#111}}')->isTruncated(), 'order statement');
+        $this->assertTrue($parse('@layer x\\.y{p{color:#111}}')->isTruncated(), 'block');
+        $this->assertFalse($parse('@layer b, 1x, a; @layer x y{p{color:#111}} @layer a{p{color:#111}}')->isTruncated(), 'invalid without an escape');
+    }
+
+    // R9 N2: a layer seen only behind viewport queries whose appearances straddle a sibling may rank either side of it.
+    public function test_viewport_appearances_straddling_a_sibling_make_the_order_approximate(): void
+    {
+        [$parser, $document] = $this->parsed('@media (min-width:1000px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media (max-width:500px){@layer b{p{color:#ddd}}}', '<p id="t">x</p>');
+
+        $this->assertContains('limit', $parser->resolveColors($this->target($document))['uncertainty']);
+        $this->assertFalse($this->parsed('@media (min-width:1000px){@layer b{.z{color:red}}} @media (max-width:500px){@layer b{p{color:#ddd}}} @layer a{p{color:#111}}', '<p id="t">x</p>')[0]->isTruncated(), 'no sibling in between');
+    }
+
     // C4: layers rank by first appearance, a sub-layer inside its parent and below the parent's own rules; unlayered is PHP_INT_MAX.
     public function test_rules_carry_their_layer_rank(): void
     {

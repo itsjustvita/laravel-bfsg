@@ -274,6 +274,35 @@ class ContrastPerformanceTest extends TestCase
         ];
     }
 
+    /** @return array<string, array{0: string, 1: Severity}> C5: one hostile @supports prelude (about 1 MB) around `p.c{color:#111}` and the verdict on p.c (#aaa) */
+    public static function hostileSupportsConditions(): array
+    {
+        return [
+            '1 MB condition (an and-chain ending in a vendor test)' => [str_repeat('(display: grid) and ', 52000).'(-webkit-x: y)', Severity::Warning],
+            '1 MB declaration value' => ['(color: '.str_repeat('a', 1024 * 1024).')', Severity::Warning],
+            '10 000 nested parentheses' => [str_repeat('(', 10000).'display: grid'.str_repeat(')', 10000), Severity::Warning],
+            '10 000 nested nots' => [str_repeat('not (', 10000).'display: grid'.str_repeat(')', 10000), Severity::Warning],
+            '1 MB false condition' => [str_repeat('(display: grid) and ', 52000).'(not (display: flex))', Severity::Error],
+        ];
+    }
+
+    // C5: the @supports prelude is evaluated in one pass with nesting capped at 32 levels; beyond it the block is undecidable.
+    #[Group('performance')]
+    #[DataProvider('hostileSupportsConditions')]
+    public function test_hostile_supports_conditions_stay_in_budget(string $condition, Severity $severity): void
+    {
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Supports</title><style>.c{color:#aaa} @supports '.$condition.'{p.c{color:#111}}</style></head><body>'
+            .str_repeat('<div><p class="c">x</p></div>', 3000).'</body></html>';
+        $this->assertLessThan(2 * 1024 * 1024, strlen($html));
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze(HtmlDocument::fromHtml($html));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame([['contrast.insufficient p.c', $severity]], array_map(fn (Violation $violation) => [$violation->key.' '.$violation->element, $violation->severity], $violations));
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+    }
+
     // R10: the existence prefilter scans each selector once per nesting level (at most MAX_MATCH_NESTING), linear.
     #[Group('performance')]
     #[DataProvider('hostilePrefilterSelectors')]
