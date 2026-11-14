@@ -48,6 +48,8 @@ class InputPurposeAnalyzer extends BaseAnalyzer
         'tel-local-suffix', 'tel-extension', 'email', 'impp',
     ];
 
+    private const OFF_SYNONYMS = ['false', 'true', 'none', 'nope', 'disabled'];
+
     private const CONTACT_HINTS = ['home', 'work', 'mobile', 'fax', 'pager'];
 
     protected string $key = 'input_purpose';
@@ -59,10 +61,24 @@ class InputPurposeAnalyzer extends BaseAnalyzer
     protected function inspect(): void
     {
         foreach ($this->queryVisible('//input|//select|//textarea') as $field) {
-            $value = trim($field->getAttribute('autocomplete'));
+            if (Element::tag($field) === 'input' && Element::enumAttr($field, 'type') === 'hidden') {
+                continue;
+            }
 
-            if ($value !== '' && ! $this->isValidAutocomplete($value)) {
-                $this->report('invalid_autocomplete', Severity::Error, '1.3.5', $field, ['name' => $this->fieldName($field), 'value' => $value]);
+            $value = trim($field->getAttribute('autocomplete'));
+            $personal = $this->isPersonalDataField($field);
+            $offSynonym = in_array(strtolower($value), self::OFF_SYNONYMS, true);
+
+            // Off synonyms ("false", "none", "nope") are the common way to switch autofill off: on a personal-data
+            // field they count as "off" below, elsewhere they are only a best-practice hint.
+            if ($value !== '' && ! $this->isValidAutocomplete($value) && ! ($offSynonym && $personal)) {
+                $params = ['name' => $this->fieldName($field), 'value' => $value];
+
+                if ($personal) {
+                    $this->report('invalid_autocomplete', Severity::Error, '1.3.5', $field, $params);
+                } else {
+                    $this->report('invalid_autocomplete', Severity::Notice, '1.3.5', $field, $params, tags: ['best-practice']);
+                }
 
                 continue;
             }
@@ -77,7 +93,7 @@ class InputPurposeAnalyzer extends BaseAnalyzer
 
             if ($value === '') {
                 $this->report('missing_autocomplete', Severity::Warning, '1.3.5', $field, ['name' => $this->fieldName($field)]);
-            } elseif (strtolower($value) === 'off') {
+            } elseif (strtolower($value) === 'off' || $offSynonym) {
                 $this->report('autocomplete_off_on_personal_field', Severity::Notice, '1.3.5', $field, ['name' => $this->fieldName($field)]);
             }
         }

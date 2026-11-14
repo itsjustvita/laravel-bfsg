@@ -20,6 +20,9 @@ class LinkAnalyzer extends BaseAnalyzer
         'weiter', 'lesen', 'jetzt', 'los', 'herunterladen', 'dieser link',
     ];
 
+    /** Pagination words, matched after stripping arrows, guillemets and whitespace; exempt in context only. */
+    private const PAGINATION_WORDS = ['weiter', 'zurück', 'vor', 'next', 'previous', 'prev'];
+
     /** Longest link text still taken as a language name on a link with hreflang/lang ("Nederlands", "Português"). */
     private const MAX_LANGUAGE_NAME = 12;
 
@@ -81,7 +84,8 @@ class LinkAnalyzer extends BaseAnalyzer
         if (in_array($normalized, self::GENERIC_NAMES, true) || Text::length($normalized) < 3) {
             $params = ['text' => Text::truncate($subject, self::MAX_TEXT), 'href' => $href];
 
-            if ($this->hasContext($link) || ($this->isPageNumber($normalized) && $this->insideNavigation($link))) {
+            if ($this->hasContext($link) || ($this->isPageNumber($normalized) && $this->insideNavigation($link))
+                || ($this->isPaginationWord($normalized) && ($this->hasPaginationRel($link) || $this->insideNavigation($link)))) {
                 $this->report('non_descriptive_in_context', Severity::Notice, '2.4.4', $link, $params);
             } else {
                 $this->report('non_descriptive', Severity::Warning, '2.4.4', $link, $params);
@@ -113,6 +117,21 @@ class LinkAnalyzer extends BaseAnalyzer
     protected function isPageNumber(string $name): bool
     {
         return preg_match('/^\d+$/', $name) === 1;
+    }
+
+    /** "Weiter »", "« Zurück", "Next ›", "→": a pagination word, with or without arrows. */
+    protected function isPaginationWord(string $name): bool
+    {
+        $word = preg_replace('/[»«›‹→←\s]+/u', '', $name) ?? $name;
+
+        return in_array(Text::lower($word), self::PAGINATION_WORDS, true);
+    }
+
+    protected function hasPaginationRel(DOMElement $link): bool
+    {
+        $tokens = preg_split('/\s+/', strtolower(trim($link->getAttribute('rel'))), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        return array_intersect($tokens, ['next', 'prev']) !== [];
     }
 
     protected function insideNavigation(DOMElement $link): bool

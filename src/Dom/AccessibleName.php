@@ -90,6 +90,13 @@ final class AccessibleName
             case 'textarea':
                 return self::fromLabel($element, $document);
 
+            case 'button':
+            case 'meter':
+            case 'output':
+            case 'progress':
+                // HTML-AAM: the label element comes before the subtree.
+                return self::fromLabel($element, $document) ?: self::content($element, false);
+
             case 'svg':
                 return self::childText($element, 'title');
 

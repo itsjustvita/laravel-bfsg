@@ -148,4 +148,11 @@ class FormAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<form><label for="e">E-Mail *</label><input id="e" required></form>'));
     }
+
+    public function test_radix_checkbox_with_label_for_has_no_button_missing_name(): void
+    {
+        $html = '<button type="button" role="checkbox" aria-checked="false" data-state="unchecked" value="on" id="remember"></button><label for="remember">Remember me</label>';
+
+        $this->assertNoViolation($this->analyze($html), 'forms.button_missing_name');
+    }
 }

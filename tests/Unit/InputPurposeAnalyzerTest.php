@@ -106,4 +106,36 @@ class InputPurposeAnalyzerTest extends AnalyzerTestCase
 
         $this->assertViolationCount($violations, 'input_purpose.invalid_autocomplete', 2);
     }
+
+    public function test_autocomplete_off_synonyms_are_not_errors(): void
+    {
+        $html = '<label for="d">Delivery date</label><input id="d" name="delivery_date" type="text" autocomplete="false"><label for="s">Search products</label><input id="s" name="q" type="text" autocomplete="none"><input type="hidden" name="t" autocomplete="nope">';
+
+        $violations = $this->analyze($html);
+
+        foreach ($violations as $violation) {
+            $this->assertNotSame(Severity::Error, $violation->severity);
+            $this->assertSame('input_purpose.invalid_autocomplete', $violation->key);
+            $this->assertSame(Severity::Notice, $violation->severity);
+            $this->assertContains('best-practice', $violation->tags);
+        }
+        $this->assertCount(2, $violations);
+    }
+
+    public function test_invalid_autocomplete_on_a_personal_data_field_is_still_an_error(): void
+    {
+        $violations = $this->analyze('<input name="email" autocomplete="emial">');
+
+        $this->assertHasViolation($violations, 'input_purpose.invalid_autocomplete', element: 'input', severity: Severity::Error);
+    }
+
+    public function test_off_synonym_on_a_personal_data_field_behaves_like_off(): void
+    {
+        foreach (['false', 'none', 'nope', 'disabled', 'true'] as $value) {
+            $violations = $this->analyze('<input name="email" autocomplete="'.$value.'">');
+
+            $this->assertHasViolation($violations, 'input_purpose.autocomplete_off_on_personal_field', severity: Severity::Notice);
+            $this->assertViolationCount($violations, 'input_purpose.invalid_autocomplete', 0);
+        }
+    }
 }

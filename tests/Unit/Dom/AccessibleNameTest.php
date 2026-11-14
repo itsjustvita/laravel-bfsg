@@ -86,4 +86,22 @@ class AccessibleNameTest extends TestCase
         $this->assertSame('Karte', AccessibleName::authored($byId['c'], $doc));
         $this->assertSame('Neuigkeiten', AccessibleName::authored($byId['d'], $doc));
     }
+
+    public function test_label_for_names_a_button(): void
+    {
+        $this->assertSame('Remember me', $this->nameOf('<button data-t type="button" role="checkbox" aria-checked="false" id="remember"></button><label for="remember">Remember me</label>'));
+        $this->assertSame('Save all', $this->nameOf('<button data-t id="b"></button><label for="b">Save all</label>'));
+    }
+
+    public function test_wrapping_label_names_a_switch_button(): void
+    {
+        $this->assertSame('Notifications', $this->nameOf('<label>Notifications <button data-t role="switch" aria-checked="true"></button></label>'));
+    }
+
+    public function test_aria_label_still_beats_the_label_on_a_button(): void
+    {
+        $this->assertSame('Aria', $this->nameOf('<button data-t id="b" aria-label="Aria">Content</button><label for="b">Label</label>'));
+        $this->assertSame('Label', $this->nameOf('<button data-t id="b">Content</button><label for="b">Label</label>'), 'label element beats the subtree');
+        $this->assertSame('Content', $this->nameOf('<button data-t id="b">Content</button>'));
+    }
 }

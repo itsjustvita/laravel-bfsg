@@ -184,4 +184,28 @@ class LinkAnalyzerTest extends AnalyzerTestCase
         $this->assertViolationCount($violations, 'links.non_descriptive_in_context', 3);
         $this->assertViolationCount($violations, 'links.non_descriptive', 1);
     }
+
+    public function test_german_pagination_links_are_not_non_descriptive(): void
+    {
+        $html = '<nav role="navigation" aria-label="Seitennavigation"><div><span>« Zurück</span><a href="http://localhost/users?page=2" rel="next">Weiter »</a></div><div><a href="http://localhost/users?page=2" aria-label="Gehe zur Seite 2">2</a><a href="http://localhost/users?page=2" rel="next" aria-label="Weiter »"><svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20"><path d="M7.293 14.707"/></svg></a></div></nav>';
+
+        $this->assertNoViolation($this->analyze($html), 'links.non_descriptive');
+    }
+
+    public function test_rel_next_link_outside_nav_with_weiter_is_not_non_descriptive(): void
+    {
+        $this->assertNoViolation($this->analyze('<div><a href="/p2" rel="next">Weiter</a><a href="/p0" rel="prev">« Zurück</a></div>'), 'links.non_descriptive');
+    }
+
+    public function test_weiter_outside_navigation_without_rel_is_still_non_descriptive(): void
+    {
+        $violations = $this->analyze('<div><a href="/x">Weiter</a></div>');
+
+        $this->assertHasViolation($violations, 'links.non_descriptive', severity: Severity::Warning);
+    }
+
+    public function test_other_generic_words_in_a_nav_stay_generic(): void
+    {
+        $this->assertHasViolation($this->analyze('<nav><a href="/x">Mehr</a></nav>'), 'links.non_descriptive');
+    }
 }
