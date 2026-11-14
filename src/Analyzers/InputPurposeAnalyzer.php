@@ -135,6 +135,10 @@ class InputPurposeAnalyzer extends BaseAnalyzer
 
     protected function isPersonalDataField(DOMElement $field): bool
     {
+        if (Element::tag($field) === 'input' && in_array(Element::enumAttr($field, 'type'), ['email', 'tel'], true)) {
+            return true;
+        }
+
         foreach (['name', 'id'] as $attribute) {
             $value = mb_strtolower(trim($field->getAttribute($attribute)), 'UTF-8');
 

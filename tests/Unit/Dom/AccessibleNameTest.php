@@ -104,4 +104,10 @@ class AccessibleNameTest extends TestCase
         $this->assertSame('Label', $this->nameOf('<button data-t id="b">Content</button><label for="b">Label</label>'), 'label element beats the subtree');
         $this->assertSame('Content', $this->nameOf('<button data-t id="b">Content</button>'));
     }
+
+    public function test_wrapping_label_names_only_its_first_labelable_control(): void
+    {
+        $this->assertSame('Subscribe', $this->nameOf('<label>Email <input id="i"> <button data-t id="b">Subscribe</button></label>'));
+        $this->assertSame('Notifications', $this->nameOf('<label><button data-t role="switch"></button> Notifications</label>'));
+    }
 }

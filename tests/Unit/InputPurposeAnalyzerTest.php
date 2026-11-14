@@ -138,4 +138,13 @@ class InputPurposeAnalyzerTest extends AnalyzerTestCase
             $this->assertViolationCount($violations, 'input_purpose.invalid_autocomplete', 0);
         }
     }
+
+    public function test_invalid_autocomplete_on_email_or_tel_type_without_hints_is_still_an_error(): void
+    {
+        foreach (['email', 'tel'] as $type) {
+            $violations = $this->analyze('<input type="'.$type.'" autocomplete="emial">');
+
+            $this->assertHasViolation($violations, 'input_purpose.invalid_autocomplete', severity: Severity::Error);
+        }
+    }
 }

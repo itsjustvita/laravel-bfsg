@@ -95,7 +95,7 @@ final class AccessibleName
             case 'output':
             case 'progress':
                 // HTML-AAM: the label element comes before the subtree.
-                return self::fromLabel($element, $document) ?: self::content($element, false);
+                return self::fromLabel($element, $document, true) ?: self::content($element, false);
 
             case 'svg':
                 return self::childText($element, 'title');
@@ -114,7 +114,7 @@ final class AccessibleName
         }
     }
 
-    private static function fromLabel(DOMElement $element, HtmlDocument $document): string
+    private static function fromLabel(DOMElement $element, HtmlDocument $document, bool $firstLabelableOnly = false): string
     {
         $id = trim($element->getAttribute('id'));
 
@@ -130,7 +130,42 @@ final class AccessibleName
 
         $ancestor = Element::closest($element, 'label');
 
-        return $ancestor === null ? '' : self::content($ancestor, false, $element);
+        if ($ancestor === null || ($firstLabelableOnly && self::firstLabelable($ancestor) !== $element)) {
+            return '';
+        }
+
+        return self::content($ancestor, false, $element);
+    }
+
+    /** The labeled control of a wrapping label: its first labelable descendant in tree order (iterative, no recursion). */
+    private static function firstLabelable(DOMElement $label): ?DOMElement
+    {
+        $stack = [];
+
+        for ($child = $label->lastChild; $child !== null; $child = $child->previousSibling) {
+            $stack[] = $child;
+        }
+
+        while ($stack !== []) {
+            $node = array_pop($stack);
+
+            if (! $node instanceof DOMElement) {
+                continue;
+            }
+
+            $tag = Element::tag($node);
+
+            if (in_array($tag, ['button', 'meter', 'output', 'progress', 'select', 'textarea'], true)
+                || ($tag === 'input' && Element::enumAttr($node, 'type') !== 'hidden')) {
+                return $node;
+            }
+
+            for ($child = $node->lastChild; $child !== null; $child = $child->previousSibling) {
+                $stack[] = $child;
+            }
+        }
+
+        return null;
     }
 
     private static function childText(DOMElement $element, string $tag): string

@@ -208,4 +208,17 @@ class LinkAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertHasViolation($this->analyze('<nav><a href="/x">Mehr</a></nav>'), 'links.non_descriptive');
     }
+
+    public function test_rel_nextpage_is_not_a_pagination_rel(): void
+    {
+        $this->assertHasViolation($this->analyze('<div><a href="/x" rel="nextpage">Weiter</a></div>'), 'links.non_descriptive', severity: Severity::Warning);
+    }
+
+    public function test_weiter_in_a_role_navigation_is_in_context(): void
+    {
+        $violations = $this->analyze('<div role="navigation"><a href="/x">Weiter</a></div>');
+
+        $this->assertNoViolation($violations, 'links.non_descriptive');
+        $this->assertHasViolation($violations, 'links.non_descriptive_in_context', severity: Severity::Notice);
+    }
 }
