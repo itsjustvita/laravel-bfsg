@@ -57,6 +57,22 @@ class SupportsConditionTest extends TestCase
             'keywords are case-insensitive' => ['NOT (display: grid) ', false],
             'Tailwind v4 @property fallback' => ['((-webkit-hyphens:none) and (not (margin-trim:inline))) or ((-moz-orient:inline) and (not (color:rgb(from red r g b))))', null],
             'or with a true and a vendor test' => ['(-moz-appearance: none) or (color: oklch(0 0 0))', true],
+            // Fix round 1: Color is more lenient than browsers about legacy rgb()/hsl().
+            'legacy rgb()' => ['(color: rgb(255, 0, 0))', true],
+            'legacy rgba() with alpha' => ['(color: rgba(100%, 0%, 0%, .5))', true],
+            'modern rgb() with alpha' => ['(color: rgb(255 0 0 / 50%))', true],
+            'legacy hsl()' => ['(color: hsl(120, 100%, 50%))', true],
+            'modern hsl() with alpha' => ['(color: hsl(120deg 100% 50% / .5))', true],
+            'legacy rgb() mixing percentages and numbers' => ['(color: rgb(100%, 0, 0))', null],
+            'rgb() mixing commas and spaces' => ['(color: rgb(255, 0 0))', null],
+            'legacy hsl() without percentages' => ['(color: hsl(120, 100, 50))', null],
+            'legacy rgb() with none' => ['(color: rgb(none, 0, 0))', null],
+            'custom property with a top-level semicolon' => ['(--x: a; b)', false],
+            'not of an invalid custom property test' => ['not (--x: a; b)', true],
+            'semicolon in a standard declaration' => ['(display: grid; color: red)', false],
+            'bare -- name' => ['(--: x)', false],
+            'custom property with a semicolon in a string' => ['(--x: "a;b")', true],
+            'custom property with a semicolon in a block' => ['(--x: {a; b})', true],
         ];
     }
 

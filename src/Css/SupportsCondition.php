@@ -183,6 +183,10 @@ final class SupportsCondition
     /** A `(property: value)` test. */
     private function declaration(string $name, string $value): int
     {
+        if ($name === '--' || $this->hasTopLevelSemicolon($value)) {
+            return self::NO; // not a declaration (`--` is reserved): a browser evaluates the test to false
+        }
+
         $value = trim($value);
 
         if (strlen($value) > self::MAX_VALUE_LENGTH) {
@@ -213,12 +217,15 @@ final class SupportsCondition
         return $supported ? self::YES : self::MAYBE;
     }
 
-    /** A value Color::evaluate() resolves exactly, or a color-mix() in a known colour space it resolves approximately. */
+    /**
+     * A value Color::evaluate() resolves exactly, or a color-mix() in a known colour space it resolves approximately;
+     * rgb() and hsl() also need the syntax browsers accept (strictSyntax()), which Color is more lenient about.
+     */
     private function isColor(string $value): bool
     {
         $result = Color::evaluate($value);
 
-        if ($result['color'] === null) {
+        if ($result['color'] === null || ! $this->strictSyntax($value)) {
             return false;
         }
 
@@ -229,6 +236,75 @@ final class SupportsCondition
         $comma = strpos($value, ',');
 
         return str_starts_with($value, 'color-mix(') && $comma !== false && preg_match(self::MIX_SPACE, trim(substr($value, 10, $comma - 10))) === 1;
+    }
+
+    /**
+     * Whether an rgb()/rgba()/hsl()/hsla() value has a syntax every browser accepts: the legacy form has exactly 3 or 4
+     * comma-separated single tokens, the modern one 3 space-separated channels and an optional `/ alpha`; rgb channels
+     * are all numbers or all percentages, hsl saturation and lightness percentages; `none` only in the modern form.
+     * Other values pass. Linear in the value.
+     */
+    private function strictSyntax(string $value): bool
+    {
+        if (preg_match('/^(rgba?|hsla?)\(/', $value, $m) !== 1 || ! str_ends_with($value, ')')) {
+            return true;
+        }
+
+        $inner = trim(substr($value, strlen($m[0]), -1));
+        $legacy = str_contains($inner, ',');
+
+        if ($legacy) {
+            $channels = array_map('trim', explode(',', $inner));
+
+            if (count($channels) < 3 || count($channels) > 4 || preg_grep('/[\s\/]|^$|^none$/', $channels) !== []) {
+                return false;
+            }
+
+            $channels = array_slice($channels, 0, 3);
+        } else {
+            $parts = explode('/', $inner);
+            $channels = preg_split('/\s++/', trim($parts[0]), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+            if (count($parts) > 2 || count($channels) !== 3 || (count($parts) === 2 && preg_match('/^\S++$/', trim($parts[1])) !== 1)) {
+                return false;
+            }
+        }
+
+        $percent = array_map(fn (string $channel): bool => str_ends_with($channel, '%'), $channels);
+
+        if ($m[1][0] === 'h') {
+            return $percent[1] && $percent[2] && ! $percent[0];
+        }
+
+        return count(array_unique($percent)) === 1;
+    }
+
+    /** Whether the value has a `;` outside brackets and strings: it would end the declaration. */
+    private function hasTopLevelSemicolon(string $value): bool
+    {
+        $depth = 0;
+        $quote = null;
+        $length = strlen($value);
+
+        for ($i = 0; $i < $length; $i++) {
+            $char = $value[$i];
+
+            if ($char === '\\') {
+                $i++;
+            } elseif ($quote !== null) {
+                $quote = $char === $quote ? null : $quote;
+            } elseif ($char === '"' || $char === "'") {
+                $quote = $char;
+            } elseif ($char === '(' || $char === '[' || $char === '{') {
+                $depth++;
+            } elseif ($char === ')' || $char === ']' || $char === '}') {
+                $depth = max(0, $depth - 1);
+            } elseif ($char === ';' && $depth === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** One or two lengths. */

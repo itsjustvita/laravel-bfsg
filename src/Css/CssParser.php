@@ -361,8 +361,25 @@ class CssParser
     /** @var array<int, int> layer id => number of its first appearance where its rules may apply (IN_BASE or IN_BASE_AT_SOME_VIEWPORTS) */
     private array $anyAppearance = [];
 
-    /** @var array<int, int> layer id => number of its last appearance where its rules may apply */
-    private array $lastAppearance = [];
+    /** @var array<int, string> layer id => conditionKey of its first appearance where its rules may apply */
+    private array $firstCondition = [];
+
+    /** @var array<int, int> layer id => number of its last appearance under another condition than its first (rankLayers()) */
+    private array $otherConditionAppearance = [];
+
+    /**
+     * Identifies the conditions the rules being parsed sit behind that hold only at some viewports or in some browsers
+     * (the preludes of the enclosing viewport media queries and undecidable @supports rules, hashed): two appearances of a
+     * layer under the same key apply together. '' outside such conditions; each sheet with a viewport media attribute
+     * gets a key of its own.
+     */
+    private string $conditionKey = '';
+
+    /** Sheets with a viewport media attribute read so far: the number makes their conditionKey. */
+    private int $viewportSheets = 0;
+
+    /** Whether the layer order is ambiguous (rankLayers(), isEscapedLayerName()): the winning colour is unknown (`colour`, R15). */
+    private bool $layerOrderUnknown = false;
 
     /** Whether the rules being parsed sit behind an @supports condition SupportsCondition cannot decide (their `maybe`). */
     private bool $undecided = false;
@@ -533,7 +550,9 @@ class CssParser
         $this->universalMaybeWeights = $this->documentTokens = null;
         $this->maybeHidingCache = $this->hidingClippingCache = [];
         $this->universalMaybeHiding = [];
-        $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = $this->lastAppearance = [];
+        $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = $this->firstCondition = $this->otherConditionAppearance = [];
+        $this->layerOrderUnknown = false;
+        $this->viewportSheets = 0;
         $this->indexed = false;
         $this->indexBuilds = 0;
         $this->truncated = false;
@@ -830,6 +849,7 @@ class CssParser
         $position = 0;
         $this->currentLayer = 0;
         $this->undecided = false;
+        $this->conditionKey = $condition === 'viewport' ? 'sheet '.++$this->viewportSheets : '';
         $this->layerContext = match ($condition) {
             'preference' => self::NOT_IN_BASE,
             'viewport' => self::IN_BASE_AT_SOME_VIEWPORTS,
@@ -848,8 +868,9 @@ class CssParser
      * layer that appears only at some viewports takes its first such appearance, one that appears only under a false
      * condition (whose rules are not in the base cascade) comes last. When the appearances at some viewports (or behind
      * an undecidable @supports) would order siblings differently, the order depends on the viewport: truncated (`limit`).
-     * So does a layer without a base appearance that appears again after the next sibling's appearance (its first and
-     * last appearances straddle the sibling, so it may rank either side of it).
+     * So does a layer without a base appearance that appears under another condition than its first after the next
+     * sibling's appearance (it may rank either side of the sibling); the same condition again is determinate. An
+     * ambiguous order leaves the winning colour unknown (`colour`, R15) besides truncating (`limit`).
      *
      * @param  list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>  $rules
      * @return list<array{selector: string, properties: array<string, array{value: string, important: bool}>, specificity: array{0: int, 1: int, 2: int}, order: int, layer: int, sheet: int, conditional: bool, condition: 'preference'|'viewport'|null, maybe: bool}>
@@ -876,8 +897,12 @@ class CssParser
             foreach ($siblings as $i => $id) {
                 $any = $this->anyAppearance[$id] ?? PHP_INT_MAX;
                 $next = isset($siblings[$i + 1]) ? $keys[$siblings[$i + 1]][0] : PHP_INT_MAX;
-                $straddles = ! isset($this->baseAppearance[$id]) && ($this->lastAppearance[$id] ?? 0) > $next;
-                $this->truncated = $this->truncated || $any < $previous || $straddles;
+                $straddles = ! isset($this->baseAppearance[$id]) && ($this->otherConditionAppearance[$id] ?? 0) > $next;
+
+                if ($any < $previous || $straddles) {
+                    $this->truncated = $this->layerOrderUnknown = true;
+                }
+
                 $previous = $any;
             }
         }
@@ -923,7 +948,9 @@ class CssParser
                 $name = trim($comma === false ? substr($list, $start) : substr($list, $start, $comma - $start));
 
                 if (! $declare && ! $this->isLayerName($name)) {
-                    $this->truncated = $this->truncated || $this->isEscapedLayerName($name);
+                    if ($this->isEscapedLayerName($name)) {
+                        $this->truncated = $this->layerOrderUnknown = true;
+                    }
 
                     return;
                 }
@@ -952,7 +979,9 @@ class CssParser
             return $this->layerNamed($name);
         }
 
-        $this->truncated = $this->truncated || $this->isEscapedLayerName($name);
+        if ($this->isEscapedLayerName($name)) {
+            $this->truncated = $this->layerOrderUnknown = true;
+        }
 
         return null;
     }
@@ -1011,7 +1040,12 @@ class CssParser
         if ($this->layerContext !== self::NOT_IN_BASE) {
             $this->layerAppearances++;
             $this->anyAppearance[$id] ??= $this->layerAppearances;
-            $this->lastAppearance[$id] = $this->layerAppearances;
+
+            if (! isset($this->firstCondition[$id])) {
+                $this->firstCondition[$id] = $this->conditionKey;
+            } elseif ($this->firstCondition[$id] !== $this->conditionKey) {
+                $this->otherConditionAppearance[$id] = $this->layerAppearances;
+            }
 
             if ($this->layerContext === self::IN_BASE) {
                 $this->baseAppearance[$id] ??= $this->layerAppearances;
@@ -1273,6 +1307,8 @@ class CssParser
      *   approximate, in the text colour, the background or the opacity; or an element of that range paints its own
      *   background inside an opacity group (opacity() below 1), whose compositing is not modelled; or a maybe rule could
      *   win the colour, a background property of that range or the opacity of the element or an ancestor (maybeDeclares());
+     *   or the cascade layer order is ambiguous (a viewport or undecidable @supports condition or an escaped layer name
+     *   could change it, see rankLayers()), so the winning declarations are unknown;
      * - `limit`: the index is truncated (isTruncated()), or a maybe rule may hide the text: by display, visibility or
      *   content-visibility on the element or an ancestor (maybeHidden()), or by clipping it to nothing or keeping it from
      *   being clipped (clippingUncertain()).
@@ -1296,7 +1332,7 @@ class CssParser
         }
 
         $limit = $this->truncated || $this->maybeHidden($element, $key) || $this->clippingUncertain($element);
-        $uncertainty = $this->uncertainty($backgroundUncertainty, $foregroundUncertainty, $opacityUncertainty, $limit ? ['limit'] : []);
+        $uncertainty = $this->uncertainty($backgroundUncertainty, $foregroundUncertainty, $opacityUncertainty, $this->layerOrderUnknown ? ['colour'] : [], $limit ? ['limit'] : []);
 
         return [
             'foreground' => $foreground,
@@ -1428,6 +1464,16 @@ class CssParser
         }
 
         return $this->universalMaybeWeights = $weights;
+    }
+
+    /**
+     * Whether a maybe rule may hide the element or an ancestor although the parsed CSS does not (hidesElement()): a rule
+     * behind an undecidable @supports condition or one whose selector cannot be evaluated (maybeHidden()). A finding
+     * that holds only for rendered elements is then approximate (R14).
+     */
+    public function possiblyHidden(DOMElement $element): bool
+    {
+        return $this->maybeHidden($element, $this->nodeKey($element));
     }
 
     /**
@@ -2264,10 +2310,10 @@ class CssParser
                 $group = $this->groupRule($css, $position, $conditional, $condition, $depth, $depth > 0);
 
                 if ($group !== null) {
-                    $outer = [$this->currentLayer, $this->layerContext, $this->undecided];
-                    [$this->currentLayer, $this->layerContext, $this->undecided] = [$group[2], $group[3], $group[4]];
+                    $outer = [$this->currentLayer, $this->layerContext, $this->undecided, $this->conditionKey];
+                    [$this->currentLayer, $this->layerContext, $this->undecided, $this->conditionKey] = [$group[2], $group[3], $group[4], $group[5]];
                     $this->parseBlock($css, $position, $rules, $orderOffset, $group[0], $group[1], $depth + 1);
-                    [$this->currentLayer, $this->layerContext, $this->undecided] = $outer;
+                    [$this->currentLayer, $this->layerContext, $this->undecided, $this->conditionKey] = $outer;
                 }
 
                 continue;
@@ -2291,10 +2337,11 @@ class CssParser
      * MAX_AT_RULE_DEPTH levels deep (truncated) and an @layer block whose prelude is not one layer name. An
      * `@layer a, b;` statement declares its layers. Inside a block ($inBlock) a prelude ends at its closing brace, which
      * is left for the block's parser. The layer context is baseCascadeApplies() of the block, its parent's included;
-     * `undecided` whether its rules are maybe rules (behind an undecidable @supports, its parent's included).
+     * `undecided` whether its rules are maybe rules (behind an undecidable @supports, its parent's included); the last
+     * is the block's conditionKey.
      *
      * @param  'preference'|'viewport'|null  $condition
-     * @return array{0: bool, 1: 'preference'|'viewport'|null, 2: int, 3: int, 4: bool}|null
+     * @return array{0: bool, 1: 'preference'|'viewport'|null, 2: int, 3: int, 4: bool, 5: string}|null
      */
     private function groupRule(string $css, int &$position, bool $conditional, ?string $condition, int $depth, bool $inBlock): ?array
     {
@@ -2339,7 +2386,10 @@ class CssParser
             return null; // `@layer a, b { … }` or an invalid name: the browser drops the block
         }
 
-        $context = max($this->layerContext, $this->baseCascadeApplies($name, $media, $supports));
+        $own = $this->baseCascadeApplies($name, $media, $supports);
+        $context = max($this->layerContext, $own);
+        // A condition that holds only sometimes extends the key (linear in the prelude; a hash keeps the key short).
+        $key = $own === self::IN_BASE_AT_SOME_VIEWPORTS ? md5($this->conditionKey."\0".$name.' '.(preg_replace('/\s++/', ' ', trim($prelude)) ?? $prelude)) : $this->conditionKey;
 
         // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
         // features and container queries also put a condition on them (see the class description).
@@ -2349,24 +2399,23 @@ class CssParser
             default => $condition,
         };
 
-        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer, $context, $this->undecided || $supports === null];
+        return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer, $context, $this->undecided || $supports === null, $key];
     }
 
     /**
      * Whether the rules of an applying group rule apply in the base cascade: a media query by its condition (null:
      * always, 'viewport': at some viewports, 'preference': never), an @supports rule by its condition (true: always,
-     * null: in some browsers, which orders layers as 'viewport' does; false: never, such a block is dropped before).
+     * null: in some browsers, which orders layers as 'viewport' does; a false one never applies, groupRule() drops it).
      * Container queries count as always (CSS Cascade 5 lets them declare layers whatever they match), and so do the
      * blocks of @layer and @scope.
      *
      * @param  'preference'|'viewport'|false|null  $media  HtmlDocument::mediaCondition() of an @media prelude, false for other at-rules
-     * @param  ?bool  $supports  SupportsCondition::evaluate() of an @supports prelude, true for other at-rules
+     * @param  ?bool  $supports  SupportsCondition::evaluate() of an @supports prelude (true or null), true for other at-rules
      */
     private function baseCascadeApplies(string $name, string|false|null $media, ?bool $supports = true): int
     {
         return match (true) {
-            $supports === false => self::NOT_IN_BASE,
-            $supports === null => self::IN_BASE_AT_SOME_VIEWPORTS,
+            $supports === null => self::IN_BASE_AT_SOME_VIEWPORTS, // a false @supports block never gets here: groupRule() skips it
             $name !== 'media' => self::IN_BASE,
             $media === 'preference' => self::NOT_IN_BASE,
             $media === 'viewport' => self::IN_BASE_AT_SOME_VIEWPORTS,
@@ -2418,10 +2467,10 @@ class CssParser
                     $this->truncated = true;
                     $this->skipBlock($css, $position);
                 } else {
-                    $outer = [$this->currentLayer, $this->layerContext, $this->undecided];
-                    [$this->currentLayer, $this->layerContext, $this->undecided] = [$group[2], $group[3], $group[4]];
+                    $outer = [$this->currentLayer, $this->layerContext, $this->undecided, $this->conditionKey];
+                    [$this->currentLayer, $this->layerContext, $this->undecided, $this->conditionKey] = [$group[2], $group[3], $group[4], $group[5]];
                     $this->parseRuleBody($css, $position, $selectors, $rules, $orderOffset, $group[0], $group[1], $depth + 1, true);
-                    [$this->currentLayer, $this->layerContext, $this->undecided] = $outer;
+                    [$this->currentLayer, $this->layerContext, $this->undecided, $this->conditionKey] = $outer;
                 }
 
                 $segment = $position;

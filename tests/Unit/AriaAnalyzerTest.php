@@ -6,6 +6,7 @@ use ItsJustVita\LaravelBfsg\Analyzers\AriaAnalyzer;
 use ItsJustVita\LaravelBfsg\Contracts\Analyzer;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class AriaAnalyzerTest extends AnalyzerTestCase
 {
@@ -174,6 +175,38 @@ class AriaAnalyzerTest extends AnalyzerTestCase
 
         $this->assertHasViolation($violations, 'aria.hidden_focusable', element: 'button#open');
         $this->assertViolationCount($violations, 'aria.hidden_focusable', 1);
+    }
+
+    /** @return array<string, array{0: string, 1: ?Severity}> R14: CSS around `.m` and the expected severity of aria.hidden_focusable (null: none) */
+    public static function possiblyHiddenContainers(): array
+    {
+        return [
+            'behind a vendor @supports' => ['@supports (-webkit-touch-callout:none){.m{display:none}}', Severity::Warning],
+            'behind @supports selector()' => ['@supports selector(:has(a)){.m{display:none}}', Severity::Warning],
+            'behind an unsupported selector' => ['.x:has(b) .m{display:none}', Severity::Warning],
+            'on an ancestor behind a vendor @supports' => ['@supports (-webkit-touch-callout:none){.x{visibility:hidden}}', Severity::Warning],
+            'definitely hidden' => ['.m{display:none}', null],
+            'behind a true @supports' => ['@supports (display:grid){.m{display:none}}', null],
+            'definitely rendered' => ['.m{display:block}', Severity::Error],
+            'behind a false @supports' => ['@supports not (display:grid){.m{display:none}}', Severity::Error],
+        ];
+    }
+
+    // R14: a focusable that a rule the parser cannot decide may hide is a Warning tagged approximate, not a definite Error.
+    #[DataProvider('possiblyHiddenContainers')]
+    public function test_possibly_hidden_focusables_are_approximate(string $css, ?Severity $severity): void
+    {
+        $violations = $this->analyze('<html><head><style>'.$css.'</style></head><body><div class="x"><b>b</b>'
+            .'<div class="m" aria-hidden="true"><a href="/x">x</a></div></div></body></html>');
+
+        if ($severity === null) {
+            $this->assertNoViolation($violations, 'aria.hidden_focusable');
+
+            return;
+        }
+
+        $violation = $this->assertHasViolation($violations, 'aria.hidden_focusable', element: 'a', severity: $severity);
+        $this->assertSame($severity === Severity::Warning ? ['approximate'] : [], $violation->tags);
     }
 
     public function test_dangling_naming_references_are_errors_and_description_references_warnings(): void

@@ -82,7 +82,9 @@ class CssParserTest extends TestCase
     {
         [$parser, $document] = $this->parsed('@media (min-width:1000px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media (max-width:500px){@layer b{p{color:#ddd}}}', '<p id="t">x</p>');
 
-        $this->assertContains('limit', $parser->resolveColors($this->target($document))['uncertainty']);
+        $this->assertSame(['colour', 'limit'], $parser->resolveColors($this->target($document))['uncertainty'], 'R15: the winning colour is unknown');
+        $this->assertFalse($this->parsed('@media (min-width:640px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media (min-width:640px){@layer b{p{color:#ddd}}}', '<p id="t">x</p>')[0]->isTruncated(), 'the same condition again');
+        $this->assertTrue($this->parsed('@media (min-width:640px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media (min-width:640px){@supports (-webkit-x:y){@layer b{p{color:#ddd}}}}', '<p id="t">x</p>')[0]->isTruncated(), 'a stronger condition');
         $this->assertFalse($this->parsed('@media (min-width:1000px){@layer b{.z{color:red}}} @media (max-width:500px){@layer b{p{color:#ddd}}} @layer a{p{color:#111}}', '<p id="t">x</p>')[0]->isTruncated(), 'no sibling in between');
     }
 

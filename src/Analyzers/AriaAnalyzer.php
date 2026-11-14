@@ -114,7 +114,9 @@ class AriaAnalyzer extends BaseAnalyzer
 
     /**
      * Focusable elements that are, or sit inside, aria-hidden="true" but are still rendered. Elements hidden
-     * by the page's stylesheets (e.g. a closed Bootstrap modal: .modal { display: none }) are not rendered.
+     * by the page's stylesheets (e.g. a closed Bootstrap modal: .modal { display: none }) are not rendered. Where a rule
+     * the parser cannot decide (behind an undecidable @supports or an unsupported selector) may hide the element or an
+     * ancestor (CssParser::possiblyHidden()), the finding is a Warning tagged `approximate` (R14).
      */
     protected function checkHiddenFocusable(): void
     {
@@ -140,7 +142,8 @@ class AriaAnalyzer extends BaseAnalyzer
                 }
 
                 $reported[$id] = true;
-                $this->report('hidden_focusable', Severity::Error, '4.1.2', $element, ['tag' => Element::tag($element)]);
+                $approximate = $parser->possiblyHidden($element);
+                $this->report('hidden_focusable', $approximate ? Severity::Warning : Severity::Error, '4.1.2', $element, ['tag' => Element::tag($element)], tags: $approximate ? ['approximate'] : []);
             }
         }
     }

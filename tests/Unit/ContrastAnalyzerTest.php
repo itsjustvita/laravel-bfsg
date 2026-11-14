@@ -666,7 +666,7 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
     }
 
-    /** @return array<string, array{0: string, 1: ?array{0: Severity, 1: string}}> the head's style elements and the expected finding's severity and ratio (null: none) */
+    /** @return array<string, array{0: string, 1: ?array{0: Severity, 1: ?string}}> the head's style elements and the expected finding's severity and ratio (null: none; a Notice is `contrast.unverifiable`) */
     public static function conditionalLayerDeclarations(): array
     {
         $dark = '@media (prefers-color-scheme: dark){@layer %s{p{color:#111}}}';
@@ -686,6 +686,12 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
             'an escaped layer name in the order statement' => ['<style>@layer b, x\\.y, a; @layer a{p{color:#111}} @layer b{p{color:#ddd}}</style>', [Severity::Warning, '1.36']],
             // R9 N2: below 500px `b` is first declared after `a`, so it wins and the text passes.
             'viewport appearances that straddle a sibling' => ['<style>@media (min-width:1000px){@layer b{.z{color:red}}} @layer a{p{color:#ddd}} @media (max-width:500px){@layer b{p{color:#111}}}</style>', [Severity::Warning, '1.36']],
+            // Fix round 1: the same condition around a sibling is determinate (below 640px `b` is never declared and its rule never applies).
+            'the same viewport condition around a sibling' => ['<style>@media (min-width:640px){@layer b{.z{color:red}}} @layer a{p{color:#ddd}} @media (min-width:640px){@layer b{p{color:#111}}}</style>', [Severity::Error, '1.36']],
+            // R15: an ambiguous layer order leaves the winning colour unknown, so a passing estimate is a Notice, not silence.
+            'R9 N2 passing estimate' => ['<style>@media (min-width:1000px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media (max-width:500px){@layer b{p{color:#ddd}}}</style>', [Severity::Notice, null]],
+            'a viewport order with a passing estimate' => ['<style>@media(min-width:1000px){@layer b{.z{color:red}}} @layer a{p{color:#ddd}} @layer b{p{color:#111}}</style>', [Severity::Notice, null]],
+            'an escaped layer name with a passing estimate' => ['<style>@layer b, x\\.y, a; @layer a{p{color:#ddd}} @layer b{p{color:#111}}</style>', [Severity::Notice, null]],
         ];
     }
 
@@ -698,6 +704,9 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
 
         if ($expected === null) {
             $this->assertSame([], $violations);
+        } elseif ($expected[0] === Severity::Notice) {
+            $this->assertHasViolation($violations, 'contrast.unverifiable', element: 'p', severity: Severity::Notice);
+            $this->assertNoViolation($violations, 'contrast.insufficient');
         } else {
             $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p', severity: $expected[0]);
             $this->assertSame($expected[1], $violation->params['ratio']);
