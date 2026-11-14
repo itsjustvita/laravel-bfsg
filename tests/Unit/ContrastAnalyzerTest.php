@@ -586,6 +586,113 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame('2.60', $violation->params['ratio']);
     }
 
+    // C4, repro A: pure Tailwind v4 layering; utilities come after components, so .text-white wins whatever the specificity (17.75:1).
+    public function test_utilities_layer_beats_components_layer_regardless_of_specificity(): void
+    {
+        $css = '@layer theme,base,components,utilities;
+@layer components{.card .card-title{color:#101828}}
+@layer utilities{.bg-gray-900{background-color:#101828}.text-white{color:#fff}}';
+
+        $this->assertSame([], $this->analyze($this->page($css, '<div class="card bg-gray-900"><h3 class="card-title text-white">Title</h3></div>')));
+    }
+
+    // C4: unlayered rules beat every layer for normal declarations (17.74:1).
+    public function test_unlayered_rule_beats_layered_rule(): void
+    {
+        $this->assertSame([], $this->analyze($this->page('@layer utilities{.text-gray-300{color:#d1d5db}} p{color:#111827}', '<p class="text-gray-300">Text</p>')));
+    }
+
+    // C4, the silent pass: the unlayered h2 rule wins, #d1d5db on white fails even for large text.
+    public function test_unlayered_rule_beats_layered_rule_with_a_real_error(): void
+    {
+        $violations = $this->analyze($this->page('@layer utilities{.text-gray-900{color:#111827}} h2{color:#d1d5db}', '<h2 class="text-gray-900">Heading</h2>'));
+
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'h2.text-gray-900', severity: Severity::Error);
+        $this->assertSame('1.47', $violation->params['ratio']);
+        $this->assertSame('#d1d5db', $violation->params['foreground']);
+    }
+
+    // C4: the ordering statement puts base before utilities, although the utilities block comes first.
+    public function test_layer_order_statement_decides_order(): void
+    {
+        $css = '@layer base, utilities; @layer utilities{.muted{color:#111}} @layer base{p.lead.intro{color:#ddd}}';
+
+        $this->assertSame([], $this->analyze($this->page($css, '<p class="muted lead intro">Text</p>')));
+    }
+
+    // C4: layer order is compared before specificity.
+    public function test_later_layer_beats_id_specificity_in_earlier_layer(): void
+    {
+        $this->assertSame([], $this->analyze($this->page('@layer a{p#t{color:#ddd}} @layer b{p{color:#111}}', '<p id="t">Text</p>')));
+    }
+
+    // C4: for !important the layer order reverses, the earlier layer wins.
+    public function test_important_reverses_layer_order(): void
+    {
+        $this->assertSame([], $this->analyze($this->page('@layer a{p{color:#111!important}} @layer b{p{color:#ddd!important}}', '<p>Text</p>')));
+    }
+
+    // C4: a layered !important beats an unlayered !important.
+    public function test_layered_important_beats_unlayered_important(): void
+    {
+        $this->assertSame([], $this->analyze($this->page('@layer a{p{color:#111!important}} p{color:#ddd!important}', '<p>Text</p>')));
+    }
+
+    /** @return array<string, array{0: string, 1: ?string}> CSS for `<p id="t">` and the ratio of the expected Error (null: it passes) */
+    public static function nestedAndAnonymousLayers(): array
+    {
+        return [
+            'a nested block is a sub-layer, the parent\'s own rules beat it' => ['@layer a{p{color:#111} @layer b{p#t{color:#ddd}}}', null],
+            'a dotted name is the same sub-layer as the nested block' => ['@layer a{@layer b{p{color:#ddd}}} @layer c{p{color:#111}} @layer a.b{p{color:#ddd}}', null],
+            'a dotted name ranks inside its parent, before a later top-level layer' => ['@layer a, c; @layer c{p{color:#ddd}} @layer a.b{p#t{color:#111}}', '1.36'],
+            'the parent declared after its sub-layer still ranks above it' => ['@layer a.b{p#t{color:#ddd}} @layer a{p{color:#111}}', null],
+            'each anonymous layer is a new layer' => ['@layer{p#t{color:#ddd}} @layer{p{color:#111}}', null],
+            'an anonymous layer ranks below unlayered rules' => ['p{color:#111} @layer{p#t{color:#ddd}}', null],
+            'an anonymous sub-layer ranks below its parent\'s own rules' => ['@layer a{@layer{p#t{color:#ddd}} p{color:#111}}', null],
+        ];
+    }
+
+    // C4: nested names, dotted names and anonymous layers are ranked by first appearance, sub-layers inside their parent.
+    #[DataProvider('nestedAndAnonymousLayers')]
+    public function test_nested_and_anonymous_layers_are_ranked(string $css, ?string $ratio): void
+    {
+        $violations = $this->analyze($this->page($css, '<p id="t">Text</p>'));
+
+        if ($ratio === null) {
+            $this->assertSame([], $violations);
+        } else {
+            $this->assertSame($ratio, $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Error)->params['ratio']);
+        }
+    }
+
+    /** @return array<string, array{0: string, 1: bool}> CSS around a layered Tailwind sr-only and whether `<span class="sr-only x">` is exempt */
+    public static function layeredSrOnly(): array
+    {
+        $srOnly = '@layer utilities{'.self::TAILWIND_SR_ONLY.'}';
+
+        return [
+            'an unlayered position before it' => ['.x{position:static}'.$srOnly, false],
+            'an unlayered position after it' => [$srOnly.'.x{position:static}', false],
+            'an unlayered universal clip reset' => ['*{clip-path:none;overflow:visible}'.$srOnly, false],
+            'a position in an earlier layer' => ['@layer base{.x.x{position:static}}'.$srOnly, true],
+            'an important position in an earlier layer' => ['@layer base{.x{position:static!important}}'.$srOnly, false],
+        ];
+    }
+
+    // C4 with C2: the clipping cascade honours layer order too; unlayered rules beat the utilities layer.
+    #[DataProvider('layeredSrOnly')]
+    public function test_layer_order_decides_whether_sr_only_text_is_exempt(string $css, bool $exempt): void
+    {
+        $violations = $this->analyze($this->page($css, '<button type="button" class="text-gray-400"><span class="sr-only x">Close menu</span></button>'));
+
+        if ($exempt) {
+            $this->assertSame([], $violations);
+        } else {
+            $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'span.sr-only.x', severity: Severity::Error);
+            $this->assertSame('2.60', $violation->params['ratio']);
+        }
+    }
+
     // R38: an icon sprite sheet paints nothing, so it is no backdrop.
     public function test_svg_sprite_sheet_is_not_a_backdrop(): void
     {

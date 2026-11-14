@@ -7,6 +7,7 @@ use ItsJustVita\LaravelBfsg\Analyzers\ContrastAnalyzer;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\BenchmarkPage;
 use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
@@ -150,6 +151,39 @@ class ContrastPerformanceTest extends TestCase
             $this->assertSame(['contrast.insufficient p.c'], array_values(array_unique(array_map(fn (Violation $violation) => $violation->key.' '.$violation->element, $violations))));
             $this->assertSame(480, array_sum(array_map(fn (Violation $violation) => $violation->meta['occurrences'], $violations)), 'every paragraph is measured');
         }
+    }
+
+    /** @return array<string, array{0: string}> 20 000 layer names in one shape, then the rules that decide the colour of p.c */
+    public static function layerNames(): array
+    {
+        $names = fn (string $prefix, string $glue): string => implode($glue, array_map(fn (int $i): string => $prefix.$i, range(1, 20000)));
+
+        return [
+            'ordering statement' => ['@layer '.$names('l', ', ').'; @layer l20000{.c{color:#aaa}} @layer l1{.c{color:#111}}'],
+            'dotted name' => ['@layer s0.'.$names('s', '.').'{.c{color:#111}} @layer s0{.c{color:#aaa}}'],
+            'anonymous layers' => [str_repeat('@layer{}', 20000).' @layer{.c{color:#111}} .c{color:#aaa}'],
+            'nested blocks' => [str_repeat('@layer n{', 20000).'.c{color:#111}'.str_repeat('}', 20000).' .c{color:#aaa}'],
+        ];
+    }
+
+    // C4: layer names are interned in one bounded map; beyond its cap a new name joins its parent's last sub-layer (at
+    // the top level: the last layer) and the result is approximate (`limit`), never an Error. Layer blocks nested deeper
+    // than the group-rule bound are dropped (truncated). In every shape the browser paints #aaa (2.32:1).
+    #[Group('performance')]
+    #[DataProvider('layerNames')]
+    public function test_twenty_thousand_layer_names_stay_in_budget(string $css): void
+    {
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Layers</title><style>'.$css.'</style></head><body><p class="c">x</p></body></html>';
+        $this->assertLessThan(2 * 1024 * 1024, strlen($html));
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze(HtmlDocument::fromHtml($html));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(['contrast.insufficient p.c'], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element, $violations));
+        $this->assertSame('2.32', $violations[0]->params['ratio']);
+        $this->assertSame([Severity::Warning, ['approximate']], [$violations[0]->severity, $violations[0]->tags]);
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
     // C2 review: universal clipping-only rules get no per-element index entries, so they leave the index deadline to the

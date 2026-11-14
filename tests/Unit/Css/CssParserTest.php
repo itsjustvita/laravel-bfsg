@@ -54,6 +54,73 @@ class CssParserTest extends TestCase
         $this->assertSame(['a', '.grid', '.card'], $this->selectors($css));
     }
 
+    // C4: layers rank by first appearance, a sub-layer inside its parent and below the parent's own rules; unlayered is PHP_INT_MAX.
+    public function test_rules_carry_their_layer_rank(): void
+    {
+        $css = '@layer a, b; @layer b{.b{color:red}} @layer a{.a{color:red}} .u{color:red} @layer a.c{.c{color:red}} '
+            .'@layer{.anon{color:red}} @layer b{@layer d{.d{color:red}}} @layer x, y{.invalid{color:red}} @layer 1x{.invalid{color:red}}';
+        $rules = array_column((new CssParser)->parseStylesheet($css), 'layer', 'selector');
+
+        // Post-order of a(c), b(d), anon: a.c 0, a 1, b.d 2, b 3, anon 4.
+        $this->assertSame(['.b' => 3, '.a' => 1, '.u' => PHP_INT_MAX, '.c' => 0, '.anon' => 4, '.d' => 2], $rules);
+    }
+
+    // C4: layer names are shared by the sheets of a document; a sub-layer a later sheet adds ranks inside its parent.
+    public function test_layer_ranks_span_the_stylesheets_of_a_document(): void
+    {
+        $document = HtmlDocument::fromHtml('<html><head><style>@layer a{.a{color:red}} @layer b{.b{color:red}}</style>'
+            .'<style>@layer a.c{.c{color:red}} .u{color:red}</style></head><body></body></html>');
+
+        $this->assertSame(['.a' => 1, '.b' => 2, '.c' => 0, '.u' => PHP_INT_MAX], array_column((new CssParser)->parse($document)->rules(), 'layer', 'selector'));
+    }
+
+    // C4: beyond MAX_LAYER_NAMES a new name joins its parent's last sub-layer (top level: the last layer), and the parse is truncated.
+    public function test_layer_names_beyond_the_cap_share_their_parents_last_sub_layer(): void
+    {
+        $names = implode(',', array_map(fn (int $i): string => 'l'.$i, range(1, CssParser::MAX_LAYER_NAMES + 2)));
+        $css = '@layer '.$names.'; @layer l1{@layer x{.x{color:red}} .l1{color:red}} @layer l'.(CssParser::MAX_LAYER_NAMES + 2).'{.last{color:red}}'
+            .' @layer l'.(CssParser::MAX_LAYER_NAMES + 1).'{.over{color:red}} @layer l'.CssParser::MAX_LAYER_NAMES.'{.kept{color:red}}';
+        $document = HtmlDocument::fromHtml('<html><head><style>'.$css.'</style></head><body></body></html>');
+        $parser = (new CssParser)->parse($document);
+
+        // The map is full: l1's new sub-layer x is l1's overflow sub-layer (rank 0), then l1 (1), l2 … lMAX (MAX), and the top-level overflow layer.
+        $this->assertSame(['.x' => 0, '.l1' => 1, '.last' => CssParser::MAX_LAYER_NAMES + 1, '.over' => CssParser::MAX_LAYER_NAMES + 1, '.kept' => CssParser::MAX_LAYER_NAMES], array_column($parser->rules(), 'layer', 'selector'));
+        $this->assertTrue($parser->isTruncated());
+        $this->assertFalse((new CssParser)->parse(HtmlDocument::fromHtml('<html><head><style>@layer a, b; @layer a.c{p{color:red}}</style></head><body></body></html>'))->isTruncated());
+    }
+
+    // C4: a layer inside a style rule (CSS nesting) layers the nested declarations.
+    public function test_layer_inside_a_style_rule(): void
+    {
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('.t{color:#111} p.t{@layer x{color:#ddd}}', '<p class="t" id="t">x</p>'), 'the unlayered rule wins over the layered nested declarations');
+    }
+
+    // C4: the custom properties honour layer order: the root map, an element's own declaration and a maybe rule.
+    public function test_custom_properties_honour_layer_order(): void
+    {
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors(':root{--fg:#111} @layer theme{:root{--fg:#ddd}} p{color:var(--fg)}', '<p id="t">x</p>'), 'root map');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('.t{--fg:#111} @layer x{p.t{--fg:#ddd}} p{color:var(--fg)}', '<p class="t" id="t">x</p>'), 'own declaration');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('p.t{--fg:#111} @layer x{:has(.q) .t{--fg:#ddd}} p{color:var(--fg)}', '<p class="t" id="t">x</p>'), 'a layered maybe rule cannot beat an unlayered declaration');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('*{--fg:#111} @layer x{*{--fg:#ddd}} p{color:var(--fg)}', '<p id="t">x</p>'), 'universal rules: unlayered wins');
+        $this->assertSame(['#111111', '#ffffff', false], $this->colors('@layer x{*{--fg:#111!important}} *{--fg:#ddd!important} p{color:var(--fg)}', '<p id="t">x</p>'), 'universal rules: a layered !important wins');
+    }
+
+    // C4: a longhand and its shorthand are compared by layer before specificity (winningDeclaration()).
+    public function test_shorthand_and_longhand_honour_layer_order(): void
+    {
+        [$parser, $document] = $this->parsed('.t{font:700 24px sans-serif} @layer u{p.t{font-weight:400}}', '<p class="t" id="t">x</p>');
+
+        $this->assertTrue($parser->boldness($this->target($document)));
+    }
+
+    // C4: the cascade without hiding viewport declarations (hidesElement()) honours layer order: utilities beat base.
+    public function test_revealing_cascade_honours_layer_order(): void
+    {
+        [$parser, $document] = $this->parsed('@media (min-width:640px){.x{display:none}} @layer base, utilities; @layer base{p.y{display:none}} @layer utilities{.z{display:block}}', '<p class="x y z" id="t">x</p>');
+
+        $this->assertFalse($parser->hidesElement($this->target($document)), 'visible below the breakpoint');
+    }
+
     public function test_media_is_kept_for_screen_and_dropped_for_print(): void
     {
         $css = '@media print { .p { color: red } } @media screen and (min-width: 40em) { .s { color: red } } '
