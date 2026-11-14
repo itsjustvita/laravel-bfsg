@@ -46,6 +46,11 @@ class AnalyzeUrl extends Tool
 
             // A FetchFailed becomes a tool error with its own message (safely())
             $page = $this->fetchPage($url);
+
+            if ($page->landedOnLogin) {
+                return $this->loginRedirectError($page);
+            }
+
             $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
 
             return Response::text((new ReportGenerator($result, $locale))->toJson());

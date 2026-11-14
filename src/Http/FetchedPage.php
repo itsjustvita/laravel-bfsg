@@ -17,4 +17,10 @@ final class FetchedPage
         public readonly array $warnings = [],
         public readonly bool $inProcess = false,
     ) {}
+
+    /** The sentence both the CLI and the MCP tools use when a page redirected to the login page (credentials removed from the URLs). */
+    public static function loginRedirectMessage(string $requestedUrl, string $loginUrl): string
+    {
+        return UrlFetcher::redact($requestedUrl)." redirected to the login page {$loginUrl}.";
+    }
 }

@@ -60,6 +60,11 @@ class GenerateReport extends Tool
 
             // A FetchFailed (the page is capped at UrlFetcher::MAX_PAGE_BYTES) becomes a tool error (safely())
             $page = $this->fetchPage($url);
+
+            if ($page->landedOnLogin) {
+                return $this->loginRedirectError($page);
+            }
+
             $result = app(Bfsg::class)->analyze($page->html, ['url' => $page->finalUrl, 'locale' => $locale, 'fragment' => false]);
             $report = (new ReportGenerator($result, $locale))->format($format);
             $payload = ['format' => $format, 'summary' => $report->summary()];

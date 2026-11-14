@@ -107,6 +107,12 @@ trait ToolHelpers
         ));
     }
 
+    /** The tool error for a page that redirected to the login page: the tools cannot authenticate, so nothing is analysed. */
+    protected function loginRedirectError(FetchedPage $page): Response
+    {
+        return $this->toolError(FetchedPage::loginRedirectMessage($page->url, $page->finalUrl).' The page needs authentication, which this tool cannot provide, so nothing was analysed.');
+    }
+
     /** A non-empty string argument, or null. */
     protected function stringArgument(Request $request, string $name): ?string
     {

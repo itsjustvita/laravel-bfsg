@@ -392,6 +392,30 @@ class McpToolsTest extends TestCase
         $this->assertSame("https://a.example/\u{9b}\u{202E}", BfsgMcpServer::tool(GetHistory::class)->payload()['reports'][0]['url']);
     }
 
+    public function test_analyze_url_on_a_page_that_redirects_to_the_login_is_a_tool_error(): void
+    {
+        $this->app['router']->get('/dashboard', fn () => redirect('/login'));
+        $this->app['router']->get('/login', fn () => '<!DOCTYPE html><html lang="en"><head><title>Login</title></head><body><main><form><label for="e">Email</label><input id="e" name="email"></form></main></body></html>');
+
+        $response = BfsgMcpServer::tool(AnalyzeUrl::class, ['url' => '/dashboard']);
+
+        $response->assertHasErrors(['/dashboard redirected to the login page http://localhost/login']);
+        $this->assertStringNotContainsString('--as', $response->text());
+        $this->assertStringNotContainsString('--auth', $response->text());
+    }
+
+    public function test_generate_report_on_a_page_that_redirects_to_the_login_is_a_tool_error_and_saves_nothing(): void
+    {
+        $this->app['router']->get('/dashboard', fn () => redirect('/login'));
+        $this->app['router']->get('/login', fn () => '<!DOCTYPE html><html lang="en"><head><title>Login</title></head><body><main><form><label for="e">Email</label><input id="e" name="email"></form></main></body></html>');
+
+        $response = BfsgMcpServer::tool(GenerateReport::class, ['url' => '/dashboard', 'save' => true]);
+
+        $response->assertHasErrors(['/dashboard redirected to the login page http://localhost/login']);
+        $this->assertStringNotContainsString('--as', $response->text());
+        $this->assertSame(0, BfsgReport::count());
+    }
+
     public function test_generate_report_formats_and_save(): void
     {
         $this->app['router']->get('/mcp-report', fn () => response(self::BROKEN));

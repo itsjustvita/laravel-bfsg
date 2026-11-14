@@ -10,6 +10,7 @@ use ItsJustVita\LaravelBfsg\AnalysisResult;
 use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Browser\BrowserAnalyzer;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
+use ItsJustVita\LaravelBfsg\Http\FetchedPage;
 use ItsJustVita\LaravelBfsg\Http\FetchOptions;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
@@ -295,7 +296,7 @@ class BfsgCheckCommand extends Command
         }
 
         if ($page->landedOnLogin && ! $this->option('allow-login-page')) {
-            throw new InvalidArgumentException(UrlFetcher::redact($url)." redirected to the login page {$page->finalUrl}. Authenticate (--as, --auth, --bearer, --session) or pass --allow-login-page to check the login page.");
+            throw new InvalidArgumentException(FetchedPage::loginRedirectMessage($url, $page->finalUrl).' Authenticate (--as, --auth, --bearer, --session) or pass --allow-login-page to check the login page.');
         }
 
         return [$page->html, $page->finalUrl];
