@@ -24,6 +24,7 @@ return [
     'fetch_warnings' => [
         'stray_output' => 'Die Anwendung hat :bytes Bytes außerhalb der Antwort ausgegeben; sie wurden verworfen.',
         'proxy_unpinned' => 'Das Adress-Pinning wird nicht durchgesetzt, weil ein Proxy verwendet wird.',
+        'cross_origin_stylesheets' => '{1} :count Stylesheet eines anderen Ursprungs wurde nicht eingebunden; die Kontrastergebnisse sind Näherungen.|[2,*] :count Stylesheets anderer Ursprünge wurden nicht eingebunden; die Kontrastergebnisse sind Näherungen.',
     ],
     'cli' => [
         'checking' => 'Prüfe :url',

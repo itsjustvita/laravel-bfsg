@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Http;
 use Closure;
 use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
+use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use Throwable;
 
@@ -12,13 +13,23 @@ use Throwable;
  * Replaces same-origin `<link rel="stylesheet">` elements whose media applies to screen with
  * `<style data-bfsg-inlined="{href}">` (with the link's `media`, if any), in place so the cascade order is kept. At most `max_stylesheets`
  * are loaded, each at most `max_stylesheet_bytes`; failures leave the link and add a warning. Links inside comments,
- * `<script>`, `<style>`, `<template>`, `<noscript>`, `<textarea>` and `<title>` are not stylesheets and stay untouched.
+ * `<script>`, `<style>`, `<template>`, `<noscript>`, `<textarea>` and `<title>` are not stylesheets and stay untouched,
+ * and so do `disabled` links. Stylesheets on other origins are not loaded: one warning counts them (F3). The leading
+ * `@import` rules of a loaded sheet are loaded too (expandImports(), F10). A sheet that stays out (a link, or an
+ * `@import` kept in the inlined text) is counted by CssParser::missingStylesheets(), so the analysis knows its cascade
+ * is incomplete.
  */
 final class StylesheetInliner
 {
     private int $maxStylesheets;
 
     private int $maxBytes;
+
+    /** Warnings about imports shown per page; the others are counted in one more warning (a sheet may hold thousands). */
+    private const MAX_IMPORT_WARNINGS = 20;
+
+    /** Warnings about imports of the page being inlined (inline()). */
+    private int $importWarnings = 0;
 
     public function __construct(?int $maxStylesheets = null, ?int $maxBytes = null)
     {
@@ -33,7 +44,7 @@ final class StylesheetInliner
     public function inline(string $html, string $pageUrl, Closure $load): array
     {
         $warnings = [];
-        $loaded = 0;
+        $loaded = $crossOrigin = $this->importWarnings = 0;
         $out = '';
         $copied = 0;
         $pos = 0;
@@ -76,7 +87,7 @@ final class StylesheetInliner
                 }
 
                 if ($tag !== null) {
-                    $out .= substr($html, $copied, $lt - $copied).$this->inlineLink($tag, $pageUrl, $load, $warnings, $loaded);
+                    $out .= substr($html, $copied, $lt - $copied).$this->inlineLink($tag, $pageUrl, $load, $warnings, $loaded, $crossOrigin);
                     $copied = $pos = $lt + strlen($tag);
 
                     continue;
@@ -84,6 +95,14 @@ final class StylesheetInliner
             }
 
             $pos = $lt + 1;
+        }
+
+        if ($this->importWarnings > self::MAX_IMPORT_WARNINGS) {
+            $warnings[] = ($this->importWarnings - self::MAX_IMPORT_WARNINGS).' more imported stylesheets were not inlined.';
+        }
+
+        if ($crossOrigin > 0) {
+            $warnings[] = trans_choice('bfsg::report.fetch_warnings.cross_origin_stylesheets', $crossOrigin, ['count' => $crossOrigin]);
         }
 
         return [$out.substr($html, $copied), $warnings];
@@ -119,30 +138,64 @@ final class StylesheetInliner
 
     /**
      * The replacement for one <link> tag: a <style data-bfsg-inlined> for a same-origin screen stylesheet that could
-     * be loaded within the limits, else the tag itself (with a warning when loading was attempted).
+     * be loaded within the limits, else the tag itself (with a warning when loading was attempted; a cross-origin one is
+     * counted in $crossOrigin).
      *
      * @param  list<string>  $warnings
      */
-    private function inlineLink(string $tag, string $pageUrl, Closure $load, array &$warnings, int &$loaded): string
+    private function inlineLink(string $tag, string $pageUrl, Closure $load, array &$warnings, int &$loaded, int &$crossOrigin): string
     {
         $attributes = $this->attributes($tag);
         $rel = preg_split('/\s+/', strtolower($attributes['rel'] ?? ''), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         $href = trim($attributes['href'] ?? '');
 
-        if (! in_array('stylesheet', $rel, true) || in_array('alternate', $rel, true) || $href === '' || ! HtmlDocument::mediaAppliesToScreen($attributes['media'] ?? '')) {
+        if (! in_array('stylesheet', $rel, true) || in_array('alternate', $rel, true) || $href === '' || isset($attributes['disabled'])
+            || ! HtmlDocument::mediaAppliesToScreen($attributes['media'] ?? '')) {
             return $tag;
         }
 
         $url = (string) UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
 
         if (! $this->sameOrigin($url, $pageUrl)) {
+            $crossOrigin++;
+
             return $tag;
         }
 
-        if ($loaded >= $this->maxStylesheets) {
-            $warnings[] = "Stylesheet {$href} was not inlined: more than {$this->maxStylesheets} stylesheets.";
+        $css = $this->load($url, $href, $load, $warnings, $loaded);
 
+        if ($css === null) {
             return $tag;
+        }
+
+        $importWarnings = [];
+        [$css, $unresolved] = $this->expandImports($css, $url, $href, $pageUrl, $load, $importWarnings, $loaded, $crossOrigin, [$url => true]);
+
+        foreach ($importWarnings as $warning) {
+            if (++$this->importWarnings <= self::MAX_IMPORT_WARNINGS) {
+                $warnings[] = $warning;
+            }
+        }
+
+        // The media query list goes along, so the cascade sees it as it sees <style media> (CssParser conditions).
+        $media = trim($attributes['media'] ?? '');
+        $media = $media === '' ? '' : ' media="'.htmlspecialchars($media, ENT_QUOTES | ENT_SUBSTITUTE).'"';
+
+        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES | ENT_SUBSTITUTE).'"'.$media.'>'.str_ireplace('</style', '<\/style', implode('', $unresolved).$css).'</style>';
+    }
+
+    /**
+     * The CSS at $url (named $name in warnings) through $load, counted against max_stylesheets; null with a warning when
+     * it is over the count, cannot be loaded or is larger than max_stylesheet_bytes.
+     *
+     * @param  list<string>  $warnings
+     */
+    private function load(string $url, string $name, Closure $load, array &$warnings, int &$loaded): ?string
+    {
+        if ($loaded >= $this->maxStylesheets) {
+            $warnings[] = "Stylesheet {$name} was not inlined: more than {$this->maxStylesheets} stylesheets.";
+
+            return null;
         }
 
         $loaded++;
@@ -150,32 +203,163 @@ final class StylesheetInliner
         try {
             $css = $load($url);
         } catch (ResponseTooLarge) {
-            $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+            $warnings[] = "Stylesheet {$name} was not inlined: larger than {$this->maxBytes} bytes.";
 
-            return $tag;
+            return null;
         } catch (Throwable $e) {
-            $warnings[] = "Stylesheet {$href} could not be loaded: {$e->getMessage()}";
+            $warnings[] = "Stylesheet {$name} could not be loaded: {$e->getMessage()}";
 
-            return $tag;
+            return null;
         }
 
         if ($css === null) {
-            $warnings[] = "Stylesheet {$href} could not be loaded.";
+            $warnings[] = "Stylesheet {$name} could not be loaded.";
 
-            return $tag;
+            return null;
         }
 
         if (strlen($css) > $this->maxBytes) {
-            $warnings[] = "Stylesheet {$href} was not inlined: larger than {$this->maxBytes} bytes.";
+            $warnings[] = "Stylesheet {$name} was not inlined: larger than {$this->maxBytes} bytes.";
 
-            return $tag;
+            return null;
         }
 
-        // The media query list goes along, so the cascade sees it as it sees <style media> (CssParser conditions).
-        $media = trim($attributes['media'] ?? '');
-        $media = $media === '' ? '' : ' media="'.htmlspecialchars($media, ENT_QUOTES | ENT_SUBSTITUTE).'"';
+        return $css;
+    }
 
-        return '<style data-bfsg-inlined="'.htmlspecialchars($href, ENT_QUOTES | ENT_SUBSTITUTE).'"'.$media.'>'.str_ireplace('</style', '<\/style', $css).'</style>';
+    /**
+     * $css (loaded from $url, named $name) with its leading @import rules (CssParser::leadingStatements()) replaced by
+     * the text they import: same-origin sheets loaded through load(), counted against max_stylesheets like links, with
+     * their own imports expanded up to CssParser::MAX_IMPORT_DEPTH levels and wrapped in the import's conditions and
+     * layer (`@media <media>{@supports (<condition>){@layer <name>{…}}}`). An import of a sheet on the current chain
+     * (a cycle) is dropped, as browsers do, and so is one whose conditions rule out the screen and an invalid one.
+     * Every other import that is not loaded (another origin: counted in $crossOrigin; over the count, the
+     * depth or the size; failed: a warning) is returned in the second list as `@import url("…");` (its URL as written)
+     * for the caller to put
+     * first in the sheet, where CssParser::missingStylesheets() counts it. The depth is bounded, so is the recursion.
+     *
+     * @param  list<string>  $warnings
+     * @param  array<string, true>  $chain  the URLs of the sheets from the link down to this one
+     * @return array{0: string, 1: list<string>}
+     */
+    private function expandImports(string $css, string $url, string $name, string $pageUrl, Closure $load, array &$warnings, int &$loaded, int &$crossOrigin, array $chain): array
+    {
+        if (stripos($css, '@import') === false) {
+            return [$css, []];
+        }
+
+        $out = '';
+        $copied = 0;
+        $unresolved = [];
+
+        foreach (CssParser::leadingStatements($css) as [$statement, $prelude, $start, $end]) {
+            if ($statement !== 'import') {
+                continue;
+            }
+
+            $out .= substr($css, $copied, $start - $copied);
+            $copied = $end;
+            $import = CssParser::importRule($prelude);
+
+            if ($import === null || ! CssParser::importApplies($import)) {
+                continue;
+            }
+
+            try {
+                $target = (string) UriResolver::resolve(Utils::uriFor($url), Utils::uriFor(trim($import['url'])));
+            } catch (Throwable) {
+                continue; // not a URL: a browser loads nothing either
+            }
+
+            $imported = "{$import['url']} (imported by {$name})";
+
+            if (isset($chain[$target])) {
+                continue;
+            }
+
+            $text = null;
+
+            if (! $this->sameOrigin($target, $pageUrl)) {
+                $crossOrigin++;
+            } elseif (count($chain) > CssParser::MAX_IMPORT_DEPTH) {
+                $warnings[] = "Stylesheet {$imported} was not inlined: imports nested more than ".CssParser::MAX_IMPORT_DEPTH.' levels deep.';
+            } else {
+                $text = $this->load($target, $imported, $load, $warnings, $loaded);
+            }
+
+            if ($text === null) {
+                $unresolved[] = '@import url("'.addcslashes($import['url'], "\"\\\n\r\f").'");'; // as written: the output stays linear in the input
+
+                continue;
+            }
+
+            [$text, $nested] = $this->expandImports($text, $target, $import['url'], $pageUrl, $load, $warnings, $loaded, $crossOrigin, $chain + [$target => true]);
+            array_push($unresolved, ...$nested);
+            $out .= $this->wrap($this->terminated($text), $import);
+        }
+
+        return [$out.substr($css, $copied), $unresolved];
+    }
+
+    /**
+     * $css with a comment, string or blocks left open at its end closed, as the end of a sheet closes them: imported
+     * text is followed by the rest of the importing sheet, which must not end up inside them. One linear pass.
+     */
+    private function terminated(string $css): string
+    {
+        $length = strlen($css);
+        $depth = 0;
+
+        for ($position = 0; ($position += strcspn($css, "/{}\"'\\", $position)) < $length; $position++) {
+            $char = $css[$position];
+
+            if ($char === '/' && ($css[$position + 1] ?? '') === '*') {
+                $end = strpos($css, '*/', $position + 2);
+
+                if ($end === false) {
+                    return $css.'*/'.str_repeat('}', $depth);
+                }
+
+                $position = $end + 1;
+            } elseif ($char === '"' || $char === "'") {
+                // A string ends at its quote or, unclosed, at a newline (CSS Syntax: a bad string).
+                $position++;
+
+                while (($position += strcspn($css, $char."\\\n", $position)) < $length && $css[$position] === '\\') {
+                    $position += 2;
+                }
+
+                if ($position >= $length) {
+                    return $css.$char.str_repeat('}', $depth);
+                }
+            } elseif ($char === '\\') {
+                $position++;
+            } elseif ($char === '{') {
+                $depth++;
+            } elseif ($char === '}' && $depth > 0) {
+                $depth--;
+            }
+        }
+
+        return $css.str_repeat('}', $depth);
+    }
+
+    /**
+     * The imported text inside the import's layer, supports() condition and media query list.
+     *
+     * @param  array{url: string, layer: ?string, supports: ?string, media: string}  $import
+     */
+    private function wrap(string $css, array $import): string
+    {
+        if ($import['layer'] !== null) {
+            $css = '@layer'.($import['layer'] === '' ? '' : ' '.$import['layer']).'{'.$css.'}';
+        }
+
+        if ($import['supports'] !== null) {
+            $css = '@supports ('.$import['supports'].'){'.$css.'}';
+        }
+
+        return $import['media'] === '' ? $css : '@media '.$import['media'].'{'.$css.'}';
     }
 
     /** @return array<string, string> lowercased attribute name => decoded value */

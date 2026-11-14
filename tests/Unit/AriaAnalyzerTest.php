@@ -219,4 +219,37 @@ class AriaAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'div#c', severity: Severity::Error);
         $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'input#d', severity: Severity::Error);
     }
+
+    /** A4 repro: the Bootstrap 5.3 docs modal with the stylesheet linked from the CDN, not inlined. */
+    private const BOOTSTRAP_MODAL = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bootstrap demo page - Acme</title><link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"></head><body><main><h1>Demo</h1><button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#exampleModal">Launch demo modal</button><div class="modal fade" id="exampleModal" tabindex="-1" aria-labelledby="exampleModalLabel" aria-hidden="true"><div class="modal-dialog"><div class="modal-content"><div class="modal-header"><h2 class="modal-title fs-5" id="exampleModalLabel">Modal title</h2><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button></div><div class="modal-body">Body text</div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button><button type="button" class="btn btn-primary">Save changes</button></div></div></div></div></main></body></html>';
+
+    // A4: "not hidden by the parsed CSS" says nothing while a stylesheet was not parsed: a Warning tagged approximate.
+    public function test_closed_bootstrap_modal_with_linked_stylesheet_is_a_warning(): void
+    {
+        $violations = $this->analyze(self::BOOTSTRAP_MODAL);
+
+        $this->assertViolationCount($violations, 'aria.hidden_focusable', 3);
+
+        foreach ($violations as $violation) {
+            if ($violation->key === 'aria.hidden_focusable') {
+                $this->assertSame(Severity::Warning, $violation->severity, (string) $violation->element);
+                $this->assertSame(['approximate'], $violation->tags);
+            }
+        }
+    }
+
+    /** @return array<string, array{0: string, 1: string}> the A4 control: the modal hidden by CSS the parser does see */
+    public static function visiblyClosedModals(): array
+    {
+        return [
+            'a <style> rule' => ['</title>', '</title><style>.modal{display:none}</style>'],
+            'a style attribute' => ['<div class="modal fade"', '<div style="display:none" class="modal fade"'],
+        ];
+    }
+
+    #[DataProvider('visiblyClosedModals')]
+    public function test_closed_modal_with_inline_display_none_gives_nothing(string $search, string $replace): void
+    {
+        $this->assertNoViolation($this->analyze(str_replace($search, $replace, self::BOOTSTRAP_MODAL)), 'aria.hidden_focusable');
+    }
 }

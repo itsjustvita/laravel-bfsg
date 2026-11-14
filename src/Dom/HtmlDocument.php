@@ -265,6 +265,27 @@ final class HtmlDocument
         ));
     }
 
+    /**
+     * `<link>` elements a browser loads as a screen stylesheet: the `rel` token list (ASCII case-insensitive) contains
+     * `stylesheet` and not `alternate`, the `href` is not empty, there is no `disabled` attribute, and the media attribute
+     * applies to screen (mediaAppliesToScreen()); outside <template> and <noscript>, as styleElements(). Their rules
+     * are not in styleSheets() (CssParser::missingStylesheets()).
+     *
+     * @return list<DOMElement>
+     */
+    public function stylesheetLinks(): array
+    {
+        return array_values(array_filter(
+            $this->query('//link[@rel and not(@disabled) and not(ancestor::template) and not(ancestor::noscript)]'),
+            function (DOMElement $link): bool {
+                $rel = preg_split('/[\t\n\f\r ]++/', strtolower($link->getAttribute('rel')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+                return in_array('stylesheet', $rel, true) && ! in_array('alternate', $rel, true)
+                    && trim($link->getAttribute('href'), " \t\n\f\r") !== '' && self::mediaAppliesToScreen($link->getAttribute('media'));
+            },
+        ));
+    }
+
     /** @return list<string> text of every screen stylesheet, in document order */
     public function styleSheets(): array
     {

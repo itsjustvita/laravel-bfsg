@@ -78,6 +78,10 @@ return [
             'message' => 'Kontrastprüfung nach :limit Textelementen abgebrochen',
             'suggestion' => 'Übrige Texte mit einem browserbasierten Kontrastwerkzeug prüfen oder kleinere Seiten analysieren',
         ],
+        'stylesheets_missing' => [
+            'message' => 'Kontrastprüfung unvollständig: :count Stylesheet(s) der Seite nicht analysiert',
+            'suggestion' => 'Kontrastmängel auf dieser Seite sind Schätzungen; mit einem browserbasierten Werkzeug prüfen oder die Seite mit bfsg:check analysieren, das Stylesheets desselben Ursprungs einbindet',
+        ],
     ],
     'links' => [
         'missing_name' => [

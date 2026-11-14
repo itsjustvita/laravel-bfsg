@@ -11,6 +11,7 @@ use Illuminate\Log\Context\Repository;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Context;
 use Illuminate\Support\Facades\Http;
+use ItsJustVita\LaravelBfsg\Bfsg;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Http\FetchedPage;
@@ -18,9 +19,13 @@ use ItsJustVita\LaravelBfsg\Http\FetchFailed;
 use ItsJustVita\LaravelBfsg\Http\FetchOptions;
 use ItsJustVita\LaravelBfsg\Http\InProcessFetcher;
 use ItsJustVita\LaravelBfsg\Http\UrlFetcher;
+use ItsJustVita\LaravelBfsg\Severity;
+use ItsJustVita\LaravelBfsg\Tests\Support\PerformanceBudget;
 use ItsJustVita\LaravelBfsg\Tests\Support\ProxyVariables;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
+use ItsJustVita\LaravelBfsg\Violation;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\Group;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\VarDumper\VarDumper;
 
@@ -195,7 +200,8 @@ class UrlFetcherTest extends TestCase
         $this->assertStringContainsString('<link rel="stylesheet" href="https://cdn.example.net/lib.css">', $page->html);
         $this->assertStringContainsString('<link rel="stylesheet" media="print" href="/print.css">', $page->html);
         $this->assertStringContainsString('<link rel=stylesheet href=missing.css>', $page->html);
-        $this->assertSame(['Stylesheet missing.css could not be loaded.'], $page->warnings);
+        // F3 (3.1.1): the cross-origin sheet is no longer skipped silently.
+        $this->assertSame(['Stylesheet missing.css could not be loaded.', '1 stylesheet on another origin was not inlined; contrast results are approximate.'], $page->warnings);
         Http::assertNotSent(fn (Request $request) => in_array($request->url(), ['https://cdn.example.net/lib.css', 'https://example.com/print.css', 'https://example.com/alt.css'], true));
     }
 
@@ -889,5 +895,147 @@ class UrlFetcherTest extends TestCase
         $this->assertSame([], $this->fetcher()->fetch('https://example.com/')->warnings);
         $this->assertSame(0, Artisan::call('bfsg:check', ['url' => 'https://example.com/']));
         $this->assertStringNotContainsString('proxy', Artisan::output());
+    }
+
+    /** A page whose paragraph gets its colours from the stylesheets in $head (F3, F10). */
+    private static function contrastPage(string $head): string
+    {
+        return '<!DOCTYPE html><html lang="en"><head><title>Page</title>'.$head.'</head><body><main><h1>Hi</h1><p class="t">Fine print</p></main></body></html>';
+    }
+
+    /** @return list<array{0: string, 1: Severity, 2: array<string, scalar>}> key, severity and params of each contrast finding */
+    private static function contrast(string $html): array
+    {
+        return array_map(fn (Violation $violation) => [$violation->key, $violation->severity, $violation->params], (new Bfsg)->only(['contrast'])->analyze($html)->all());
+    }
+
+    // F3: stylesheets on other origins are not loaded, but one warning says how many, and the analysis knows it.
+    public function test_cross_origin_stylesheets_give_one_fetch_warning(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="https://cdn.example.net/build/app.css"><link rel="stylesheet" href="//static.example.org/x.css"><link rel="stylesheet" href="/off.css" disabled><link rel="stylesheet" href="/app.css">'), 200),
+            'https://example.com/one' => Http::response(self::contrastPage('<link rel="stylesheet" href="https://cdn.example.net/build/app.css">'), 200),
+            'https://example.com/app.css' => Http::response('.t{color:#ccc;background:#fff}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertSame(['2 stylesheets on other origins were not inlined; contrast results are approximate.'], $page->warnings);
+        $this->assertSame([
+            ['contrast.insufficient', Severity::Warning, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']],
+            ['contrast.stylesheets_missing', Severity::Notice, ['count' => 2]],
+        ], self::contrast($page->html));
+        Http::assertNotSent(fn (Request $request) => ! str_starts_with($request->url(), 'https://example.com/'));
+        Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/off.css'); // a disabled link applies nothing
+        $this->assertStringContainsString('<link rel="stylesheet" href="/off.css" disabled>', $page->html);
+
+        $this->assertSame(['1 stylesheet on another origin was not inlined; contrast results are approximate.'], $this->fetcher()->fetch('https://example.com/one')->warnings);
+        app()->setLocale('de');
+        $this->assertSame(['2 Stylesheets anderer Ursprünge wurden nicht eingebunden; die Kontrastergebnisse sind Näherungen.'], $this->fetcher()->fetch('https://example.com/page')->warnings);
+    }
+
+    // F10: a leading @import of a same-origin sheet is loaded in its place, through the same loader.
+    public function test_same_origin_import_is_loaded_and_counted(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/app.css">'), 200),
+            'https://example.com/css/app.css' => Http::response('@import url("colors.css"); .x{margin:0}', 200),
+            'https://example.com/css/colors.css' => Http::response('.t{color:#ccc;background:#fff}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertStringContainsString('<style data-bfsg-inlined="/css/app.css">.t{color:#ccc;background:#fff} .x{margin:0}</style>', $page->html);
+        $this->assertSame([], $page->warnings);
+        $this->assertSame([['contrast.insufficient', Severity::Error, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']]], self::contrast($page->html));
+
+        $exit = Artisan::call('bfsg:check', ['url' => 'https://example.com/page', '--only' => 'contrast']);
+        $output = Artisan::output();
+        $this->assertSame(1, $exit, $output);
+        $this->assertStringContainsString('#cccccc', $output);
+    }
+
+    // F10: an import beyond fetch.max_stylesheets is not loaded: a warning, and the document stays incomplete.
+    public function test_import_over_max_stylesheets_gives_a_warning(): void
+    {
+        config()->set('bfsg.fetch.max_stylesheets', 1);
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/app.css">'), 200),
+            'https://example.com/css/app.css' => Http::response('@import url("colors.css"); .x{margin:0}', 200),
+            'https://example.com/css/colors.css' => Http::response('.t{color:#ccc;background:#fff}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertSame(['Stylesheet colors.css (imported by /css/app.css) was not inlined: more than 1 stylesheets.'], $page->warnings);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/css/app.css">@import url("colors.css"); .x{margin:0}</style>', $page->html);
+        $this->assertSame([['contrast.stylesheets_missing', Severity::Notice, ['count' => 1]]], self::contrast($page->html));
+        Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/css/colors.css');
+    }
+
+    // F10: conditions and layers wrap the imported text; cycles end, depth is bounded, other origins and print are not loaded.
+    public function test_imports_keep_their_conditions_and_layers_cycles_end_and_depth_is_bounded(): void
+    {
+        config()->set('bfsg.fetch.max_stylesheets', 10);
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/app.css">'), 200),
+            'https://example.com/css/app.css' => Http::response('@charset "utf-8"; @layer base, utilities; @import url(dark.css) screen and (prefers-color-scheme: dark); @import "reset.css" layer(base); '
+                .'@import url(grid.css) supports(display: grid); @import url(anon.css) layer; @import url(print.css) print; @import url(app.css); @import url(https://cdn.example.net/x.css); p{color:#111} @import url(late.css);', 200),
+            'https://example.com/css/dark.css' => Http::response('p{color:#eee}', 200),
+            'https://example.com/css/reset.css' => Http::response('@import url(/css/app.css); @import url(a1.css); *{margin:0}', 200),
+            'https://example.com/css/a1.css' => Http::response('@import url(a2.css); .a1{color:#111}', 200),
+            'https://example.com/css/a2.css' => Http::response('@import url(a3.css); .a2{color:#111}', 200),
+            'https://example.com/css/grid.css' => Http::response('.g{display:grid}', 200),
+            'https://example.com/css/anon.css' => Http::response('.n{color:#111}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+        $css = HtmlDocument::fromHtml($page->html)->styleSheets()[0];
+
+        $this->assertStringStartsWith('@import url("a3.css");@import url("https://cdn.example.net/x.css");@charset "utf-8"; @layer base, utilities; @media screen and (prefers-color-scheme: dark){p{color:#eee}} @layer base{', $css);
+        $this->assertStringContainsString('.a1{color:#111}', $css);
+        $this->assertStringContainsString('.a2{color:#111}', $css);
+        $this->assertStringContainsString('*{margin:0}}', $css);
+        $this->assertStringContainsString(' @supports (display: grid){.g{display:grid}} @layer{.n{color:#111}}', $css);
+        $this->assertStringEndsWith(' p{color:#111} @import url(late.css);', $css);
+        $this->assertSame([
+            'Stylesheet a3.css (imported by a2.css) was not inlined: imports nested more than 3 levels deep.',
+            '1 stylesheet on another origin was not inlined; contrast results are approximate.',
+        ], $page->warnings);
+        $this->assertSame(2, HtmlDocument::fromHtml($page->html)->cssParser()->missingStylesheets());
+
+        foreach (['print.css', 'late.css', 'a3.css'] as $file) {
+            Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/css/'.$file);
+        }
+
+        Http::assertSentCount(8); // the page, app.css once, dark, reset, a1, a2, grid, anon: none twice
+    }
+
+    // F10: a sheet of 450 KB of imports costs one pass, at most max_stylesheets loads and at most 21 warnings.
+    #[Group('performance')]
+    public function test_a_sheet_of_twenty_five_thousand_imports_is_inlined_within_the_time_budget(): void
+    {
+        $imports = '';
+
+        for ($i = 0; $i < 25000; $i++) {
+            $imports .= "@import'i{$i}.css';";
+        }
+
+        $this->assertLessThan(512 * 1024, strlen($imports));
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/app.css">'), 200),
+            'https://example.com/css/app.css' => Http::response($imports.'.t{color:#111}', 200),
+            'https://example.com/css/*' => Http::response('/* unclosed', 200),
+        ]);
+
+        $start = microtime(true);
+        $page = $this->fetcher()->fetch('https://example.com/page');
+        $elapsed = microtime(true) - $start;
+
+        $this->assertCount(21, $page->warnings);
+        $this->assertSame('24976 more imported stylesheets were not inlined.', $page->warnings[20]);
+        $this->assertSame(24996, HtmlDocument::fromHtml($page->html)->cssParser()->missingStylesheets());
+        $this->assertStringContainsString(str_repeat('/* unclosed*/', 4).'.t{color:#111}</style>', $page->html, 'an unclosed comment of an imported sheet is closed');
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('took %.3f s', $elapsed));
     }
 }

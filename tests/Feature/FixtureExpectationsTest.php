@@ -89,6 +89,15 @@ class FixtureExpectationsTest extends TestCase
                 'keyboard.click_without_keyboard',
                 'forms.button_missing_name',
             ]],
+            'tailwind v4 app (class dark mode)' => ['tailwind-v4-app.html', [], [
+                'contrast.stylesheets_missing',
+                'contrast.analysis_truncated',
+                'focus.outline_removed_global',
+                'headings.missing_h1',
+                'images.missing_alt',
+                'forms.button_missing_name',
+                'aria.hidden_focusable',
+            ]],
             'card pattern' => ['card-pattern.html', [
                 'links.non_descriptive_in_context',
                 'links.missing_name',
@@ -218,5 +227,25 @@ class FixtureExpectationsTest extends TestCase
         }
 
         $this->addToAssertionCount(1);
+    }
+
+    /**
+     * Review Focus 1: a full Tailwind v4 page (theme/base/components/utilities layers, `@custom-variant dark
+     * (&:where(.dark, .dark *))` utilities with `<html class="dark">`, `sr-only` button labels, the
+     * `@supports (color: color-mix(in lab, red, red))` pairs) whose text passes in a browser gives no definite contrast
+     * error: what the parser cannot decide is a Warning or a Notice.
+     */
+    public function test_tailwind_v4_full_page_has_no_definite_contrast_error(): void
+    {
+        $violations = $this->analyzeFixture('tailwind-v4-app.html')->all();
+        $errors = array_filter($violations, fn (Violation $violation) => str_starts_with($violation->key, 'contrast.') && $violation->severity === Severity::Error);
+
+        $this->assertSame([], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element.' '.json_encode($violation->params), array_values($errors)));
+
+        foreach ($violations as $violation) {
+            if ($violation->key === 'contrast.insufficient') {
+                $this->assertContains('approximate', $violation->tags, (string) $violation->element);
+            }
+        }
     }
 }

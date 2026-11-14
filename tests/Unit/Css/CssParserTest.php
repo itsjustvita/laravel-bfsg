@@ -2157,4 +2157,92 @@ class CssParserTest extends TestCase
         [$parser] = $this->parsed('p[ ="x"]{color:red}', '');
         $this->assertTrue($parser->selectorAttributes()['all']);
     }
+
+    /** @return array<string, array{0: string, 1: int}> C3/F10: the <head> content and CssParser::missingStylesheets() */
+    public static function missingStylesheetHeads(): array
+    {
+        return [
+            'nothing' => ['<style>p{color:#111}</style>', 0],
+            'a linked stylesheet' => ['<link rel="stylesheet" href="/a.css">', 1],
+            'an @import' => ['<style>@import url("x.css"); p{color:#111}</style>', 1],
+            'a string @import for the screen' => ['<style>@IMPORT "x.css" screen;</style>', 1],
+            'an @import with layer, supports and a viewport query' => ['<style>@import url(x.css) layer(base) supports(display: grid) (min-width: 40em);</style>', 1],
+            'after @charset and an @layer statement, with comments' => ['<style>@charset "utf-8"; /* x */ @layer a, b; <!-- @import url(x.css); --> @import url(y.css)</style>', 2],
+            'an unknown statement does not end the imports' => ['<style>@foo bar; @import url(x.css);</style>', 1],
+            'a print @import' => ['<style>@import url(x.css) print;</style>', 0],
+            'a false supports()' => ['<style>@import url(x.css) supports(not (display: grid));</style>', 0],
+            'an undecidable supports()' => ['<style>@import url(x.css) supports(-webkit-touch-callout: none);</style>', 1],
+            'after a style rule (ignored by browsers)' => ['<style>p{color:#111} @import url(x.css);</style>', 0],
+            'inside a block (invalid)' => ['<style>@media screen { @import url(x.css); }</style>', 0],
+            'after @namespace' => ['<style>@namespace svg url(http://www.w3.org/2000/svg); @import url(x.css);</style>', 0],
+            'without a URL' => ['<style>@import ; @import screen;</style>', 0],
+            'in a print <style>' => ['<style media="print">@import url(x.css);</style>', 0],
+            'a semicolon in the URL string' => ['<style>@import "a;b.css" screen; @import url(y.css);</style>', 2],
+            'two <style> elements and two links' => ['<link rel="stylesheet" href="/a.css"><style>@import url(x.css);</style><style>@import url(y.css);</style><link rel="stylesheet" href="/b.css">', 4],
+        ];
+    }
+
+    #[DataProvider('missingStylesheetHeads')]
+    public function test_missing_stylesheets_count_links_and_unresolved_imports(string $head, int $missing): void
+    {
+        $document = HtmlDocument::fromHtml('<html><head>'.$head.'</head><body><p id="t">x</p></body></html>');
+        $parser = (new CssParser)->parse($document);
+
+        $this->assertSame($missing, $parser->missingStylesheets());
+        $this->assertSame($missing > 0 ? ['stylesheets'] : [], $parser->resolveColors($this->target($document))['uncertainty']);
+        $this->assertSame($missing > 0, $parser->possiblyHidden($this->target($document)), 'A4');
+    }
+
+    public function test_import_rule_parts(): void
+    {
+        $this->assertSame(['url' => 'x.css', 'layer' => null, 'supports' => null, 'media' => ''], CssParser::importRule(' url( "x.css" ) '));
+        $this->assertSame(['url' => 'x.css', 'layer' => '', 'supports' => null, 'media' => 'screen'], CssParser::importRule('url(x.css) layer screen'));
+        $this->assertSame(['url' => 'a b.css', 'layer' => 'base.reset', 'supports' => 'selector(:has(a)) and (display: grid)', 'media' => 'screen and (min-width: 40em)'],
+            CssParser::importRule("'a b.css' LAYER( base.reset ) supports(selector(:has(a)) and (display: grid)) screen and (min-width: 40em)"));
+        $this->assertSame(['url' => 'x.css', 'layer' => null, 'supports' => 'display: grid', 'media' => 'layers'], CssParser::importRule('url(x.css) supports(display: grid) layers'));
+        $this->assertNull(CssParser::importRule(' screen'));
+        $this->assertNull(CssParser::importRule('url(x.css'));
+        $this->assertNull(CssParser::importRule('url(x.css) supports(display: grid'));
+    }
+
+    // Carried from Task 9: the condition that identifies a layer's appearances ignores whitespace and case.
+    public function test_layer_condition_keys_ignore_whitespace_and_case(): void
+    {
+        $page = fn (string $second): bool => $this->parsed('@media (min-width:640px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media '.$second.'{@layer b{p{color:#ddd}}}', '<p id="t">x</p>')[0]->isTruncated();
+
+        $this->assertFalse($page('(min-width: 640px)'));
+        $this->assertFalse($page("( MIN-WIDTH :\n640px )"));
+        $this->assertFalse($page('(Min-Width:640PX)'));
+        $this->assertTrue($page('(min-width:641px)'), 'another condition');
+        $this->assertTrue($page('(min-width:640px) and (hover: hover)'), 'another condition');
+    }
+
+    /** @return array<string, array{0: string, 1: int}> hostile heads (about 1 MB) and CssParser::missingStylesheets() */
+    public static function hostileStylesheetHeads(): array
+    {
+        return [
+            '50 000 links' => [str_repeat('<link rel=stylesheet href=a>', 25000).str_repeat('<link rel="alternate stylesheet" href=b>', 25000), 25000],
+            '50 000 imports' => ['<style>'.str_repeat('@import url(x.css);', 50000).'</style>', 50000],
+            'one import with 200 000 nested supports()' => ['<style>@import url(x.css) supports('.str_repeat('(', 200000).'display: grid'.str_repeat(')', 200000).');</style>', 1],
+            'an import ended by the end of the sheet after 1 MB of whitespace' => ['<style>@import url(x.css)'.str_repeat(' ', 1000000).'</style>', 1],
+            'an unclosed url( of 1 MB' => ['<style>@import url('.str_repeat('a', 1000000).'</style>', 0],
+            'a 1 MB media prelude around a layer' => ['<style>@media (min-width:640px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media '.str_repeat(' ( min-width : 640px ) and', 40000).' (x){@layer b{p{color:#ddd}}}</style>', 0],
+        ];
+    }
+
+    #[Group('performance')]
+    #[DataProvider('hostileStylesheetHeads')]
+    public function test_hostile_stylesheet_heads_are_counted_within_the_time_budget(string $head, int $missing): void
+    {
+        $html = '<html><head>'.$head.'</head><body><p id="t">x</p></body></html>';
+        $this->assertLessThan(2 * 1024 * 1024, strlen($html));
+        $document = HtmlDocument::fromHtml($html);
+
+        $start = microtime(true);
+        $parser = (new CssParser)->parse($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame($missing, $parser->missingStylesheets());
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('took %.3f s', $elapsed));
+    }
 }

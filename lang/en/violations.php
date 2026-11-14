@@ -78,6 +78,10 @@ return [
             'message' => 'Contrast analysis stopped after :limit text elements',
             'suggestion' => 'Check the remaining text with a browser-based contrast tool, or analyze smaller pages',
         ],
+        'stylesheets_missing' => [
+            'message' => 'Contrast analysis is incomplete: :count stylesheet(s) of the page were not analyzed',
+            'suggestion' => 'Contrast failures on this page are estimates; check them with a browser-based tool, or analyze the page with bfsg:check, which inlines same-origin stylesheets',
+        ],
     ],
     'links' => [
         'missing_name' => [

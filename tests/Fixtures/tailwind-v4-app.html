@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard | Rocketship</title>
+    <style data-bfsg-inlined="/build/assets/app-4ed993c7.css">
+        /*! tailwindcss v4.1.11 | MIT License | https://tailwindcss.com */
+        @layer properties;
+        @layer theme, base, components, utilities;
+        @layer theme {
+            :root, :host {
+                --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+                --color-gray-100: oklch(96.7% 0.003 264.542);
+                --color-gray-300: oklch(87.2% 0.01 258.338);
+                --color-gray-400: oklch(70.7% 0.022 261.325);
+                --color-gray-500: oklch(55.1% 0.027 264.364);
+                --color-gray-900: oklch(21% 0.034 264.665);
+                --color-gray-950: oklch(13% 0.028 261.692);
+                --color-indigo-400: oklch(67.3% 0.182 276.935);
+                --color-indigo-500: oklch(58.5% 0.233 277.117);
+                --color-indigo-600: oklch(51.1% 0.262 276.966);
+                --color-black: #000;
+                --color-white: #fff;
+                --spacing: 0.25rem;
+                --text-sm: 0.875rem;
+                --text-sm--line-height: calc(1.25 / 0.875);
+                --text-4xl: 2.25rem;
+                --text-4xl--line-height: calc(2.5 / 2.25);
+                --text-6xl: 3.75rem;
+                --text-6xl--line-height: 1;
+                --font-weight-semibold: 600;
+                --radius-md: 0.375rem;
+                --default-font-family: var(--font-sans);
+            }
+        }
+        @layer base {
+            *, ::after, ::before, ::backdrop, ::file-selector-button { box-sizing: border-box; margin: 0; padding: 0; border: 0 solid; }
+            html, :host { line-height: 1.5; -webkit-text-size-adjust: 100%; tab-size: 4; font-family: var(--default-font-family, ui-sans-serif, system-ui, sans-serif); }
+            a { color: inherit; -webkit-text-decoration: inherit; text-decoration: inherit; }
+            button, input, select, optgroup, textarea, ::file-selector-button { font: inherit; letter-spacing: inherit; color: inherit; border-radius: 0; background-color: transparent; opacity: 1; }
+            svg { display: block; vertical-align: middle; }
+            [hidden]:where(:not([hidden="until-found"])) { display: none !important; }
+        }
+        @layer utilities {
+            .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+            .flex { display: flex; }
+            .size-6 { width: calc(var(--spacing) * 6); height: calc(var(--spacing) * 6); }
+            .rounded-md { border-radius: var(--radius-md); }
+            .px-3 { padding-inline: calc(var(--spacing) * 3); }
+            .bg-white { background-color: var(--color-white); }
+            .bg-indigo-600 { background-color: var(--color-indigo-600); }
+            .bg-black\/50 {
+                background-color: color-mix(in srgb, #000 50%, transparent);
+                @supports (color: color-mix(in lab, red, red)) { background-color: color-mix(in oklab, var(--color-black) 50%, transparent); }
+            }
+            .text-sm { font-size: var(--text-sm); line-height: var(--tw-leading, var(--text-sm--line-height)); }
+            .text-4xl { font-size: var(--text-4xl); line-height: var(--tw-leading, var(--text-4xl--line-height)); }
+            .font-semibold { --tw-font-weight: var(--font-weight-semibold); font-weight: var(--font-weight-semibold); }
+            .text-gray-400 { color: var(--color-gray-400); }
+            .text-gray-500 { color: var(--color-gray-500); }
+            .text-gray-900 { color: var(--color-gray-900); }
+            .text-white { color: var(--color-white); }
+            .text-white\/70 {
+                color: color-mix(in srgb, #fff 70%, transparent);
+                @supports (color: color-mix(in lab, red, red)) { color: color-mix(in oklab, var(--color-white) 70%, transparent); }
+            }
+            .hover\:bg-indigo-500 { &:hover { @media (hover: hover) { background-color: var(--color-indigo-500); } } }
+            .hover\:text-gray-500 { &:hover { @media (hover: hover) { color: var(--color-gray-500); } } }
+            .focus-visible\:outline-2 { &:focus-visible { outline-style: var(--tw-outline-style); outline-width: 2px; } }
+            .sm\:text-6xl { @media (width >= 40rem) { font-size: var(--text-6xl); line-height: var(--tw-leading, var(--text-6xl--line-height)); } }
+            .dark\:bg-gray-950 { &:where(.dark, .dark *) { background-color: var(--color-gray-950); } }
+            .dark\:bg-indigo-500 { &:where(.dark, .dark *) { background-color: var(--color-indigo-500); } }
+            .dark\:bg-white\/5 {
+                &:where(.dark, .dark *) {
+                    background-color: color-mix(in srgb, #fff 5%, transparent);
+                    @supports (color: color-mix(in lab, red, red)) { background-color: color-mix(in oklab, var(--color-white) 5%, transparent); }
+                }
+            }
+            .dark\:text-gray-100 { &:where(.dark, .dark *) { color: var(--color-gray-100); } }
+            .dark\:text-gray-300 { &:where(.dark, .dark *) { color: var(--color-gray-300); } }
+            .dark\:text-gray-400 { &:where(.dark, .dark *) { color: var(--color-gray-400); } }
+            .dark\:text-white { &:where(.dark, .dark *) { color: var(--color-white); } }
+            .dark\:hover\:text-white { &:where(.dark, .dark *) { &:hover { @media (hover: hover) { color: var(--color-white); } } } }
+        }
+        @property --tw-font-weight { syntax: "*"; inherits: false; }
+        @property --tw-outline-style { syntax: "*"; inherits: false; initial-value: solid; }
+        @layer properties {
+            @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
+                *, ::before, ::after, ::backdrop { --tw-font-weight: initial; --tw-outline-style: solid; }
+            }
+        }
+    </style>
+</head>
+<body class="bg-white text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+<header>
+    <nav aria-label="Global" class="flex">
+        <a href="/" class="text-gray-900 dark:text-white"><img src="/logo.svg" alt="Rocketship"></a>
+        <a href="/features" class="text-sm font-semibold text-gray-900 dark:text-white">Features</a>
+        <a href="/pricing" class="text-sm font-semibold text-gray-900 dark:text-white">Pricing</a>
+        <button type="button" class="text-gray-400 hover:text-gray-500 dark:text-gray-400 dark:hover:text-white">
+            <span class="sr-only">Open main menu</span>
+            <svg class="size-6" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+        </button>
+        <button type="button" class="text-gray-400 hover:text-gray-500 dark:text-gray-400 dark:hover:text-white">
+            <span class="sr-only">View notifications</span>
+            <svg class="size-6" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31"/></svg>
+        </button>
+    </nav>
+</header>
+<main>
+    <section aria-labelledby="hero-title">
+        <h1 id="hero-title" class="text-4xl sm:text-6xl font-semibold text-gray-900 dark:text-white">Launch faster with Rocketship</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400" id="fineprint">No credit card required. Cancel anytime.</p>
+        <a href="/signup" class="rounded-md bg-indigo-600 px-3 text-white text-sm font-semibold hover:bg-indigo-500 focus-visible:outline-2">Get started</a>
+    </section>
+    <section aria-label="Legal">
+        <p class="text-sm text-gray-500 dark:text-gray-300" id="legal">Prices exclude VAT.</p>
+    </section>
+    <section aria-label="Updates" class="rounded-md bg-white dark:bg-white/5">
+        <p id="update" class="text-gray-900 dark:text-white">New: a dashboard for every team.</p>
+        <span id="badge" class="rounded-md bg-black/50 px-3 text-sm text-white/70">Beta</span>
+        <a href="/changelog" class="text-sm font-semibold text-gray-900 dark:text-white">Changelog for version 2</a>
+    </section>
+    <section aria-label="Testimonials">
+        <figure>
+            <blockquote class="text-gray-900 dark:text-white"><p>Rocketship cut our release time in half.</p></blockquote>
+            <figcaption class="text-gray-500 dark:text-gray-400">Jane Doe, CTO</figcaption>
+        </figure>
+    </section>
+</main>
+<footer>
+    <p class="text-sm text-gray-500 dark:text-gray-400">&copy; 2026 Rocketship, Inc.</p>
+</footer>
+</body>
+</html>

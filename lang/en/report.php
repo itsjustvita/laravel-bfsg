@@ -24,6 +24,7 @@ return [
     'fetch_warnings' => [
         'stray_output' => 'The application wrote :bytes bytes outside the response; they were discarded.',
         'proxy_unpinned' => 'Address pinning is not enforced because a proxy is used.',
+        'cross_origin_stylesheets' => '{1} :count stylesheet on another origin was not inlined; contrast results are approximate.|[2,*] :count stylesheets on other origins were not inlined; contrast results are approximate.',
     ],
     'cli' => [
         'checking' => 'Checking :url',

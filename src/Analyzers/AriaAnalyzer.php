@@ -116,7 +116,8 @@ class AriaAnalyzer extends BaseAnalyzer
      * Focusable elements that are, or sit inside, aria-hidden="true" but are still rendered. Elements hidden
      * by the page's stylesheets (e.g. a closed Bootstrap modal: .modal { display: none }) are not rendered. Where a rule
      * the parser cannot decide (behind an undecidable @supports or an unsupported selector) may hide the element or an
-     * ancestor (CssParser::possiblyHidden()), the finding is a Warning tagged `approximate` (R14).
+     * ancestor, or the document has a stylesheet the parser did not read (a `<link>` or an `@import`, A4), the finding
+     * is a Warning tagged `approximate` (CssParser::possiblyHidden(), R14).
      */
     protected function checkHiddenFocusable(): void
     {

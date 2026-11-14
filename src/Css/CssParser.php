@@ -136,7 +136,10 @@ class CssParser
     private const CLIPPED_ENTRY_BYTES = 128;
 
     /** Why a resolveColors() measurement is uncertain, in the order they are listed (see resolveColors()). */
-    private const UNCERTAINTIES = ['backdrop', 'colour', 'limit'];
+    private const UNCERTAINTIES = ['backdrop', 'colour', 'limit', 'stylesheets'];
+
+    /** Levels of @import followed from a fetched stylesheet (StylesheetInliner); deeper ones are not loaded. */
+    public const MAX_IMPORT_DEPTH = 3;
 
     /**
      * A function in a background layer that paints an image: url(), image(), image-set(), cross-fade(), element(),
@@ -384,6 +387,9 @@ class CssParser
     /** Whether the rules being parsed sit behind an @supports condition SupportsCondition cannot decide (their `maybe`). */
     private bool $undecided = false;
 
+    /** Stylesheets of the document the parser did not read: stylesheet links and leading @import rules that apply (missingStylesheets()). */
+    private int $missingStylesheets = 0;
+
     protected bool $indexed = false;
 
     protected bool $truncated = false;
@@ -573,9 +579,11 @@ class CssParser
         $this->cachedBytes = 0;
 
         $media = $document->styleSheetMedia();
+        $this->missingStylesheets = count($document->stylesheetLinks());
 
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
             $condition = HtmlDocument::mediaCondition($media[$sheet] ?? '');
+            $this->missingStylesheets += $this->unresolvedImports($css);
 
             foreach ($this->sheetRules($css, count($this->rules), $condition === false ? null : $condition) as $rule) {
                 $rule['sheet'] = $sheet;
@@ -750,6 +758,218 @@ class CssParser
     public function indexBuilds(): int
     {
         return $this->indexBuilds;
+    }
+
+    /**
+     * The number of stylesheets of the parsed document the parser did not read (C3): `<link>` stylesheets still in the
+     * document (HtmlDocument::stylesheetLinks(); StylesheetInliner replaces the ones it loads) and the leading @import
+     * rules of its <style> elements that apply to a screen (unresolvedImports()). When it is not 0 the cascade is
+     * incomplete: every resolveColors() is uncertain (`stylesheets`) and every element possibly hidden (possiblyHidden()).
+     */
+    public function missingStylesheets(): int
+    {
+        return $this->missingStylesheets;
+    }
+
+    /**
+     * The @import rules of a stylesheet that a browser would load for the screen: the leading ones (leadingStatements()),
+     * with a URL (importRule()), whose conditions do not rule out the screen (importApplies()).
+     */
+    private function unresolvedImports(string $css): int
+    {
+        if (stripos($css, '@import') === false) {
+            return 0;
+        }
+
+        $count = 0;
+
+        foreach (self::leadingStatements($css) as [$name, $prelude]) {
+            $import = $name === 'import' ? self::importRule($prelude) : null;
+
+            if ($import !== null && self::importApplies($import)) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * The statements at the start of a stylesheet, before which an @import may stand (CSS Cascade 5): `@charset`,
+     * `@import`, `@layer` statements and unknown statement at-rules (browsers drop those), with whitespace, comments and
+     * `<!--` / `-->` between them. Each is [lowercase name, prelude, offset of its `@`, offset after its `;`]; the end of the
+     * input also ends a statement. The list ends before the first other token: a style rule, an at-rule with a block or
+     * `@namespace` (after which an @import is invalid). One linear pass: strings and parentheses are skipped by strcspn().
+     *
+     * @return list<array{0: string, 1: string, 2: int, 3: int}>
+     */
+    public static function leadingStatements(string $css): array
+    {
+        $statements = [];
+        $length = strlen($css);
+        $position = 0;
+
+        while (true) {
+            while ($position < $length) {
+                $position += strspn($css, " \t\n\r\f", $position);
+
+                if (substr_compare($css, '/*', $position, 2) === 0) {
+                    $end = strpos($css, '*/', $position + 2);
+                    $position = $end === false ? $length : $end + 2;
+                } elseif (substr_compare($css, '<!--', $position, 4) === 0) {
+                    $position += 4;
+                } elseif (substr_compare($css, '-->', $position, 3) === 0) {
+                    $position += 3;
+                } else {
+                    break;
+                }
+            }
+
+            if ($position >= $length || $css[$position] !== '@' || preg_match('/@([\w-]++)/A', $css, $m, 0, $position) !== 1) {
+                return $statements;
+            }
+
+            $name = strtolower($m[1]);
+            $end = self::statementEnd($css, $position + strlen($m[0]));
+
+            if ($name === 'namespace' || $end === null) {
+                return $statements;
+            }
+
+            $statements[] = [$name, substr($css, $position + strlen($m[0]), $end - $position - strlen($m[0])), $position, min($end + 1, $length)];
+            $position = $end + 1;
+        }
+    }
+
+    /** Offset of the `;` that ends the statement from $position (the length at the end of the input), null at a brace first; strings and parentheses respected. */
+    private static function statementEnd(string $css, int $position): ?int
+    {
+        $length = strlen($css);
+        $depth = 0;
+
+        while (($position += strcspn($css, ';{}()"\'\\', $position)) < $length) {
+            $char = $css[$position];
+
+            if ($char === '{' || $char === '}') {
+                return null;
+            }
+
+            if ($char === ';' && $depth === 0) {
+                return $position;
+            }
+
+            if ($char === '"' || $char === "'") {
+                $position = self::stringEnd($css, $position);
+            } elseif ($char === '\\') {
+                $position++;
+            } elseif ($char === '(') {
+                $depth++;
+            } elseif ($char === ')' && $depth > 0) {
+                $depth--;
+            }
+
+            $position++;
+        }
+
+        return $length;
+    }
+
+    /** Offset of the quote that closes the string opened at $open (escapes respected), or of the last character when it is not closed. */
+    private static function stringEnd(string $value, int $open): int
+    {
+        $quote = $value[$open];
+        $length = strlen($value);
+
+        for ($position = $open + 1; ($position += strcspn($value, $quote.'\\', $position)) < $length; $position += 2) {
+            if ($value[$position] === $quote) {
+                return $position;
+            }
+        }
+
+        return $length - 1;
+    }
+
+    /**
+     * The parts of an @import prelude (CSS Cascade 5): the URL of a string or url(), the layer (null: none, '': the
+     * anonymous `layer`), the condition of supports() (null: none) and the media query list; null without a URL or with
+     * an unclosed url() or supports(). Linear in the prelude.
+     *
+     * @return array{url: string, layer: ?string, supports: ?string, media: string}|null
+     */
+    public static function importRule(string $prelude): ?array
+    {
+        $length = strlen($prelude);
+        $position = strspn($prelude, " \t\n\r\f");
+
+        if ($position < $length && ($prelude[$position] === '"' || $prelude[$position] === "'")) {
+            $end = self::stringEnd($prelude, $position);
+            $url = substr($prelude, $position + 1, $end - $position - 1);
+            $position = $end + 1;
+        } elseif (strncasecmp(substr($prelude, $position, 4), 'url(', 4) === 0) {
+            $position += 4 + strspn($prelude, " \t\n\r\f", $position + 4);
+            $quoted = $position < $length && ($prelude[$position] === '"' || $prelude[$position] === "'");
+            $end = $quoted ? self::stringEnd($prelude, $position) : $position + strcspn($prelude, ')', $position);
+            $url = $quoted ? substr($prelude, $position + 1, $end - $position - 1) : rtrim(substr($prelude, $position, $end - $position), " \t\n\r\f");
+            $position = $quoted ? $end + 1 + strspn($prelude, " \t\n\r\f", $end + 1) : $end;
+
+            if ($position >= $length || $prelude[$position] !== ')') {
+                return null;
+            }
+
+            $position++;
+        } else {
+            return null;
+        }
+
+        $url = preg_replace('/\\\\(.)/s', '$1', $url) ?? $url;
+        $layer = $supports = null;
+        $position += strspn($prelude, " \t\n\r\f", $position);
+
+        if (strncasecmp(substr($prelude, $position, 5), 'layer', 5) === 0) {
+            $next = $prelude[$position + 5] ?? ' ';
+
+            if ($next === '(') {
+                $close = self::closingParenthesis($prelude, $position + 5);
+
+                if ($close === null) {
+                    return null;
+                }
+
+                $layer = trim(substr($prelude, $position + 6, $close - $position - 6), " \t\n\r\f");
+                $position = $close + 1;
+            } elseif (ctype_space($next)) {
+                $layer = '';
+                $position += 5;
+            }
+        }
+
+        $position += strspn($prelude, " \t\n\r\f", $position);
+
+        if (strncasecmp(substr($prelude, $position, 9), 'supports(', 9) === 0) {
+            $close = self::closingParenthesis($prelude, $position + 8);
+
+            if ($close === null) {
+                return null;
+            }
+
+            $supports = trim(substr($prelude, $position + 9, $close - $position - 9), " \t\n\r\f");
+            $position = $close + 1;
+        }
+
+        return ['url' => $url, 'layer' => $layer, 'supports' => $supports, 'media' => trim(substr($prelude, $position), " \t\n\r\f")];
+    }
+
+    /**
+     * Whether a browser applies the sheet of an @import (importRule()) to the screen: its media query list applies
+     * (HtmlDocument::mediaAppliesToScreen()) and its supports() condition is not false (SupportsCondition::evaluate(),
+     * a declaration as `(declaration)`).
+     *
+     * @param  array{url: string, layer: ?string, supports: ?string, media: string}  $import
+     */
+    public static function importApplies(array $import): bool
+    {
+        return HtmlDocument::mediaAppliesToScreen($import['media'])
+            && ($import['supports'] === null || SupportsCondition::evaluate('('.$import['supports'].')') !== false);
     }
 
     /** @return list<string> */
@@ -1312,9 +1532,11 @@ class CssParser
      * - `limit`: the index is truncated (isTruncated()), or a maybe rule may hide the text: by display, visibility or
      *   content-visibility on the element or an ancestor (maybeHidden()), or by clipping it to nothing or keeping it from
      *   being clipped (clippingUncertain()).
+     * - `stylesheets`: the document has stylesheets the parser did not read (missingStylesheets()), so any rule may be
+     *   missing from the cascade. Like `limit` it leaves no colour unknown: the measurement is an estimate.
      * `approximate` is true exactly when `uncertainty` is not empty.
      *
-     * @return array{foreground: Color, background: Color, approximate: bool, uncertainty: list<'backdrop'|'colour'|'limit'>}
+     * @return array{foreground: Color, background: Color, approximate: bool, uncertainty: list<'backdrop'|'colour'|'limit'|'stylesheets'>}
      */
     public function resolveColors(DOMElement $element): array
     {
@@ -1332,7 +1554,7 @@ class CssParser
         }
 
         $limit = $this->truncated || $this->maybeHidden($element, $key) || $this->clippingUncertain($element);
-        $uncertainty = $this->uncertainty($backgroundUncertainty, $foregroundUncertainty, $opacityUncertainty, $this->layerOrderUnknown ? ['colour'] : [], $limit ? ['limit'] : []);
+        $uncertainty = $this->uncertainty($backgroundUncertainty, $foregroundUncertainty, $opacityUncertainty, $this->layerOrderUnknown ? ['colour'] : [], $limit ? ['limit'] : [], $this->missingStylesheets > 0 ? ['stylesheets'] : []);
 
         return [
             'foreground' => $foreground,
@@ -1467,13 +1689,14 @@ class CssParser
     }
 
     /**
-     * Whether a maybe rule may hide the element or an ancestor although the parsed CSS does not (hidesElement()): a rule
-     * behind an undecidable @supports condition or one whose selector cannot be evaluated (maybeHidden()). A finding
-     * that holds only for rendered elements is then approximate (R14).
+     * Whether a rule the parser did not decide may hide the element or an ancestor although the parsed CSS does not
+     * (hidesElement()): a rule behind an undecidable @supports condition or one whose selector cannot be evaluated
+     * (maybeHidden()), or any rule of a stylesheet the parser did not read (missingStylesheets(), A4). A finding that
+     * holds only for rendered elements is then approximate (R14).
      */
     public function possiblyHidden(DOMElement $element): bool
     {
-        return $this->maybeHidden($element, $this->nodeKey($element));
+        return $this->missingStylesheets > 0 || $this->maybeHidden($element, $this->nodeKey($element));
     }
 
     /**
@@ -2018,7 +2241,7 @@ class CssParser
      * The uncertainties named in the lists, once each, in the order of UNCERTAINTIES.
      *
      * @param  list<string>  ...$lists
-     * @return list<'backdrop'|'colour'|'limit'>
+     * @return list<'backdrop'|'colour'|'limit'|'stylesheets'>
      */
     private function uncertainty(array ...$lists): array
     {
@@ -2389,7 +2612,7 @@ class CssParser
         $own = $this->baseCascadeApplies($name, $media, $supports);
         $context = max($this->layerContext, $own);
         // A condition that holds only sometimes extends the key (linear in the prelude; a hash keeps the key short).
-        $key = $own === self::IN_BASE_AT_SOME_VIEWPORTS ? md5($this->conditionKey."\0".$name.' '.(preg_replace('/\s++/', ' ', trim($prelude)) ?? $prelude)) : $this->conditionKey;
+        $key = $own === self::IN_BASE_AT_SOME_VIEWPORTS ? md5($this->conditionKey."\0".$name.' '.self::conditionText($prelude)) : $this->conditionKey;
 
         // Rules behind a media feature, @supports or @container apply only sometimes (`conditional`); media
         // features and container queries also put a condition on them (see the class description).
@@ -2400,6 +2623,18 @@ class CssParser
         };
 
         return [$conditional || ($name === 'media' ? str_contains($prelude, '(') : in_array($name, ['supports', 'container'], true)), $inner, $layer, $context, $this->undecided || $supports === null, $key];
+    }
+
+    /**
+     * A condition prelude in a form that compares equal for the same condition: lowercase, whitespace next to `(`, `)`,
+     * `:` and `,` dropped, other runs collapsed to one space. Linear: every run is collapsed first, so each pattern
+     * looks at most one space on either side of a character.
+     */
+    private static function conditionText(string $prelude): string
+    {
+        $text = preg_replace('/\s++/', ' ', strtolower(trim($prelude))) ?? $prelude;
+
+        return preg_replace('/ ?([():,]) ?/', '$1', $text) ?? $text;
     }
 
     /**
@@ -4969,7 +5204,7 @@ class CssParser
     }
 
     /** Index of the parenthesis closing the one at $open (quotes respected; with $escapes, backslash escapes outside them too), or null. */
-    private function closingParenthesis(string $value, int $open, bool $escapes = false): ?int
+    private static function closingParenthesis(string $value, int $open, bool $escapes = false): ?int
     {
         $depth = 0;
         $quote = null;

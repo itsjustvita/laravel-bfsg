@@ -1226,10 +1226,11 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
     }
 
     // C1: every fixture (only selectors 3.1.0 supports carry contrast properties there) keeps its recorded 3.1.0 findings.
+    // tailwind-v4-app.html carries `:where()` dark variants 3.1.0 does not support (FixtureExpectationsTest covers it).
     public function test_supported_selector_pages_are_unchanged(): void
     {
         $expected = json_decode((string) file_get_contents(__DIR__.'/../Fixtures/contrast-expectations.json'), true, flags: JSON_THROW_ON_ERROR);
-        $files = glob(__DIR__.'/../Fixtures/*.html') ?: [];
+        $files = array_values(array_filter(glob(__DIR__.'/../Fixtures/*.html') ?: [], fn (string $file) => basename($file) !== 'tailwind-v4-app.html'));
         $this->assertSame(array_keys($expected), array_map('basename', $files), 'every fixture is recorded');
 
         foreach ($files as $file) {
@@ -1269,5 +1270,26 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
 
         $this->assertSame([], $analyzer->analyze(HtmlDocument::fromHtml($this->page('', '<p style="color:#000;background-color:#fff">Fine</p>'))));
+    }
+
+    // C3: with a stylesheet the parser never saw, a failing estimate is a Warning tagged approximate, a passing one is
+    // silent (no unknown colour, so no contrast.unverifiable), and one document Notice says why.
+    public function test_missing_stylesheets_make_failures_approximate_and_passes_silent(): void
+    {
+        $html = '<html><head><link rel="stylesheet" href="/app.css"><style>@import url(theme.css); .muted{color:#999} .gone{display:none}</style></head><body>'
+            .'<p class="muted">Muted</p><p>Plain</p><p class="gone muted">Hidden</p><p style="color:#aaa;background:#fff">Inline</p></body></html>';
+        $violations = $this->analyze($html);
+
+        $muted = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.muted', severity: Severity::Warning);
+        $this->assertSame(['approximate'], $muted->tags);
+        $this->assertTrue($muted->meta['approximate']);
+        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p', severity: Severity::Warning);
+        $this->assertNoViolation($violations, 'contrast.unverifiable');
+        $this->assertViolationCount($violations, 'contrast.insufficient', 2);
+
+        $notice = $this->assertHasViolation($violations, 'contrast.stylesheets_missing', severity: Severity::Notice);
+        $this->assertSame(['count' => 2], $notice->params);
+        $this->assertNull($notice->element);
+        $this->assertCount(3, $violations);
     }
 }

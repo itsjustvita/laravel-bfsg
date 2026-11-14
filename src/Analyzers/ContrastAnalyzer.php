@@ -30,7 +30,7 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     private const SKIPPED_TAGS = ['script', 'style', 'noscript', 'template', 'title'];
 
-    /** Uncertainties of resolveColors() that leave a colour unknown; `limit` alone (a truncated index) does not. */
+    /** Uncertainties of resolveColors() that leave a colour unknown; `limit` (a truncated index) and `stylesheets` (a stylesheet not read) alone do not. */
     private const UNKNOWN_COLOUR = ['backdrop', 'colour'];
 
     /** Elements a label can label (HTML labelable elements; input unless type=hidden). */
@@ -124,6 +124,11 @@ class ContrastAnalyzer extends BaseAnalyzer
             }
         }
 
+        // One notice for the document says why its failures are estimates (C3): a stylesheet the parser did not read.
+        if ($parser->missingStylesheets() > 0) {
+            $this->report('stylesheets_missing', Severity::Notice, '1.4.3', null, ['count' => $parser->missingStylesheets()]);
+        }
+
         if ($truncated) {
             $this->report('analysis_truncated', Severity::Notice, '1.4.3', null, ['limit' => $measured]);
         }
@@ -204,7 +209,7 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     /**
      * The verdict (spec D2), null when the text passes. A failure is an error when it is definite, else a warning tagged
-     * `approximate`: an unknown colour or a truncated index (resolveColors()['uncertainty']), or an unknown size with a ratio
+     * `approximate`: an unknown colour, a truncated index or a stylesheet the parser did not read (resolveColors()['uncertainty']), or an unknown size with a ratio
      * that meets the large-text threshold. A pass with an unknown colour is only the notice `unverifiable`, at any level
      * (R36). At level AAA, any other AA pass that fails AAA is the notice tagged `aaa`.
      *
