@@ -9,6 +9,7 @@ use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
 use ItsJustVita\LaravelBfsg\Severity;
 use ItsJustVita\LaravelBfsg\Tests\Support\AnalyzerTestCase;
+use ItsJustVita\LaravelBfsg\Violation;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 
@@ -842,6 +843,162 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
 
         $this->assertSame(['#999999' => 111, '#aaaaaa' => 89, '#bbbbbb' => 1], $occurrences);
+    }
+
+    /** Tailwind v4 theme tokens of contrast report C1 (oklch, as a v4 build declares them). */
+    private const TAILWIND_V4_THEME = '@layer theme, base, components, utilities;
+@layer theme{:root,:host{--color-white:#fff;--color-gray-300:oklch(87.2% .01 258.338);
+  --color-gray-400:oklch(70.7% .022 261.325);--color-gray-500:oklch(55.1% .027 264.364);
+  --color-gray-600:oklch(44.6% .03 256.802);--color-gray-900:oklch(21% .034 264.665);--color-gray-950:oklch(13% .028 261.692)}}';
+
+    /** Contrast report C1, repro A: Tailwind v4 class-based dark mode (`@custom-variant dark (&:where(.dark, .dark *))`). */
+    private function tailwindDarkPage(string $text, string $darkText): string
+    {
+        return '<html lang="en" class="dark"><head><style>'.self::TAILWIND_V4_THEME.'
+@layer utilities{
+  .bg-white{background-color:var(--color-white)}
+  .text-'.$text.'{color:var(--color-'.$text.')}
+  .dark\:bg-gray-950{&:where(.dark,.dark *){background-color:var(--color-gray-950)}}
+  .dark\:text-'.$darkText.'{&:where(.dark,.dark *){color:var(--color-'.$darkText.')}}
+}</style></head>
+<body class="bg-white dark:bg-gray-950"><p class="text-'.$text.' dark:text-'.$darkText.'">Muted copy</p></body></html>';
+    }
+
+    /**
+     * Rule D2 for a rule the parser cannot evaluate: never a definite Error; where the browser fails ($browserFails), a
+     * Warning tagged `approximate` or the Notice `contrast.unverifiable` instead of nothing.
+     *
+     * @param  list<Violation>  $violations
+     */
+    private function assertUncertainVerdict(array $violations, bool $browserFails): void
+    {
+        $contrast = array_values(array_filter($violations, fn ($violation) => str_starts_with($violation->key, 'contrast.')));
+        $found = implode('; ', array_map(fn ($violation) => $violation->key.' '.$violation->severity->value.' '.implode(',', $violation->tags).' '.($violation->params['ratio'] ?? ''), $contrast)) ?: '(none)';
+
+        foreach ($contrast as $violation) {
+            $this->assertNotSame(Severity::Error, $violation->severity, 'no definite Error: '.$found);
+        }
+
+        if ($browserFails) {
+            $uncertain = array_filter($contrast, fn ($violation) => ($violation->key === 'contrast.insufficient' && $violation->severity === Severity::Warning && in_array('approximate', $violation->tags, true))
+                || ($violation->key === 'contrast.unverifiable' && $violation->severity === Severity::Notice));
+            $this->assertNotSame([], $uncertain, 'a Warning or Notice where the browser fails: '.$found);
+        }
+    }
+
+    // C1, repro A: the dark variant (0,1,0 in a browser, later than text-gray-400) renders #d1d5dc on #030712, 13.67:1.
+    public function test_tailwind_v4_class_dark_mode_is_not_a_definite_error(): void
+    {
+        $violations = $this->analyze($this->tailwindDarkPage('gray-400', 'gray-300'));
+
+        $this->assertUncertainVerdict($violations, false);
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', severity: Severity::Warning);
+        $this->assertSame(['approximate'], $violation->tags);
+        $this->assertSame('2.60', $violation->params['ratio'], 'the estimate is the light theme');
+    }
+
+    // C1: `text-gray-600 dark:text-gray-500` renders #6a7282 on #030712, 4.16:1; the light estimate passes at 7.56:1.
+    public function test_tailwind_v4_class_dark_mode_silent_pass_becomes_a_notice(): void
+    {
+        $violations = $this->analyze($this->tailwindDarkPage('gray-600', 'gray-500'));
+
+        $this->assertUncertainVerdict($violations, true);
+        $this->assertHasViolation($violations, 'contrast.unverifiable', severity: Severity::Notice);
+    }
+
+    /** @return array<string, array{0: string, 1: string, 2: bool}> contrast report C1 rows (daisyUI 5 left out): CSS, body, whether the browser fails */
+    public static function unsupportedSelectorRows(): array
+    {
+        $theme = self::TAILWIND_V4_THEME;
+
+        return [
+            'Tailwind v4 odd:' => [$theme.'@layer utilities{.text-gray-500{color:var(--color-gray-500)} .odd\:bg-gray-900{&:nth-child(odd){background-color:var(--color-gray-900)}}}',
+                '<table><tbody><tr class="odd:bg-gray-900"><td class="text-gray-500">Row 1</td></tr><tr class="odd:bg-gray-900"><td class="text-gray-500">Row 2</td></tr></tbody></table>', true],
+            'Tailwind v4 *:' => [$theme.'@layer utilities{.\*\:text-gray-400{:is(&>*){color:var(--color-gray-400)}}}',
+                '<ul class="*:text-gray-400"><li>Item</li></ul>', true],
+            'typography :where()' => ['.prose :where(blockquote):not(:where([class~="not-prose"],[class~="not-prose"] *)){color:#9ca3af}',
+                '<div class="prose"><blockquote>Quote</blockquote></div>', true],
+            ':is(.card,.panel) p' => [':is(.card,.panel) p{color:#fff} .card{background:#111}', '<div class="card"><p>Text</p></div>', false],
+            ':where(.card) p' => [':where(.card) p{color:#fff} .card{background:#111}', '<div class="card"><p>Text</p></div>', false],
+            'tr:nth-child(even)' => ['td{color:#767676} tr:nth-child(even){background:#e5e5e5}', '<table><tr><td>One</td></tr><tr><td>Two</td></tr></table>', true],
+            'h2 + p' => ['h2 + p{background:#111} p{color:#222}', '<h2>Title</h2><p>Text</p>', true],
+            'a:not(.btn,.link) fails' => ['a:not(.btn,.link){color:#aaa}', '<p><a href="/x">Link</a></p>', true],
+            'a:not(.btn,.link) passes' => ['a{color:#aaa} a:not(.btn,.link){color:#111}', '<p><a href="/x">Link</a></p>', false],
+            'p:first-of-type fails' => ['p:first-of-type{color:#aaa}', '<p>First</p>', true],
+            'p:first-of-type passes' => ['p{color:#aaa} p:first-of-type{color:#111}', '<p>First</p>', false],
+            'a:any-link fails' => ['a:any-link{color:#aaa}', '<a href="/x">Link</a>', true],
+            'a:any-link passes' => ['a{color:#aaa} a:any-link{color:#111}', '<a href="/x">Link</a>', false],
+            '.card:has(img) fails (inherited)' => ['.card:has(img){color:#eee}', '<div class="card"><img src="/a.png" alt=""><p>Text</p></div>', true],
+            '.card:has(img) passes' => ['.card{color:#eee} .card:has(img){background:#111}', '<div class="card"><img src="/a.png" alt=""><p>Text</p></div>', false],
+            'opacity behind :has()' => ['p{color:#555} .card:has(img) p{opacity:.3}', '<div class="card"><img src="/a.png" alt=""><p>Text</p></div>', true],
+            'font-size behind :has()' => ['.big{font-size:24px;color:#888} .card:has(img) .big{font-size:12px}', '<div class="card"><img src="/a.png" alt=""><p class="big">Text</p></div>', true],
+            'font-weight behind :has()' => ['.big{font-size:19px;font-weight:700;color:#888} .card:has(img) .big{font-weight:400}', '<div class="card"><img src="/a.png" alt=""><p class="big">Text</p></div>', true],
+        ];
+    }
+
+    // C1: a rule whose selector cannot be evaluated and that sets a deciding property makes the verdict uncertain.
+    #[DataProvider('unsupportedSelectorRows')]
+    public function test_unsupported_selector_rules_make_the_verdict_uncertain(string $css, string $body, bool $browserFails): void
+    {
+        $this->assertUncertainVerdict($this->analyze($this->page($css, $body)), $browserFails);
+    }
+
+    // C1, Tailwind 3.4.1+ `darkMode: 'selector'`: 12.04:1 in a browser; the light estimate (2.54:1) is only a Warning.
+    public function test_tailwind_v3_selector_dark_mode_is_not_a_definite_error(): void
+    {
+        $css = '.bg-white{--tw-bg-opacity:1;background-color:rgb(255 255 255 / var(--tw-bg-opacity))}'
+            .'.text-gray-400{--tw-text-opacity:1;color:rgb(156 163 175 / var(--tw-text-opacity))}'
+            .'.dark\:bg-gray-900:where(.dark, .dark *){--tw-bg-opacity:1;background-color:rgb(17 24 39 / var(--tw-bg-opacity))}'
+            .'.dark\:text-gray-300:where(.dark, .dark *){--tw-text-opacity:1;color:rgb(209 213 219 / var(--tw-text-opacity))}';
+        $html = '<html lang="en" class="dark"><head><style>'.$css.'</style></head><body class="bg-white dark:bg-gray-900"><p class="text-gray-400 dark:text-gray-300">Muted</p></body></html>';
+
+        $this->assertUncertainVerdict($this->analyze($html), false);
+    }
+
+    // C1: a maybe rule that cannot beat the definite winner leaves the verdict definite.
+    public function test_unsupported_selector_rule_that_cannot_win_keeps_the_error(): void
+    {
+        $css = 'p#t{color:#aaa} p:first-of-type{color:#111} @layer a{.x:has(b) p{background:#111}} p{background:#fff}';
+
+        $this->assertHasViolation($this->analyze($this->page($css, '<div class="x"><p id="t">Text</p></div>')), 'contrast.insufficient', severity: Severity::Error);
+    }
+
+    // C1: a rule behind an unsupported selector that sets no deciding property changes nothing.
+    public function test_unsupported_selector_rule_without_contrast_properties_changes_nothing(): void
+    {
+        $css = '.low{color:#aaa} .ok{color:#111}';
+        $body = '<div class="card"><img src="/a.png" alt=""><p class="low">Low</p><p class="ok">Fine</p><p>Plain</p></div>';
+        $without = $this->analyze($this->page($css, $body));
+
+        $this->assertHasViolation($without, 'contrast.insufficient', severity: Severity::Error);
+        $this->assertEquals($without, $this->analyze($this->page($css.' .card:has(img){margin:0} .card:has(img) p{line-height:2;--unused:1}', $body)));
+    }
+
+    // C1, C2 review: a revealing rule behind an unsupported selector blocks the visually-hidden exemption.
+    public function test_revealing_rule_behind_an_unsupported_selector_measures_sr_only_text(): void
+    {
+        $css = self::TAILWIND_SR_ONLY.' .wrap:has(b) .sr-only{position:static}';
+        $body = '<div class="wrap"><b>Bold</b><button type="button" class="text-gray-400"><span class="sr-only">Close menu</span></button></div>';
+
+        $this->assertHasViolation($this->analyze($this->page($css, $body)), 'contrast.insufficient', element: 'span.sr-only');
+    }
+
+    // C1: every fixture (only selectors 3.1.0 supports carry contrast properties there) keeps its recorded 3.1.0 findings.
+    public function test_supported_selector_pages_are_unchanged(): void
+    {
+        $expected = json_decode((string) file_get_contents(__DIR__.'/../Fixtures/contrast-expectations.json'), true, flags: JSON_THROW_ON_ERROR);
+        $files = glob(__DIR__.'/../Fixtures/*.html') ?: [];
+        $this->assertSame(array_keys($expected), array_map('basename', $files), 'every fixture is recorded');
+
+        foreach ($files as $file) {
+            $violations = (new ContrastAnalyzer(level: 'AA'))->analyze(HtmlDocument::fromHtml((string) file_get_contents($file)));
+            $actual = array_map(fn ($violation) => [
+                'key' => $violation->key, 'severity' => $violation->severity->value, 'rule' => $violation->rule, 'element' => $violation->element,
+                'selector' => $violation->selector, 'params' => $violation->params, 'meta' => $violation->meta, 'tags' => $violation->tags,
+            ], $violations);
+
+            $this->assertSame($expected[basename($file)], json_decode((string) json_encode($actual), true), basename($file));
+        }
     }
 
     public function test_state_of_a_document_whose_analysis_threw_does_not_leak_into_the_next(): void

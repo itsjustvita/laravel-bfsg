@@ -345,4 +345,35 @@ class CssIndexBudgetTest extends TestCase
 
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('index build took %.2f s', $elapsed));
     }
+
+    // C1: 20 000 universal unsupported colour rules over 3 000 distinct chains stay within a memory bound.
+    public function test_unsupported_colour_rules_stay_bounded(): void
+    {
+        $document = HtmlDocument::fromHtml(ContrastPerformanceTest::unsupportedColourPage(20000));
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+
+        $violations = (new ContrastAnalyzer)->analyze($document);
+
+        $this->assertLessThan(64 * 1048576, memory_get_peak_usage(true) - $before, sprintf('peak grew by %.0f MB', (memory_get_peak_usage(true) - $before) / 1048576));
+        $this->assertSame([], array_filter($violations, fn ($violation) => $violation->severity === Severity::Error), 'never a definite Error');
+    }
+
+    // C1: maybe rules without custom properties have their own entry budget (equal to the custom-property one): beyond it
+    // the result is `limit`, never silence, and the custom-property maybe rules keep their budget.
+    public function test_maybe_rule_index_entries_are_capped_separately(): void
+    {
+        $css = ':root{--fg:#999}'.implode('', array_map(fn (int $i): string => "p:nth-child($i){color:#111}", range(1, 400)))
+            .' li:nth-child(odd){--fg:#111} .c{color:#aaa}';
+        $document = HtmlDocument::fromHtml('<!doctype html><html lang="en"><head><title>x</title><style>'.$css.'</style></head><body>'
+            .str_repeat('<p class="c">Some text</p>', 3000).'<ul><li id="t">x</li></ul></body></html>');
+        $parser = (new CssParser)->parse($document)->buildIndex();
+
+        $this->assertTrue($parser->isTruncated(), 'rules beyond the entry cap are skipped');
+        $this->assertSame(['#999', true], $parser->substituteFor($document->elementsById()['t'], 'var(--fg)'), 'the custom-property maybe rule is still indexed');
+
+        $violations = (new ContrastAnalyzer)->analyze($document);
+        $finding = array_values(array_filter($violations, fn ($violation) => $violation->key === 'contrast.insufficient'))[0];
+        $this->assertSame([Severity::Warning, ['approximate']], [$finding->severity, $finding->tags]);
+    }
 }

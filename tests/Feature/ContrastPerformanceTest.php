@@ -204,4 +204,50 @@ class ContrastPerformanceTest extends TestCase
         $this->assertSame([], $violations[0]->tags, 'the index is not truncated');
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
+
+    /** @return array<string, array{0: int, 1: bool}> universal unsupported colour rules and whether they exceed MAX_INDEXED_RULES */
+    public static function unsupportedColourRules(): array
+    {
+        return ['20 000 rules (beyond the rule budget)' => [20000, true], '1 990 rules (all indexed)' => [1990, false]];
+    }
+
+    // C1: universal maybe rules (`:has(.qN)` reduces to nothing) are folded once per index build, so 3 000 elements with
+    // distinct chains cost one look-up per property each, not one per rule. Beyond MAX_INDEXED_RULES the result is
+    // `limit`; within it the maybe rules make the colour uncertain. Either way #aaa on white (2.32:1) is a Warning.
+    #[Group('performance')]
+    #[DataProvider('unsupportedColourRules')]
+    public function test_twenty_thousand_unsupported_colour_rules_stay_in_budget(int $rules, bool $truncated): void
+    {
+        $html = self::unsupportedColourPage($rules);
+        $this->assertLessThan(2 * 1024 * 1024, strlen($html));
+        $document = HtmlDocument::fromHtml($html);
+        $texts = $document->query('//p');
+        $parser = (new CssParser)->parse($document)->buildIndex();
+
+        $start = microtime(true);
+        $uncertainty = array_unique(array_map(fn (DOMElement $element): string => implode(',', $parser->resolveColors($element)['uncertainty']), $texts));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertCount(3000, $texts);
+        $this->assertSame([$truncated ? 'colour,limit' : 'colour'], array_values($uncertainty));
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('resolveColors() took %.2f s', $elapsed));
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $findings = array_values(array_filter($violations, fn (Violation $violation) => $violation->key === 'contrast.insufficient'));
+        $this->assertSame([Severity::Warning], array_values(array_unique(array_map(fn (Violation $violation) => $violation->severity, $findings), SORT_REGULAR)));
+        $this->assertSame('2.32', $findings[0]->params['ratio']);
+        $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+    }
+
+    /** `.c{color:#aaa}`, then $rules universal unsupported colour rules (`:has(.qN){color:…}`), and 3 000 paragraphs in sections with distinct classes. */
+    public static function unsupportedColourPage(int $rules): string
+    {
+        $css = '.c{color:#aaa} '.implode('', array_map(fn (int $i): string => sprintf(':has(.q%d){color:#%06x}', $i, $i), range(1, $rules)));
+        $body = implode('', array_map(fn (int $i): string => "<section class=\"s$i\"><p class=\"c\">x</p></section>", range(1, 3000)));
+
+        return '<!DOCTYPE html><html lang="en"><head><title>Rules</title><style>'.$css.'</style></head><body>'.$body.'</body></html>';
+    }
 }

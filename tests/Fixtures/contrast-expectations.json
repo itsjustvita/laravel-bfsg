@@ -1,0 +1,51 @@
+{
+    "bootstrap-modal.html": [],
+    "card-pattern.html": [],
+    "data-grid-aria.html": [],
+    "laravel-form-get.html": [],
+    "tailwind-v4-marketing.html": [
+        {
+            "key": "contrast.insufficient",
+            "severity": "error",
+            "rule": "1.4.3",
+            "element": "p#fineprint.text-sm.text-gray-400",
+            "selector": "/html[1]/body[1]/main[1]/section[1]/p[1]",
+            "params": {
+                "ratio": "2.54",
+                "required": 4.5,
+                "foreground": "#9ca3af",
+                "background": "#ffffff"
+            },
+            "meta": {
+                "approximate": false,
+                "ratio": 2.54,
+                "large": false,
+                "occurrences": 1,
+                "selectors": []
+            },
+            "tags": []
+        },
+        {
+            "key": "contrast.insufficient",
+            "severity": "error",
+            "rule": "1.4.3",
+            "element": "p#v4-muted.text-sm.text-gray-300",
+            "selector": "/html[1]/body[1]/main[1]/section[2]/p[1]",
+            "params": {
+                "ratio": "1.47",
+                "required": 4.5,
+                "foreground": "#d1d5dc",
+                "background": "#ffffff"
+            },
+            "meta": {
+                "approximate": false,
+                "ratio": 1.47,
+                "large": false,
+                "occurrences": 1,
+                "selectors": []
+            },
+            "tags": []
+        }
+    ],
+    "typo3-german.html": []
+}

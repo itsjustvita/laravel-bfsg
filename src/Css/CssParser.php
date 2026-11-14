@@ -40,6 +40,26 @@ class CssParser
      */
     private const MAX_CUSTOM_INDEX_ENTRIES = 200000;
 
+    /**
+     * Index entries of maybe rules without custom properties (MAYBE_PROPERTIES only): a budget equal to and separate from
+     * MAX_CUSTOM_INDEX_ENTRIES, so they never push a custom-property rule out. The first rule that does not fit fills it:
+     * it and every later such rule are skipped without matching (truncated, `limit`).
+     */
+    private const MAX_MAYBE_INDEX_ENTRIES = 200000;
+
+    /**
+     * The properties that make a rule whose selector cannot be evaluated a maybe rule (spec C1): the ones that decide the
+     * text colour, the backdrop, the text alpha and the size and weight (resolveColors(), fontSizeLowerBoundPx(),
+     * boldness()), and CLIPPING_PROPERTIES for isVisuallyHidden(). Custom properties make one too (R20/R21).
+     */
+    private const MAYBE_PROPERTIES = [
+        'color' => true, 'background' => true, 'background-color' => true, 'background-image' => true, 'opacity' => true,
+        'font' => true, 'font-size' => true, 'font-weight' => true,
+    ];
+
+    /** The background properties the backdrop reads (background()): a maybe rule that could win one makes it uncertain. */
+    private const BACKGROUND_PROPERTIES = ['background', 'background-color', 'background-image'];
+
     /** User-action pseudo-classes: a selector that needs one outside parentheses never matches the base state that is measured. */
     private const USER_ACTION_STATE = '/:(?:hover|focus-visible|focus-within|focus|active|visited)(?![\w-])/Ai';
 
@@ -256,6 +276,12 @@ class CssParser
     /** Entries in customIndex and maybeIndex, counted against MAX_CUSTOM_INDEX_ENTRIES. */
     private int $customIndexEntries = 0;
 
+    /** Entries in maybeIndex of maybe rules without custom properties, counted against MAX_MAYBE_INDEX_ENTRIES. */
+    private int $maybeIndexEntries = 0;
+
+    /** @var array<string, list<int>>|null property of MAYBE_PROPERTIES => heaviest cascade weight among the universal maybe rules that declare it; null until prepareMaybeWeights() */
+    private ?array $universalMaybeWeights = null;
+
     /** Bytes counted for the rule entries nesting added, against MAX_NESTED_RULE_BYTES. */
     private int $nestedRuleBytes = 0;
 
@@ -451,7 +477,8 @@ class CssParser
         $this->document = $document;
         $this->rules = [];
         $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = $this->positioned = [];
-        $this->customIndexEntries = $this->nestedRuleBytes = $this->layerNames = $this->layerAppearances = 0;
+        $this->customIndexEntries = $this->maybeIndexEntries = $this->nestedRuleBytes = $this->layerNames = $this->layerAppearances = 0;
+        $this->universalMaybeWeights = null;
         $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = [];
         $this->indexed = false;
         $this->indexBuilds = 0;
@@ -511,7 +538,8 @@ class CssParser
     /**
      * Build the element index unless it exists. Rules carrying one of INDEXED_PROPERTIES and rules carrying only
      * custom properties have separate budgets (MAX_INDEXED_RULES, MAX_CUSTOM_PROPERTY_RULES), and custom-property and
-     * maybe rules together index at most MAX_CUSTOM_INDEX_ENTRIES matches: rules beyond a budget are skipped. The build
+     * maybe rules together index at most MAX_CUSTOM_INDEX_ENTRIES matches (maybe rules without custom properties
+     * MAX_MAYBE_INDEX_ENTRIES of their own): rules beyond a budget are skipped. The build
      * stops when the deadline (microtime(true) value; INDEX_TIME_BUDGET_SECONDS from the call when none is given)
      * passes. Each of these marks the results truncated (approximate).
      */
@@ -559,8 +587,8 @@ class CssParser
             $expression = $this->document === null ? null : $this->simpleSelectorToXpath($rule['selector']);
 
             if ($expression === null) {
-                if ($custom) {
-                    $this->indexMaybeRule($position, $rule, $tokens, $keys);
+                if ($custom || $this->declaresMaybeProperties($rule)) {
+                    $this->indexMaybeRule($position, $rule, $custom, $tokens, $keys);
                 }
 
                 continue;
@@ -998,7 +1026,7 @@ class CssParser
     public function calculateSpecificity(string $selector): array
     {
         $selector = preg_replace('/\\\\./', 'x', $selector) ?? $selector;
-        $selector = preg_replace('/:(?:not|is|where)\(/i', ' ', $selector) ?? $selector;
+        $selector = preg_replace('/:(?:not|is|where|has)\(/i', ' ', $selector) ?? $selector;
         $selector = str_replace(')', ' ', $selector);
 
         $ids = preg_match_all('/#[\w-]+/', $selector);
@@ -1129,7 +1157,8 @@ class CssParser
      *   are estimated by their first stop; a url() without a colour by the backdrop behind it;
      * - `colour`: an unresolvable or approximate var() substitution (substituteFor()), or a colour value Color can only
      *   approximate, in the text colour, the background or the opacity; or an element of that range paints its own
-     *   background inside an opacity group (opacity() below 1), whose compositing is not modelled;
+     *   background inside an opacity group (opacity() below 1), whose compositing is not modelled; or a maybe rule could
+     *   win the colour, a background property of that range or the opacity of the element or an ancestor (maybeDeclares());
      * - `limit`: the index is truncated (isTruncated()).
      * `approximate` is true exactly when `uncertainty` is not empty.
      *
@@ -1186,9 +1215,10 @@ class CssParser
         $node = $element->parentNode;
         [$parent, $inherited, $parentOwn] = $node instanceof DOMElement ? $this->opacityOf($node, $this->parentKey($key, $node)) : [1.0, [], 1.0];
         $declared = $this->declarations($element, $key)['opacity']['value'] ?? null;
+        $maybe = $this->maybeWins($element, $key, ['opacity']) ? ['colour'] : [];
 
         if ($declared === null) {
-            return $this->opacityCache[$key] = [$parent, $inherited, 1.0];
+            return $this->opacityCache[$key] = [$parent, $this->uncertainty($inherited, $maybe), 1.0];
         }
 
         [$own, $approximate] = $this->ownOpacity($element, $key, $declared, $parentOwn);
@@ -1198,10 +1228,86 @@ class CssParser
             [$own, $approximate] = $declared === null ? [1.0, false] : $this->ownOpacity($element, $key, $declared, $parentOwn);
         }
 
-        $uncertainty = $this->uncertainty($inherited, $approximate || $own === null ? ['colour'] : []);
+        $uncertainty = $this->uncertainty($inherited, $approximate || $own === null ? ['colour'] : [], $maybe);
         $own ??= 1.0;
 
         return $this->opacityCache[$key] = [max(0.0, min(1.0, $parent * $own)), $uncertainty, $own];
+    }
+
+    /**
+     * Whether a maybe rule (a rule whose selector cannot be evaluated, see indexMaybeRule()) could win $property in the
+     * element's cascade: one that covers the element declares it with more weight (cascadeWeight(), its layer included)
+     * than the element's winning declaration, or the element declares none, and with another value. Where one could,
+     * resolveColors() is uncertain (`colour`) and the size or weight unknown. One look-up per maybe rule covering the
+     * element; the universal maybe rules are folded once per index build (prepareMaybeWeights()).
+     */
+    public function maybeDeclares(DOMElement $element, string $property): bool
+    {
+        return $this->maybeWins($element, $this->nodeKey($element), [strtolower($property)]);
+    }
+
+    /**
+     * maybeDeclares() for any of $properties, with the element's node key.
+     *
+     * @param  list<string>  $properties
+     */
+    private function maybeWins(DOMElement $element, string $key, array $properties): bool
+    {
+        $this->buildIndex();
+        $universal = $this->universalMaybeWeights ?? $this->prepareMaybeWeights();
+
+        if ($universal === [] && ! isset($this->maybeIndex[$key])) {
+            return false;
+        }
+
+        $declarations = $this->declarations($element, $key);
+        $weights = $this->weightCache[$key] ?? [];
+
+        foreach ($properties as $name) {
+            if (isset($universal[$name]) && (! isset($weights[$name]) || $universal[$name] > $weights[$name])) {
+                return true;
+            }
+        }
+
+        foreach ($this->maybeIndex[$key] ?? [] as $position) {
+            $rule = $this->rules[$position];
+
+            foreach ($properties as $name) {
+                $declaration = $rule['properties'][$name] ?? null;
+
+                if ($declaration !== null && (! isset($weights[$name])
+                    || ($declaration['value'] !== $declarations[$name]['value'] && $this->cascadeWeight($rule, $declaration['important']) > $weights[$name]))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Once per index build: the heaviest cascade weight per MAYBE_PROPERTIES property among the universal maybe rules,
+     * which may match every element.
+     *
+     * @return array<string, list<int>>
+     */
+    private function prepareMaybeWeights(): array
+    {
+        $weights = [];
+
+        foreach ($this->universalMaybeRules as $position) {
+            $rule = $this->rules[$position];
+
+            foreach (array_intersect_key($rule['properties'], self::MAYBE_PROPERTIES) as $name => $declaration) {
+                $weight = $this->cascadeWeight($rule, $declaration['important']);
+
+                if (! isset($weights[$name]) || $weight > $weights[$name]) {
+                    $weights[$name] = $weight;
+                }
+            }
+        }
+
+        return $this->universalMaybeWeights = $weights;
     }
 
     /**
@@ -1599,6 +1705,11 @@ class CssParser
         }
 
         $parent = $element->parentNode instanceof DOMElement ? $this->fontSizeLowerBoundPx($element->parentNode) : 16.0;
+
+        if ($this->maybeWins($element, $key, ['font-size', 'font'])) {
+            return $this->fontSizeBoundCache[$key] = null; // a maybe rule may set another size
+        }
+
         $declared = $this->winningDeclaration($element, $key, 'font-size', 'font');
 
         if ($declared === null) {
@@ -1739,6 +1850,11 @@ class CssParser
         }
 
         $parent = fn (): ?float => $element->parentNode instanceof DOMElement ? $this->fontWeight($element->parentNode) : 400.0;
+
+        if ($this->maybeWins($element, $key, ['font-weight', 'font'])) {
+            return $this->fontWeightCache[$key] = null; // a maybe rule may set another weight
+        }
+
         $declared = $this->winningDeclaration($element, $key, 'font-weight', 'font');
 
         if ($declared === null) {
@@ -2927,44 +3043,52 @@ class CssParser
     }
 
     /**
-     * Index the matches of a custom-property-only or maybe rule within MAX_CUSTOM_INDEX_ENTRIES; a rule that does not fit
-     * is skipped, marks the index truncated and fills it, so later rules are skipped before any matching. Node paths are
-     * computed once per element ($keys keeps the element alive, so its object id stays unique).
+     * Index the matches of a custom-property-only or maybe rule within its entry budget: MAX_CUSTOM_INDEX_ENTRIES for a
+     * rule with custom properties ($custom; its elements become custom-property owners), else MAX_MAYBE_INDEX_ENTRIES. A
+     * rule that does not fit is skipped, marks the index truncated and fills its budget, so later rules of that budget
+     * are skipped before any matching. Node paths are computed once per element ($keys keeps the element alive, so its
+     * object id stays unique).
      *
      * @param  'customIndex'|'maybeIndex'  $map
      * @param  list<DOMElement>  $elements
      * @param  array<int, array{0: DOMElement, 1: string}>  $keys
      */
-    private function indexCustomMatches(string $map, int $position, array $elements, array &$keys): void
+    private function indexCustomMatches(string $map, int $position, array $elements, array &$keys, bool $custom = true): void
     {
-        if ($this->customIndexEntries + count($elements) > self::MAX_CUSTOM_INDEX_ENTRIES) {
+        [$entries, $limit] = $custom ? ['customIndexEntries', self::MAX_CUSTOM_INDEX_ENTRIES] : ['maybeIndexEntries', self::MAX_MAYBE_INDEX_ENTRIES];
+
+        if ($limit < $this->{$entries} + count($elements)) {
             $this->truncated = true;
-            $this->customIndexEntries = self::MAX_CUSTOM_INDEX_ENTRIES; // full: later custom and maybe rules are skipped unmatched
+            $this->{$entries} = $limit; // full: later rules of this budget are skipped unmatched
 
             return;
         }
 
-        $this->customIndexEntries += count($elements);
+        $this->{$entries} += count($elements);
 
         foreach ($elements as $element) {
             $key = ($keys[spl_object_id($element)] ??= [$element, $this->nodeKey($element)])[1];
             $this->{$map}[$key][] = $position;
-            $this->customOwners[$key] = true;
+
+            if ($custom) {
+                $this->customOwners[$key] = true;
+            }
         }
     }
 
     /**
-     * Index a rule with custom properties whose selector cannot be evaluated as a "maybe" rule: it covers the elements
-     * matched by the supported simple selectors of its rightmost compound, looking into :is() and :where() arguments
-     * (every element when nothing is left). Left out: pseudo-element rules, which never style the element itself;
-     * selectors with a user-action state outside parentheses (:hover, :focus, …), which never match the base state that
-     * is measured; and :host, which resolves through the root custom properties.
+     * Index a rule whose selector cannot be evaluated and that declares custom properties ($custom) or MAYBE_PROPERTIES
+     * or CLIPPING_PROPERTIES as a "maybe" rule: it covers the elements matched by the supported simple selectors of its
+     * rightmost compound, looking into :is() and :where() arguments (every element when nothing is left). Left out:
+     * pseudo-element rules, which never style the element itself; selectors with a user-action state outside parentheses
+     * (:hover, :focus, …), which never match the base state that is measured; and :host, which resolves through the root
+     * custom properties. Its entries count against the budget of indexCustomMatches().
      *
      * @param  array{selector: string, properties: array<string, array{value: string, important: bool}>}  $rule
      * @param  array{class: array<string, list<DOMElement>>, id: array<string, list<DOMElement>>}|null  $tokens
      * @param  array<int, array{0: DOMElement, 1: string}>  $keys
      */
-    private function indexMaybeRule(int $position, array $rule, ?array &$tokens, array &$keys): void
+    private function indexMaybeRule(int $position, array $rule, bool $custom, ?array &$tokens, array &$keys): void
     {
         $selector = $rule['selector'];
 
@@ -2975,7 +3099,7 @@ class CssParser
             return;
         }
 
-        if ($this->customIndexEntries >= self::MAX_CUSTOM_INDEX_ENTRIES) {
+        if ($custom ? $this->customIndexEntries >= self::MAX_CUSTOM_INDEX_ENTRIES : $this->maybeIndexEntries >= self::MAX_MAYBE_INDEX_ENTRIES) {
             $this->truncated = true;
 
             return;
@@ -2997,7 +3121,19 @@ class CssParser
             }
         }
 
-        $this->indexCustomMatches('maybeIndex', $position, array_values($elements), $keys);
+        $this->indexCustomMatches('maybeIndex', $position, array_values($elements), $keys, $custom);
+    }
+
+    /** @param  array{properties: array<string, array{value: string, important: bool}>}  $rule */
+    private function declaresMaybeProperties(array $rule): bool
+    {
+        foreach ($rule['properties'] as $name => $declaration) {
+            if (isset(self::MAYBE_PROPERTIES[$name]) || isset(self::CLIPPING_PROPERTIES[$name])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Whether the selector needs a user-action state outside parentheses and brackets (it never matches at rest). */
@@ -3243,6 +3379,11 @@ class CssParser
             : [new Color(255, 255, 255), [], null, [], [false, null]];
 
         [$color, $colorUncertainty] = $this->backgroundColor($element, $key, $parentColor, $parentColorUncertainty);
+
+        if ($this->maybeWins($element, $key, self::BACKGROUND_PROPERTIES)) {
+            $colorUncertainty = $this->uncertainty($colorUncertainty, ['colour']); // a maybe rule may paint another background
+        }
+
         [$image, $imageUncertainty] = $this->backgroundImage($element, $key, $parentImage);
         $backdrop = $image[0] || $this->hasCoveringSibling($element, $key) ? ['backdrop'] : [];
         $uncertainty = $this->uncertainty($backdrop, $colorUncertainty, $imageUncertainty);
@@ -3662,7 +3803,8 @@ class CssParser
     /**
      * The element's text colour: its winning `color` declaration, var() substituted, else the parent's (black at the
      * root), with its uncertainty: `colour` for an unresolvable or approximate substitution or a colour Color cannot
-     * parse exactly (the parent's colour is then the estimate). Only an inherited colour carries the parent's uncertainty.
+     * parse exactly (the parent's colour is then the estimate), or a maybe rule that could win `color` (maybeDeclares()).
+     * Only an inherited colour carries the parent's uncertainty.
      *
      * @return array{0: Color, 1: list<string>}
      */
@@ -3672,6 +3814,18 @@ class CssParser
             return $this->foregroundCache[$key];
         }
 
+        [$color, $uncertainty] = $this->cascadedForeground($element, $key);
+
+        return $this->foregroundCache[$key] = [$color, $this->maybeWins($element, $key, ['color']) ? $this->uncertainty($uncertainty, ['colour']) : $uncertainty];
+    }
+
+    /**
+     * foreground() from the element's cascade, before maybe rules.
+     *
+     * @return array{0: Color, 1: list<string>}
+     */
+    private function cascadedForeground(DOMElement $element, string $key): array
+    {
         $node = $element->parentNode;
         [$parent, $inherited] = $node instanceof DOMElement
             ? $this->foreground($node, $this->parentKey($key, $node))
@@ -3680,7 +3834,7 @@ class CssParser
         $value = $this->declarations($element, $key)['color']['value'] ?? null;
 
         if ($value === null) {
-            return $this->foregroundCache[$key] = [$parent, $inherited];
+            return [$parent, $inherited];
         }
 
         [$value, $approximate] = $this->substituteValue($element, $key, $value);
@@ -3689,20 +3843,20 @@ class CssParser
 
         // inherit, unset (color inherits) and currentcolor (on `color` itself the inherited colour) are the parent's colour.
         if ($keyword === 'inherit' || $keyword === 'unset' || $keyword === 'currentcolor') {
-            return $this->foregroundCache[$key] = [$parent, $this->uncertainty($inherited, $substitution)];
+            return [$parent, $this->uncertainty($inherited, $substitution)];
         }
 
         if ($keyword === 'initial') {
-            return $this->foregroundCache[$key] = [new Color(0, 0, 0), $substitution];
+            return [new Color(0, 0, 0), $substitution];
         }
 
         $own = $value === null || Color::isUnresolvable($value) ? null : Color::parse($value);
 
         if ($own === null) {
-            return $this->foregroundCache[$key] = [$parent, $this->uncertainty($inherited, ['colour'])];
+            return [$parent, $this->uncertainty($inherited, ['colour'])];
         }
 
-        return $this->foregroundCache[$key] = [$own, $substitution];
+        return [$own, $substitution];
     }
 
     /**

@@ -1670,6 +1670,109 @@ class CssParserTest extends TestCase
         $this->assertSame('#eee', $parser->customProperty($this->target($document), '--fg'));
     }
 
+    /** @return list<string> resolveColors()['uncertainty'] of #t */
+    private function uncertaintyOf(string $css, string $body): array
+    {
+        [$parser, $document] = $this->parsed($css, $body);
+
+        return $parser->resolveColors($this->target($document))['uncertainty'];
+    }
+
+    // C1: a rule whose selector cannot be evaluated is a maybe rule for the properties that decide contrast.
+    public function test_colour_rules_behind_unsupported_selectors_make_the_colours_uncertain(): void
+    {
+        $li = '<ul><li id="t">x</li></ul>';
+        $this->assertSame(['colour'], $this->uncertaintyOf('li:nth-child(odd){color:#111}', $li), 'odd rows may render another colour');
+        $this->assertSame([], $this->uncertaintyOf('li:nth-child(odd){color:#111}', '<p id="t">x</p>'), 'the maybe rule covers li elements only');
+        $this->assertSame(['colour'], $this->uncertaintyOf('div:nth-child(1){color:#111}', '<div><p id="t">x</p></div>'), 'an inherited colour');
+        $this->assertSame([], $this->uncertaintyOf('div:nth-child(1){color:#111} p{color:#999}', '<div><p id="t">x</p></div>'), 'an own colour does not inherit');
+        $this->assertSame([], $this->uncertaintyOf('#t{color:#999} li:nth-child(odd){color:#111}', $li), 'a heavier definite declaration wins');
+        $this->assertSame(['colour'], $this->uncertaintyOf('#t{color:#999} li:nth-child(odd){color:#111 !important}', $li), 'an important maybe declaration may win');
+        $this->assertSame([], $this->uncertaintyOf('@layer a{li:nth-child(odd){color:#111}} li{color:#999}', $li), 'a layered maybe rule loses to an unlayered one');
+        $this->assertSame(['colour'], $this->uncertaintyOf('@layer a{li{color:#999}} @layer b{li:nth-child(odd){color:#111}}', $li), 'a later layer wins');
+        $this->assertSame([], $this->uncertaintyOf('li{color:#999} li:nth-child(odd){color:#999}', $li), 'the same value cannot change the colour');
+        $this->assertSame([], $this->uncertaintyOf('li:hover{color:#111} li:focus-within{background:#111} li::before{color:#111}', $li), 'states and pseudo-elements never style the element at rest');
+        $this->assertSame([], $this->uncertaintyOf('.a ~ p{margin:0;line-height:2} li:nth-child(odd){display:block}', $li), 'no deciding property');
+    }
+
+    // C1: the backdrop range and the opacity chain take maybe rules into account like the colour.
+    public function test_background_and_opacity_rules_behind_unsupported_selectors_make_the_backdrop_uncertain(): void
+    {
+        $nested = '<div class="a"><p id="t">x</p></div>';
+        $this->assertSame(['colour'], $this->uncertaintyOf('.a:has(p){background:#111}', $nested), 'the parent supplies the backdrop');
+        $this->assertSame(['colour'], $this->uncertaintyOf('.a:has(p){background-image:linear-gradient(#000,#000)}', $nested));
+        $this->assertSame(['colour'], $this->uncertaintyOf('.a{background:#fff} .a:has(p){background-color:#111}', $nested), 'the element that paints the opaque backdrop');
+        $this->assertSame([], $this->uncertaintyOf('.a:has(p){background:#111} p{background:#fff}', $nested), 'above an opaque backdrop it is hidden');
+        $this->assertSame(['colour'], $this->uncertaintyOf('h2 + p{background:#111}', '<h2>t</h2><p id="t">x</p>'), 'on the element itself');
+        $this->assertSame(['colour'], $this->uncertaintyOf('.a:has(p){opacity:.5}', $nested), 'an opacity anywhere above');
+        $this->assertSame(['colour'], $this->uncertaintyOf('body:has(.a){opacity:.5} p{background:#fff}', $nested), 'the text alpha is above an opaque backdrop too');
+    }
+
+    // C1: universal maybe rules (an empty reduction) are folded once; their heaviest declaration per property counts.
+    public function test_universal_maybe_rules_make_every_element_uncertain_unless_outweighed(): void
+    {
+        $body = '<div><p id="t">x</p></div>';
+        $this->assertSame(['colour'], $this->uncertaintyOf(':has(.q){color:#111}', $body));
+        $this->assertSame(['colour'], $this->uncertaintyOf(':is(.x > *){color:#111}', $body), 'Tailwind v4 *: variants');
+        $this->assertSame([], $this->uncertaintyOf('#t{color:#999} :has(.q){color:#111} :has(.r){color:#222}', $body));
+        $this->assertSame(['colour'], $this->uncertaintyOf('#t{color:#999} :has(.q){color:#111} :has(.r){color:#222 !important}', $body));
+        $this->assertSame(['colour'], $this->uncertaintyOf(':has(.q){background:#111}', $body));
+    }
+
+    // C1, the interface for undecidable rules: whether a maybe rule could win the property on the element.
+    public function test_maybe_declares(): void
+    {
+        [$parser, $document] = $this->parsed('.a:has(b) p{color:#111} p.x{color:#999 !important} li:nth-child(2){font-size:30px}', '<div class="a"><p id="t">x</p><p class="x">y</p></div>');
+        $paragraphs = $document->query('//p');
+
+        $this->assertTrue($parser->maybeDeclares($paragraphs[0], 'color'));
+        $this->assertFalse($parser->maybeDeclares($paragraphs[1], 'color'), 'outweighed');
+        $this->assertFalse($parser->maybeDeclares($paragraphs[0], 'font-size'), 'not declared for p');
+        $this->assertFalse($parser->maybeDeclares($paragraphs[0], 'margin'));
+    }
+
+    // C1: a maybe rule that could win the size or the weight leaves it unknown (an unknown size is held to the normal threshold).
+    public function test_font_rules_behind_unsupported_selectors_make_size_and_weight_unknown(): void
+    {
+        $bound = function (string $css, string $body = '<div class="a"><p id="t">x</p></div>'): ?float {
+            [$parser, $document] = $this->parsed($css, $body);
+
+            return $parser->fontSizeLowerBoundPx($this->target($document));
+        };
+        $bold = function (string $css): ?bool {
+            [$parser, $document] = $this->parsed($css, '<div class="a"><p id="t">x</p></div>');
+
+            return $parser->boldness($this->target($document));
+        };
+
+        $this->assertSame(24.0, $bound('p{font-size:24px}'));
+        $this->assertNull($bound('p{font-size:24px} .a:has(b) p{font-size:12px}'));
+        $this->assertNull($bound('p{font-size:24px} .a:has(b) p{font:12px serif}'), 'the shorthand');
+        $this->assertNull($bound('.a:has(b){font-size:12px} p{font-size:1.5em}'), 'relative to an unknown parent size');
+        $this->assertSame(24.0, $bound('.a:has(b){font-size:12px} p{font-size:24px}'), 'an absolute size does not inherit');
+        $this->assertSame(24.0, $bound('#t{font-size:24px} .a:has(b) p{font-size:12px}'), 'outweighed');
+        $this->assertTrue($bold('p{font-weight:700}'));
+        $this->assertNull($bold('p{font-weight:700} .a:has(b) p{font-weight:400}'));
+        $this->assertNull($bold('.a:has(b){font-weight:400} p{font-weight:bolder}'), 'relative to an unknown parent weight');
+    }
+
+    // C1, C2 review: a revealing rule behind an unsupported selector blocks the exemption without custom properties too.
+    public function test_revealing_maybe_rule_without_custom_properties_blocks_the_visually_hidden_exemption(): void
+    {
+        $sr = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)';
+        $hidden = function (string $css): bool {
+            [$parser, $document] = $this->parsed($css, '<div class="wrap"><b>b</b><span id="t" class="x">x</span></div>');
+
+            return $parser->isVisuallyHidden($this->target($document));
+        };
+
+        $this->assertTrue($hidden('.x{'.$sr.'}'));
+        $this->assertFalse($hidden('.x{'.$sr.'} .wrap:has(b) .x{position:static}'), 'a maybe rule may reveal');
+        $this->assertFalse($hidden('.x{'.$sr.'} .wrap:has(b) .x{clip:auto}'), 'a clipping-only maybe rule');
+        $this->assertFalse($hidden('.x{'.$sr.'} :has(.q){overflow:visible;clip:auto}'), 'a universal one reveals anything');
+        $this->assertTrue($hidden('.x{'.$sr.'} .wrap:has(b) .x{color:#111}'), 'no clipping property');
+    }
+
     public function test_custom_properties_from_unsupported_selectors_are_approximate(): void
     {
         $this->assertSame(['#999999', '#ffffff', true], $this->colors(':root{--fg:#999} li:nth-child(odd){--fg:#111} li{color:var(--fg)}', '<ul><li id="t">x</li></ul>'), 'odd rows may render another value');
