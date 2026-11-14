@@ -103,4 +103,41 @@ class ContrastPerformanceTest extends TestCase
         $this->assertSame([], $violations, 'clipped text is exempt, the rest passes (#767676 is 4.54:1)');
         $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
+
+    /** @return array<string, array{0: string}> the selector of 3 900 universal rules that declare one custom property each (%d: its number) */
+    public static function universalRuleSelectors(): array
+    {
+        return ['custom-property rules' => ['*'], 'maybe rules' => [':has(.q%d)']];
+    }
+
+    // C2 review: universal custom-property and maybe rules are looked at once per index build, not once per element.
+    #[Group('performance')]
+    #[DataProvider('universalRuleSelectors')]
+    public function test_visually_hidden_check_with_many_universal_rules_stays_in_budget(string $selector): void
+    {
+        $css = implode('', array_map(fn (int $i): string => sprintf($selector, $i)."{--a$i:1}", range(1, 3900)))
+            .'.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border-width:0}'
+            .' .c{color:#aaa}';
+        $sections = implode('', array_map(fn (int $i): string => "<section class=\"s$i\">".str_repeat('<div>', 30)
+            .'<p class="c">x<span class="sr-only">label</span></p>'.str_repeat('</div>', 30).'</section>', range(1, 480)));
+        $document = HtmlDocument::fromHtml('<!DOCTYPE html><html lang="en"><head><title>Rules</title><style>'.$css.'</style></head><body>'.$sections.'</body></html>');
+        $texts = $document->query('//body//*[text()[normalize-space()]]');
+        $parser = (new CssParser)->parse($document)->buildIndex();
+
+        $start = microtime(true);
+        $hidden = array_map(fn (DOMElement $element): bool => $parser->isVisuallyHidden($element), $texts);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(480, count(array_filter($hidden)), 'every label is exempt, every paragraph is not');
+        $this->assertCount(960, $hidden);
+        $this->assertLessThan(PerformanceBudget::seconds(0.5), $elapsed, sprintf('isVisuallyHidden() took %.2f s', $elapsed));
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(['contrast.insufficient p.c'], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element, $violations));
+        $this->assertSame(480, $violations[0]->meta['occurrences']);
+        $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+    }
 }

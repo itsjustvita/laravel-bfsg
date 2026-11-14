@@ -1065,6 +1065,19 @@ class CssParserTest extends TestCase
             'relative' => ['position:relative;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%)', false],
             'no position' => ['width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%)', false],
             'var() position' => ['--p:absolute;position:var(--p);clip:rect(0,0,0,0)', false],
+            'overflow, zero padding' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding:0', true],
+            'overflow, zero padding sides' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding:0 0px;padding-left:0;padding-block:0', true],
+            'overflow, padding' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding:1rem', false],
+            'overflow, padding on one side' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding:0 0 0 4px', false],
+            'overflow, padding longhand' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding-top:2px', false],
+            'overflow, padding then zero' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding-top:2px;padding:0', true],
+            'overflow, logical padding' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding:0;padding-inline-start:8px', false],
+            'overflow, var() padding' => ['position:absolute;width:1px;height:1px;overflow:hidden;padding:var(--p)', false],
+            'overflow, min-width' => ['position:absolute;width:1px;height:1px;overflow:hidden;min-width:10rem', false],
+            'overflow, min-height' => ['position:absolute;width:1px;height:1px;overflow:hidden;min-height:2px', false],
+            'overflow, min-width auto' => ['position:absolute;width:1px;height:1px;overflow:hidden;min-width:auto;min-height:0', true],
+            'clip, padding' => ['position:absolute;clip:rect(0,0,0,0);padding:1rem;min-width:10rem', true],
+            'all' => ['position:absolute;clip:rect(0,0,0,0);all:unset', false],
         ];
     }
 
@@ -1093,6 +1106,31 @@ class CssParserTest extends TestCase
         $this->assertFalse($hidden('.sr{position:absolute;clip:rect(0,0,0,0)} .sr.on{position:static}', '<span id="t" class="sr on">x</span>'));
         $this->assertTrue($hidden('.sr{position:absolute;clip:rect(0,0,0,0)} .sr:focus{position:static}', '<span id="t" class="sr">x</span>'), 'a user-action state does not apply at rest');
         $this->assertTrue($hidden('', '<span id="t" style="position:absolute;width:1px;height:1px;overflow:hidden">x</span>'));
+    }
+
+    // C2: an element between the text and the clipping element can escape the clip or show it on focus (R7).
+    public function test_visually_hidden_stops_at_escaping_or_focusable_elements(): void
+    {
+        $clip = '.c{position:absolute;clip:rect(0,0,0,0)} .o{position:absolute;width:1px;height:1px;overflow:hidden} .f{position:fixed} .u{all:unset} .r{all:revert}';
+        $hidden = function (string $body) use ($clip) {
+            [$parser, $document] = $this->parsed($clip, $body);
+
+            return $parser->isVisuallyHidden($this->target($document));
+        };
+
+        $this->assertFalse($hidden('<div class="o"><b class="f"><i id="t">x</i></b></div>'), 'a fixed element escapes an overflow clip');
+        $this->assertFalse($hidden('<div class="o"><b id="t" class="f">x</b></div>'));
+        $this->assertTrue($hidden('<div class="c"><b class="f"><i id="t">x</i></b></div>'), 'clip reaches a fixed descendant');
+        $this->assertTrue($hidden('<div class="o"><b class="f o"><i id="t">x</i></b></div>'), 'its own overflow clip still holds');
+        $this->assertFalse($hidden('<div class="c"><b class="u"><i id="t">x</i></b></div>'), 'all: unset between the text and the clip');
+        $this->assertFalse($hidden('<div class="c"><i id="t" class="r">x</i></div>'), 'all: revert on the text element');
+        $this->assertTrue($hidden('<b class="u"><div class="c"><i id="t">x</i></div></b>'), 'all above the clipping element changes nothing');
+        $this->assertFalse($hidden('<a id="t" href="#main" class="c">Skip to content</a>'), 'a focusable clipping element shows on focus');
+        $this->assertFalse($hidden('<div class="c"><a href="#main"><i id="t">x</i></a></div>'), 'a focusable element between');
+        $this->assertFalse($hidden('<div class="c"><span id="t" tabindex="0">x</span></div>'));
+        $this->assertTrue($hidden('<div class="c"><span id="t" tabindex="-1">x</span></div>'), 'not reachable by Tab');
+        $this->assertTrue($hidden('<button><span id="t" class="c">Close menu</span></button>'), 'a focusable ancestor of the clipping element');
+        $this->assertTrue($hidden('<a href="#"><span class="c"><b id="t">x</b></span></a>'));
     }
 
     // C2: like opacity 0, only the base cascade hides; conditional and maybe rules can reveal, never hide.
@@ -1131,11 +1169,12 @@ class CssParserTest extends TestCase
         $this->assertTrue($parser->isVisuallyHidden($this->target($document)));
         $this->assertFalse($parser->isTruncated());
 
-        // Beyond the budget a skipped rule might reveal: nothing is taken as hidden, and the colours stay exact.
-        [$parser, $document] = $this->parsed($sr.str_repeat('.w{width:2px}', CssParser::MAX_CLIPPING_RULES), '<span id="t" class="sr u1">x</span>');
+        // Beyond the budget no clipping-only rule is indexed: nothing is taken as hidden, and the colours stay exact.
+        [$parser, $document] = $this->parsed($sr.str_repeat('.w{width:2px}', CssParser::MAX_CLIPPING_RULES), '<span id="t" class="sr u1 w">x</span>');
 
         $this->assertFalse($parser->isVisuallyHidden($this->target($document)));
         $this->assertFalse($parser->isTruncated());
+        $this->assertSame(['position'], array_keys($parser->declarationsFor($this->target($document))));
     }
 
     /** @return array<string, array{0: string}> */

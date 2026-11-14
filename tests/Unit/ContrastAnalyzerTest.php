@@ -544,6 +544,18 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame('2.60', $violation->params['ratio']);
     }
 
+    // C2, R7: a skip link is clipped only until it takes focus, so it is measured as in 3.1.0.
+    public function test_skip_link_is_still_measured(): void
+    {
+        $css = self::TAILWIND_SR_ONLY.' .focus\\:not-sr-only:focus{position:static;width:auto;height:auto;clip:auto;overflow:visible}';
+        $body = '<a href="#main" class="sr-only focus:not-sr-only text-gray-400">Skip to content</a><main id="main">'.self::ICON_BUTTON.'</main>';
+
+        $violations = $this->analyze($this->page($css, $body));
+        $violation = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'a.sr-only.focus:not-sr-only', severity: Severity::Error);
+        $this->assertSame('2.60', $violation->params['ratio']);
+        $this->assertSame(1, $violation->meta['occurrences'], 'the label in the button stays exempt');
+    }
+
     // C2: without absolute or fixed positioning a 1px box is not taken as clipped to nothing.
     public function test_one_px_box_without_absolute_position_is_measured(): void
     {
