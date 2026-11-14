@@ -66,7 +66,7 @@ class CssParser
     /** Nesting levels of :is(), :where() and :has() argument lists cannotMatch() looks into; deeper ones may match. */
     private const MAX_MATCH_NESTING = 8;
 
-    /** Class names and ids (one per class token and element) documentTokens() keeps; beyond it every selector may match. */
+    /** Distinct class names and ids documentTokens() keeps; beyond it every selector may match. */
     private const MAX_DOCUMENT_TOKENS = 100000;
 
     /**
@@ -318,6 +318,9 @@ class CssParser
     /** @var array<string, string> longhand => a hiding clipping value some universal maybe rule outside a viewport rule declares (hidingClippingValues()) */
     private array $universalMaybeHiding = [];
 
+    /** @var array<int, array<string, string>> rule position => hidingClippingValues(), one entry per maybe rule looked at */
+    private array $hidingClippingCache = [];
+
     /** Bytes counted for the rule entries nesting added, against MAX_NESTED_RULE_BYTES. */
     private int $nestedRuleBytes = 0;
 
@@ -515,7 +518,7 @@ class CssParser
         $this->index = $this->customIndex = $this->universalCustomRules = $this->universalRules = $this->customOwners = $this->maybeIndex = $this->universalMaybeRules = $this->positioned = [];
         $this->customIndexEntries = $this->maybeIndexEntries = $this->nestedRuleBytes = $this->layerNames = $this->layerAppearances = 0;
         $this->universalMaybeWeights = $this->documentTokens = null;
-        $this->maybeHidingCache = [];
+        $this->maybeHidingCache = $this->hidingClippingCache = [];
         $this->universalMaybeHiding = [];
         $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = [];
         $this->indexed = false;
@@ -598,8 +601,8 @@ class CssParser
         foreach ($this->rules as $position => $rule) {
             $kind = $this->indexKind($rule);
 
-            if ($kind === null && isset($rule['properties']['content-visibility']) && $this->inBaseCascade($rule) && $this->document !== null) {
-                // Read only from maybe rules (maybeHidden()): within the subset it changes nothing and counts against no budget.
+            if ($kind === null && strtolower(trim($rule['properties']['content-visibility']['value'] ?? '')) === 'hidden' && $this->inBaseCascade($rule) && $this->document !== null) {
+                // Read only from maybe rules, and only `hidden` (maybeHidden()): within the subset it changes nothing and counts against no budget.
                 if (microtime(true) > $deadline) {
                     $this->truncated = true;
 
@@ -1650,10 +1653,14 @@ class CssParser
      */
     private function hidingClippingValues(int $position): array
     {
+        if (isset($this->hidingClippingCache[$position])) {
+            return $this->hidingClippingCache[$position];
+        }
+
         $rule = $this->rules[$position];
 
         if ($rule['condition'] === 'viewport') {
-            return [];
+            return $this->hidingClippingCache[$position] = [];
         }
 
         $hiding = [];
@@ -1680,7 +1687,7 @@ class CssParser
             }
         }
 
-        return $hiding;
+        return $this->hidingClippingCache[$position] = $hiding;
     }
 
     /**
@@ -3538,20 +3545,16 @@ class CssParser
         }
 
         $tokens = ['class' => [], 'id' => [], 'all' => false];
-        $count = 0;
 
         foreach ($this->document?->query('//*[@class or @id]') ?? [] as $element) {
-            $names = preg_split('/[ \t\n\r\f]++/', strtolower($element->getAttribute('class')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-            $count += count($names) + 1;
-
-            if ($count > self::MAX_DOCUMENT_TOKENS) {
-                return $this->documentTokens = ['class' => [], 'id' => [], 'all' => true]; // too many to keep: everything may match
-            }
-
-            $tokens['class'] += array_fill_keys($names, true);
+            $tokens['class'] += array_fill_keys(preg_split('/[ \t\n\r\f]++/', strtolower($element->getAttribute('class')), -1, PREG_SPLIT_NO_EMPTY) ?: [], true);
 
             if ($element->getAttribute('id') !== '') {
                 $tokens['id'][strtolower($element->getAttribute('id'))] = true;
+            }
+
+            if (count($tokens['class']) + count($tokens['id']) > self::MAX_DOCUMENT_TOKENS) {
+                return $this->documentTokens = ['class' => [], 'id' => [], 'all' => true]; // too many to keep: everything may match
             }
         }
 

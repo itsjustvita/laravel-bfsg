@@ -1029,6 +1029,17 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame([], $this->analyze($this->page('.label{color:#111}'.substr($css, 18), '<div class="wrap"><b>b</b><span class="label">Label</span></div>')), 'a pass stays silent');
     }
 
+    // R12 re-review: the token cap counts distinct names, so a long light Tailwind list keeps the prefilter.
+    public function test_many_duplicate_class_tokens_keep_the_prefilter(): void
+    {
+        $row = '<li class="flex items-center gap-2 px-4 py-2 text-sm text-gray-600 dark:text-gray-500 border-b">Row</li>';
+        $html = $this->tailwindDarkPage('gray-600', 'gray-500', dark: false);
+        $html = str_replace('<p class="text-gray-600 dark:text-gray-500">Muted copy</p>', '<ul>'.str_repeat($row, 10000).'</ul>', $html);
+        $this->assertGreaterThan(1000000, strlen($html));
+
+        $this->assertSame([], $this->analyze($html));
+    }
+
     /** Bootstrap 5.3: the stock button, nav link and dropdown item with their :disabled rules (heavier than the base rules). */
     private const BOOTSTRAP_DISABLED = '.btn{color:var(--bs-btn-color);background-color:var(--bs-btn-bg)}
 .btn-primary{--bs-btn-color:#fff;--bs-btn-bg:#0d6efd;--bs-btn-disabled-color:#fff;--bs-btn-disabled-bg:#0d6efd}

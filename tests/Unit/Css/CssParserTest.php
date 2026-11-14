@@ -1829,6 +1829,20 @@ class CssParserTest extends TestCase
         }
     }
 
+    // R12 re-review: only content-visibility:hidden behind an unsupported selector becomes a maybe rule (the value read).
+    public function test_only_hidden_content_visibility_becomes_a_maybe_rule(): void
+    {
+        $limit = function (string $value): array {
+            [$parser, $document] = $this->parsed(".x:has(b) p{content-visibility:$value} p{color:#aaa}", '<div class="x"><b>b</b><p id="t">x</p></div>');
+
+            return $parser->resolveColors($this->target($document))['uncertainty'];
+        };
+
+        $this->assertSame(['limit'], $limit('hidden'));
+        $this->assertSame([], $limit('auto'));
+        $this->assertSame([], $limit('visible'));
+    }
+
     // R12: beyond MAX_DOCUMENT_TOKENS class names the prefilter keeps nothing, and every rule may match.
     public function test_too_many_document_tokens_disable_the_prefilter(): void
     {
