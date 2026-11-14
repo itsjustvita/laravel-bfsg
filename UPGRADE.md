@@ -1,5 +1,49 @@
 # Upgrading
 
+## From 3.1.0 to 3.1.1
+
+3.1.1 has no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names, violation keys or the JSON report shape. Requirements are unchanged. What changes is a handful of severities and counts; check CI thresholds that are close to the line.
+
+1. `composer require itsjustvita/laravel-bfsg:^3.1.1`. No migration is needed.
+2. Re-run your accessibility checks. Nothing in your code or config has to change (see "Config" below for the one optional item).
+
+### Severity and count changes you will see
+
+- **Pages with a stylesheet the analysis did not see.** Pages analysed through the middleware or `Bfsg::analyze()` (they only see the HTML), and `bfsg:check` pages with cross-origin or unloaded stylesheets, now get one Notice, `contrast.stylesheets_missing`. Their `contrast.insufficient` failures are Warnings tagged `approximate` instead of Errors, because the stylesheet that may fix the colours was never read. Nothing to do; if you want definite contrast results, run `bfsg:check <url>`, which inlines same-origin stylesheets. If CI fails on `error` only, such pages stop failing on contrast; fail on `warning` to keep them in.
+- **`@layer`, `@supports`, visually hidden text, unsupported selectors.** Cascade layers and `@supports` conditions are evaluated, text hidden with `sr-only` / `visually-hidden` (skip links excepted) is not measured, and rules behind selectors the parser cannot evaluate give Notices or Warnings instead of definite results; rules that cannot match anything on the page are ignored. Expect some false Errors to disappear and a few Notices (`contrast.unverifiable`) or approximate Warnings to appear. Nothing to do.
+- **`focus.outline_removed`** reports only focusable elements; `tabindex="-1"` targets are a Notice; `outline-style`, `outline-width` and `outline-color` longhands count as an indicator. Fewer findings.
+- **`input_purpose.invalid_autocomplete`** is an Error only on personal-data fields (including `type="email"` and `type="tel"`) and a best-practice Notice otherwise; `false`, `none`, `nope` and similar are treated like `off`; hidden inputs are skipped. Some Errors become Notices.
+- **`links.non_descriptive`**: pagination words in a navigation or on `rel="next"` / `rel="prev"` links are the Notice `links.non_descriptive_in_context` instead of a finding.
+- **`aria.hidden_focusable`** on an element that is only possibly hidden is a Warning tagged `approximate` instead of an Error.
+- A wrapping `<label>` names only its labelled control, and a `<label for>` can name a button; a few name findings on buttons and controls change accordingly.
+
+### Commands and fetching
+
+- `bfsg:history --cleanup --url=...` now deletes only the reports of that URL. If you relied on `--url` being ignored, drop it to clean everything.
+- `bfsg:history --cleanup --trend` exits 2 (it used to ignore `--trend`).
+- MCP `analyze_url` and `generate_report` return an error when the page redirects to the login page. The error names the login URL; use `bfsg:check --allow-login-page` if you really want the login page analysed.
+- The page and stylesheet size caps count decoded bytes (gzip); a response that expands beyond the cap is refused as if it had been sent that large. Nothing to do.
+- Invalid `@layer` blocks are dropped like browsers do, and `<link rel="stylesheet" disabled>` is ignored. The commands are registered outside the console, so `Artisan::call()` works from web requests.
+
+### Config
+
+New keys `bfsg.authentication.email`, `bfsg.authentication.password` and `bfsg.authentication.token` (env `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD`, `BFSG_AUTH_TOKEN`, default `null`) make the credentials for `bfsg:check --auth` survive `config:cache`. Nothing to do unless you published `config/bfsg.php` and run `config:cache`: add the three keys under `authentication` by hand (the config is merged shallowly):
+
+```php
+// config/bfsg.php
+return [
+    // ...
+    'authentication' => [
+        'default_login_url' => '/login',
+        'email' => env('BFSG_AUTH_EMAIL'),
+        'password' => env('BFSG_AUTH_PASSWORD'),
+        'token' => env('BFSG_AUTH_TOKEN'),
+    ],
+];
+```
+
+The new `contrast.stylesheets_missing` message is in `lang/en` and `lang/de`; if you published the translations, re-publish them or add the key.
+
 ## From 3.0 to 3.1
 
 3.1 has no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names or the JSON report shape. Requirements are unchanged (PHP 8.2 to 8.5, Laravel 12 or 13, `laravel/mcp` `^0.6.4 || ^1.0`). What changes is what the analyzers report and how the commands behave; check your CI thresholds, which may see different counts and scores.

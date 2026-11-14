@@ -225,7 +225,7 @@ php artisan bfsg:check https://app.example.com/dashboard --session="laravel_sess
 
 Without `--email`/`--password` in an interactive terminal, `--auth` asks for them. A failed login exits 2 with its cause (CSRF token rejected, invalid credentials, validation error, two-factor challenge, no session). A page that redirects to the login page exits 2 unless you pass `--allow-login-page`.
 
-In CI, pass credentials as `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` or `BFSG_AUTH_TOKEN` from your CI secrets rather than `--password` or `--bearer` on the command line (`BFSG_AUTH_TOKEN` is read with `--auth`, so use `--auth` instead of a bare `--bearer`): command-line arguments end up in the shell history, job logs and the process list. `--session` has no environment variable; pass it from a masked CI secret.
+The credentials are read from `bfsg.authentication.email`, `.password` and `.token`, so they keep working after `php artisan config:cache`. In CI, pass credentials as `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` or `BFSG_AUTH_TOKEN` from your CI secrets rather than `--password` or `--bearer` on the command line (`BFSG_AUTH_TOKEN` is read with `--auth`, so use `--auth` instead of a bare `--bearer`): command-line arguments end up in the shell history, job logs and the process list. `--session` has no environment variable; pass it from a masked CI secret.
 
 Credentials are bound to one origin (scheme, host and port): tokens, API keys and session cookies are only sent to the checked site (or, for a login token, the login site), and a redirect to another host, another port or from `https` to `http` drops them. The package's requests leave out your application's global HTTP client configuration (`Http::globalMiddleware()`, `Http::globalRequestMiddleware()`, `Http::globalResponseMiddleware()`, `Http::globalOptions()`), so a header your application adds to its own requests, such as an internal service token, never reaches a checked site. `Http::fake()` and `Http::preventStrayRequests()` still apply in tests.
 
@@ -259,19 +259,20 @@ php artisan bfsg:history                                   # the latest 20 repor
 php artisan bfsg:history --url=https://example.com/pricing --limit=50
 php artisan bfsg:history --url=https://example.com/pricing --trend
 php artisan bfsg:history --cleanup --days=90               # delete reports older than 90 days
+php artisan bfsg:history --cleanup --days=90 --url=/pricing   # only the reports of that URL
 ```
 
-`--limit` and `--days` must be positive integers (`--cleanup --days=abc` deletes nothing). Exit codes: `0` success, `2` operational error (invalid option, missing `--url` with `--trend`, tables not migrated, database error).
+`--limit` and `--days` must be positive integers (`--cleanup --days=abc` deletes nothing). Exit codes: `0` success, `2` operational error (invalid option, missing `--url` with `--trend`, `--cleanup` with `--trend`, tables not migrated, database error).
 
 | Option | Default | Description |
 |---|---|---|
 | `--url=` | | Only reports of this URL. It is compared in its stored form (without query string, fragment and credentials), so you can paste the URL you checked. A path such as `/contact` is resolved against `app.url`; scheme and host are case-insensitive and a default port (`:80`, `:443`) is ignored; the trailing slash matters |
 | `--limit=` | `20` | Number of reports |
 | `--trend` | | The latest reports of `--url` in chronological order, with the score change |
-| `--cleanup` | | Delete reports older than `--days` |
+| `--cleanup` | | Delete reports older than `--days`; with `--url` only those of that URL |
 | `--days=` | `30` | Age limit for `--cleanup` |
 
-Operational errors exit 2: the tables are missing (with the `php artisan migrate` hint), a database error, `--trend` without `--url`, and an invalid `--days` or `--limit`.
+Operational errors exit 2: the tables are missing (with the `php artisan migrate` hint), a database error, `--trend` without `--url`, `--cleanup` with `--trend`, and an invalid `--days` or `--limit`.
 
 ## Middleware
 
@@ -642,8 +643,11 @@ Severity policy: **error** is a definite AA failure detectable in the markup, **
 - Contrast is measured from inline styles, `<style>` elements and inlined same-origin stylesheets with a documented CSS subset (no `:hover`, `:nth-child`, pseudo-elements). An uncertain measurement is never an error when the uncertainty could change the verdict, and an unknown background is never silent:
   - **Unknown colour** (a background image or gradient, an image or video positioned behind the text, a colour function or custom property that cannot be resolved): a failing estimate is a warning tagged `approximate`; a passing one is the notice `contrast.unverifiable`, which asks you to check that text with a browser-based tool.
   - **Unknown font size** (no guaranteed lower bound, as with `font-size: 5vw`, or 18.66px to 24px with an unknown weight): below 3:1 is an error, below 4.5:1 a warning tagged `approximate`, and 4.5:1 or more a pass.
+  - **Cascade layers and `@supports`**: `@layer` order is honoured; when it cannot be determined (a layer declared only under a media or `@supports` condition) the colour counts as unknown. An `@supports` condition is evaluated; one that cannot be decided makes the result uncertain.
+  - **Rules the parser cannot evaluate** (selectors beyond the supported subset): a rule that could change the colour or hide the text makes the result a notice or an approximate warning; a rule that provably cannot match the page (a class or attribute the page does not have) is ignored.
+  - **Missing stylesheets**: when the page links a stylesheet the analysis did not read (the middleware and `Bfsg::analyze()` only see the HTML; `bfsg:check` skips cross-origin and unloaded sheets), the notice `contrast.stylesheets_missing` is reported once and failures are warnings tagged `approximate`. `bfsg:check <url>` inlines same-origin stylesheets.
   - **Truncated style index** (very large stylesheets): a failing estimate is a warning tagged `approximate`; a passing one is silent.
-- Text of inactive components is exempt from contrast checks, as WCAG 1.4.3 allows: disabled controls, the content of a `fieldset[disabled]`, `[aria-disabled="true"]` subtrees, and labels of disabled controls. Text hidden only with `aria-hidden` is still visible and is measured; text with `opacity: 0` is not, unless the zero comes from a breakpoint rule or a custom property.
+- Text of inactive components is exempt from contrast checks, as WCAG 1.4.3 allows: disabled controls, the content of a `fieldset[disabled]`, `[aria-disabled="true"]` subtrees, and labels of disabled controls. Visually hidden text (`sr-only`, `visually-hidden` and similar clipping patterns) is not measured, but a skip link that becomes visible on focus is. Text hidden only with `aria-hidden` is still visible and is measured; text with `opacity: 0` is not, unless the zero comes from a breakpoint rule or a custom property.
 - Contrast findings are grouped by colour signature (same colours, requirement and severity): one finding per group. The CLI and HTML reports show the first element of a group; the JSON report adds `meta.occurrences` (the total) and `meta.selectors` (up to 20 further elements). `meta.large` is `null` when the text size is unknown, and `meta.approximate` matches the `approximate` tag.
 - Known gaps: the parser's warning about very deeply nested markup (content beyond 256 levels is unwrapped) is not shown in reports yet, and `bfsg:check --browser` inlines stylesheets with the old reading of `not (…)` and preference media queries.
 - Pages of this application are rendered in-process, in the process that runs `bfsg:check` or the MCP server. Each page starts without the caller's user, session, scoped instances and `Context`, and these are restored afterwards. Output the application writes outside the response (`echo`, `dump()`) is discarded with a warning. Global changes made by app code or middleware are not isolated and carry over to later pages of the same run or MCP session: `config()` calls, static state, and the state of tenancy packages. `dd()` and `exit` in a page end that process.

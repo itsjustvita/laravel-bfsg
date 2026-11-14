@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-11-14
+
+A bugfix release for 3.1.0: contrast no longer reports definite failures it cannot be sure of, several analyzers stop flagging correct markup, and a few commands and fetches behave as documented. There are no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names, violation keys or the JSON report shape; findings, scores and severities change only where listed below. See [UPGRADE.md](UPGRADE.md).
+
+### Fixed
+- Contrast: a page with a linked stylesheet the analysis never saw (every page analysed by the middleware or `Bfsg::analyze()`, and `bfsg:check` pages with cross-origin or unloaded sheets) used to report contrast failures as definite Errors. They are now Warnings tagged `approximate`, and the page gets one Notice, `contrast.stylesheets_missing`, that says why.
+- Contrast: CSS cascade layers (`@layer`) are honoured, so a layered rule no longer beats an unlayered one and the declared layer order decides between layers. Invalid `@layer` blocks are dropped the way browsers drop them. When the order cannot be determined the colour counts as unknown (Notice or approximate Warning) instead of a definite result.
+- Contrast: `@supports` conditions are evaluated instead of applying their rules unconditionally; a condition that cannot be decided is reported as uncertain.
+- Contrast: visually hidden text (`sr-only`, `visually-hidden` and similar clipping patterns) is no longer measured. Skip links that become visible on focus are still measured.
+- Contrast: rules behind selectors the parser cannot evaluate no longer vanish silently. They make the result a Notice or Warning instead of a definite one, and rules that cannot match anything on the page (a class the page does not use, `:disabled` without a disabled element) are ignored, so ordinary Bootstrap or Tailwind pages are not flooded with new notices.
+- Contrast: stylesheet links marked `disabled` are ignored; a `:disabled` or similar rule only applies to elements that carry the attribute.
+- `aria.hidden_focusable`: an element that is only possibly hidden (behind a `@supports` condition or a selector the parser cannot evaluate, or in a stylesheet that was not seen) is a Warning tagged `approximate` instead of an Error.
+- `focus.outline_removed`: only elements that can take focus are reported; `tabindex="-1"` scripting targets are a Notice; `outline-style`, `outline-width` and `outline-color` longhands count as an indicator.
+- `input_purpose.invalid_autocomplete`: an invalid token is an Error only on personal-data fields (including `type="email"` and `type="tel"`) and a best-practice Notice elsewhere; `false`, `none`, `nope` and similar act like `off`; hidden inputs are skipped.
+- `links.non_descriptive`: pagination words ("next", "previous", "older" and similar) inside a navigation or on a link with `rel="next"` / `rel="prev"` are a Notice, `links.non_descriptive_in_context`, instead of a finding.
+- A wrapping `<label>` names only the control it labels (a button inside a label no longer takes the label's text), and a `<label for>` can name a button.
+- `bfsg:history --cleanup --url=...` deletes only the reports of that URL; before, `--url` was ignored and every old report was deleted.
+- The page and stylesheet size caps count decoded bytes, so a small gzip response can no longer expand beyond the cap.
+- MCP `analyze_url` and `generate_report` return an error for a page that redirects to the login page, like `bfsg:check` does, instead of analysing the login form.
+- `bfsg:check`, `bfsg:history` and `bfsg:mcp-server` are registered outside the console too, so `Artisan::call('bfsg:check', ...)` works from a web request or a queue worker.
+- `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` and `BFSG_AUTH_TOKEN` keep working after `php artisan config:cache`.
+
+### Changed
+- Contrast failures on pages with unseen stylesheets are Warnings (tagged `approximate`) instead of Errors, and such pages gain one Notice; scores and `--fail-on=error` results move accordingly.
+- `bfsg:history --cleanup --trend` exits 2 (the two options contradict each other).
+
+### Added
+- `contrast.stylesheets_missing` (Notice, WCAG 1.4.3, param `count`): the page links stylesheets that were not analysed, so its contrast failures are estimates. Translations in `lang/en` and `lang/de`.
+- `bfsg.authentication.email`, `bfsg.authentication.password` and `bfsg.authentication.token` (`BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD`, `BFSG_AUTH_TOKEN`, default `null`): credentials for `bfsg:check --auth` are read from the config, so they survive `config:cache`.
+
 ## [3.1.0] - 2026-11-03
 
 A quality release: contrast measures far more pages exactly and says so when it cannot, in-process fetching and every output path are hardened, and the MCP server no longer ends on a failing tool. There are no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names or the JSON report shape; findings, scores, severities and exit codes change only where listed below. See [UPGRADE.md](UPGRADE.md).
