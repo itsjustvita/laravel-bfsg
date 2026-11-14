@@ -66,6 +66,21 @@ class CssParser
     /** Nesting levels of :is(), :where() and :has() argument lists cannotMatch() looks into; deeper ones may match. */
     private const MAX_MATCH_NESTING = 8;
 
+    /** Class names and ids (one per class token and element) documentTokens() keeps; beyond it every selector may match. */
+    private const MAX_DOCUMENT_TOKENS = 100000;
+
+    /**
+     * Pseudo-classes cannotMatch() treats as impossible when no element passes the XPath test: :checked needs a checked
+     * or selected attribute or an option (a select selects its first by default), :disabled a disabled attribute (on the
+     * element, a fieldset or an optgroup), :placeholder-shown a placeholder and :required a required attribute (R12).
+     */
+    private const STATE_ATTRIBUTES = [
+        'checked' => '@checked or @selected or self::option',
+        'disabled' => '@disabled',
+        'placeholder-shown' => '@placeholder',
+        'required' => '@required',
+    ];
+
     /** The background properties the backdrop reads (background()): a maybe rule that could win one makes it uncertain. */
     private const BACKGROUND_PROPERTIES = ['background', 'background-color', 'background-image'];
 
@@ -294,14 +309,14 @@ class CssParser
      */
     private ?array $universalMaybeWeights = null;
 
-    /** @var array{class: array<string, true>, id: array<string, true>, checked: bool}|null the document's class names and ids (ASCII lower-cased) and whether an element may be :checked; null until documentTokens() */
+    /** @var array{class: array<string, true>, id: array<string, true>, all: bool, checked?: bool, disabled?: bool, placeholder-shown?: bool, required?: bool}|null see documentTokens(); null until then */
     private ?array $documentTokens = null;
 
     /** @var array<string, bool> node path => whether a maybe rule may hide the element or an ancestor (maybeHidden()) */
     private array $maybeHidingCache = [];
 
-    /** Whether a universal maybe rule outside a viewport rule declares a hiding clipping value: it may clip any element. */
-    private bool $universalMaybeHides = false;
+    /** @var array<string, string> longhand => a hiding clipping value some universal maybe rule outside a viewport rule declares (hidingClippingValues()) */
+    private array $universalMaybeHiding = [];
 
     /** Bytes counted for the rule entries nesting added, against MAX_NESTED_RULE_BYTES. */
     private int $nestedRuleBytes = 0;
@@ -501,7 +516,7 @@ class CssParser
         $this->customIndexEntries = $this->maybeIndexEntries = $this->nestedRuleBytes = $this->layerNames = $this->layerAppearances = 0;
         $this->universalMaybeWeights = $this->documentTokens = null;
         $this->maybeHidingCache = [];
-        $this->universalMaybeHides = false;
+        $this->universalMaybeHiding = [];
         $this->layerIds = $this->layerParents = $this->overflowLayers = $this->isOverflowLayer = $this->baseAppearance = $this->anyAppearance = [];
         $this->indexed = false;
         $this->indexBuilds = 0;
@@ -582,6 +597,21 @@ class CssParser
         // The two indexes are the one cascade that declarationsFor() and the custom properties share.
         foreach ($this->rules as $position => $rule) {
             $kind = $this->indexKind($rule);
+
+            if ($kind === null && isset($rule['properties']['content-visibility']) && $this->inBaseCascade($rule) && $this->document !== null) {
+                // Read only from maybe rules (maybeHidden()): within the subset it changes nothing and counts against no budget.
+                if (microtime(true) > $deadline) {
+                    $this->truncated = true;
+
+                    break;
+                }
+
+                if ($this->simpleSelectorToXpath($rule['selector']) === null && ! $this->cannotMatch($rule['selector'])) {
+                    $this->indexMaybeRule($position, $rule, false, $tokens, $keys);
+                }
+
+                continue;
+            }
 
             if ($kind === null || ! $this->inBaseCascade($rule) || ($kind === 'clipping' && $this->clippingTruncated)) {
                 continue;
@@ -1459,10 +1489,10 @@ class CssParser
     }
 
     /**
-     * Whether a maybe rule leaves open whether the element is visually hidden (R10, rule D2): a maybe rule outside a
-     * viewport rule declares a hiding clipping value (clippingValue()) on the element or an ancestor, or isVisuallyHidden()
-     * is false (a maybe rule may reveal, or there are more than MAX_CLIPPING_RULES clipping-only rules) although the
-     * element would be hidden without the maybe rules. A truncated index is `limit` anyway.
+     * Whether a maybe rule leaves open whether the element is visually hidden (R10, rule D2): isVisuallyHidden() is false
+     * (a maybe rule may reveal, or there are more than MAX_CLIPPING_RULES clipping-only rules), but the element or an
+     * ancestor would be clipped to nothing with the hiding clipping values of the maybe rules covering it taken as
+     * winning, or without the maybe rules. A truncated index is `limit` anyway.
      */
     private function clippingUncertain(DOMElement $element): bool
     {
@@ -1476,13 +1506,14 @@ class CssParser
         $code = $this->clippingCode($element);
         $hidden = ! $this->clippingTruncated && ! $this->universalMaybeClipping && ($code & 3) !== self::NOT_CLIPPED;
 
-        return ($code >> 4) === 1 || (! $hidden && (($code >> 2) & 3) !== self::NOT_CLIPPED);
+        // The state with the hiding maybe values clips at least as much as the one without maybe rules.
+        return ! $hidden && (($code >> 4) & 3) !== self::NOT_CLIPPED;
     }
 
     /**
      * The element's clipping code (clippingState()): its clipping state in bits 0–1, the state without maybe rules in
-     * bits 2–3, and in bit 4 whether a maybe rule may hide it or an ancestor. Memoised per element within
-     * MAX_CLIPPED_CACHE_BYTES.
+     * bits 2–3, and in bits 4–5 the state with the hiding clipping values of the maybe rules taken as winning. Memoised
+     * per element within MAX_CLIPPED_CACHE_BYTES.
      */
     private function clippingCode(DOMElement $element): int
     {
@@ -1501,7 +1532,7 @@ class CssParser
             [$node, $key] = [$parent, $this->parentKey($key, $parent)];
         }
 
-        $state = $this->clippedCache[$key] ?? self::NOT_CLIPPED; // code: NOT_CLIPPED in both states, no maybe hider
+        $state = $this->clippedCache[$key] ?? self::NOT_CLIPPED; // code: NOT_CLIPPED in every state
 
         foreach (array_reverse($unknown) as [$node, $key]) {
             $state = $this->clippingState($node, $key, $state);
@@ -1532,7 +1563,11 @@ class CssParser
 
         $declares = fn (int $position): bool => array_intersect_key($this->rules[$position]['properties'], self::CLIPPING_PROPERTIES) !== [];
         $this->universalMaybeClipping = array_filter($this->universalMaybeRules, $declares) !== [];
-        $this->universalMaybeHides = array_filter($this->universalMaybeRules, fn (int $position): bool => $this->hidesByClipping($position)) !== [];
+        $this->universalMaybeHiding = [];
+
+        foreach ($this->universalMaybeRules as $position) {
+            $this->universalMaybeHiding = [...$this->universalMaybeHiding, ...$this->hidingClippingValues($position)]; // at most one entry per longhand
+        }
         $this->clippingUniversals = $this->foldClipping(array_map(fn (int $position): array => $this->clippingRule($position), [...$this->universalCustomRules, ...$this->universalClippingRules]));
     }
 
@@ -1551,39 +1586,48 @@ class CssParser
     /**
      * The clipping code of an element (clippingCode()) from its parent's: each state (NOT_CLIPPED, OVERFLOW_CLIPPED,
      * CLIPPED) is the element's own clipping or the inherited one, whichever clips more. An overflow clip does not reach
-     * a `position: fixed` element; neither state holds on a focusable element or one that declares `all`. In the state
-     * with maybe rules a maybe rule may reveal (its clipping property cancels the element's own clipping, its `position`
-     * an inherited overflow clip, its `all` both) and never hides; the state without them ignores them. An element that
-     * is not positioned and inherits nothing is decided without looking at its declarations.
+     * a `position: fixed` element; no state holds on a focusable element or one that declares `all`. In the state with
+     * maybe rules a maybe rule may reveal (its clipping property cancels the element's own clipping, its `position` an
+     * inherited overflow clip, its `all` both) and never hides; the state without them ignores them; the hiding state
+     * takes the hiding clipping values of the maybe rules covering the element (hidingClippingValues(), the universal
+     * ones included) as winning, so it is clipped exactly when the maybe rules may complete a clip. An element that is
+     * not positioned in any of them and inherits nothing is decided without looking at its declarations.
      */
     private function clippingState(DOMElement $element, string $key, int $code): int
     {
-        [$inherited, $base] = [$code & 3, ($code >> 2) & 3];
-        $hides = ($code >> 4) === 1 || $this->universalMaybeHides;
+        [$inherited, $base, $hiding] = [$code & 3, ($code >> 2) & 3, ($code >> 4) & 3];
         $maybe = [];
+        $values = $this->universalMaybeHiding;
 
         foreach ($this->maybeIndex[$key] ?? [] as $position) {
             $maybe += array_intersect_key($this->rules[$position]['properties'], self::CLIPPING_PROPERTIES);
-            $hides = $hides || $this->hidesByClipping($position);
+            $values = [...$values, ...$this->hidingClippingValues($position)];
         }
 
         $positioned = isset($this->positioned[$key]) || stripos($element->getAttribute('style'), 'position') !== false;
 
-        if ($inherited === self::NOT_CLIPPED && $base === self::NOT_CLIPPED && ! $positioned) {
-            return $hides ? 16 : 0;
+        if ($inherited === self::NOT_CLIPPED && $base === self::NOT_CLIPPED && $hiding === self::NOT_CLIPPED && ! $positioned && ! isset($values['position'])) {
+            return self::NOT_CLIPPED;
         }
 
         [$winners, $flags] = $this->clippingDeclarations($element, $key);
         $own = $positioned ? $this->ownClipping($winners, $flags['logical padding']) : self::NOT_CLIPPED;
+        $hidingWinners = $winners;
+
+        foreach (array_diff_key($values, ['logical padding' => true]) as $name => $value) {
+            $hidingWinners[$name] = ['declaration' => ['value' => $value, 'important' => false], 'weight' => []];
+        }
+
+        $hidingOwn = $positioned || isset($values['position']) ? $this->ownClipping($hidingWinners, $flags['logical padding'] && ! isset($values['logical padding'])) : self::NOT_CLIPPED;
         $focusable = null;
-        $state = function (int $inherited, int $own, array $maybe) use ($element, $flags, &$focusable): int {
-            if ($inherited === self::OVERFLOW_CLIPPED && ($flags['fixed'] || isset($maybe['position']))) {
+        $state = function (int $inherited, int $own, bool $escapes, bool $reset) use ($element, &$focusable): int {
+            if ($inherited === self::OVERFLOW_CLIPPED && $escapes) {
                 $inherited = self::NOT_CLIPPED; // it escapes the overflow clip of an ancestor that is not its containing block
             }
 
-            $state = max($inherited, $maybe === [] ? $own : self::NOT_CLIPPED);
+            $state = max($inherited, $own);
 
-            if ($state === self::NOT_CLIPPED || $flags['all'] || isset($maybe['all'])) {
+            if ($state === self::NOT_CLIPPED || $reset) {
                 return self::NOT_CLIPPED;
             }
 
@@ -1592,38 +1636,51 @@ class CssParser
             return $focusable ? self::NOT_CLIPPED : $state;
         };
 
-        return $state($inherited, $own, $maybe) | $state($base, $own, []) << 2 | ($hides ? 16 : 0);
+        return $state($inherited, $maybe === [] ? $own : self::NOT_CLIPPED, $flags['fixed'] || isset($maybe['position']), $flags['all'] || isset($maybe['all']))
+            | $state($base, $own, $flags['fixed'], $flags['all']) << 2
+            | $state($hiding, $hidingOwn, $flags['fixed'] && ! isset($values['position']), $flags['all']) << 4;
     }
 
     /**
-     * Whether a maybe rule outside a viewport rule declares a clipping value that takes part in clipping to nothing
-     * (clippingValue(), the `overflow` and `padding` shorthands split, a zero logical padding): it may hide the element.
+     * The hiding clipping values of a maybe rule outside a viewport rule (a viewport rule never hides, R37): its
+     * declarations that take part in clipping to nothing (clippingValue()), by longhand, the `overflow` and `padding`
+     * shorthands split; `logical padding` for a zero logical padding.
+     *
+     * @return array<string, string>
      */
-    private function hidesByClipping(int $position): bool
+    private function hidingClippingValues(int $position): array
     {
         $rule = $this->rules[$position];
 
         if ($rule['condition'] === 'viewport') {
-            return false; // like a hiding viewport rule (R37), it never hides
+            return [];
         }
+
+        $hiding = [];
 
         foreach (array_intersect_key($rule['properties'], self::CLIPPING_PROPERTIES) as $name => $declaration) {
             $value = strlen($declaration['value']) > 256 ? '' : strtolower(trim($declaration['value']));
-            $values = match (true) {
-                $name === 'overflow' => $this->overflowAxes($value),
-                $name === 'padding' => array_combine(['padding-top', 'padding-right', 'padding-bottom', 'padding-left'], $this->boxSides($this->boxValues($value), '')),
-                str_starts_with($name, 'padding-inline'), str_starts_with($name, 'padding-block') => ['padding-top' => $this->zeroBox($value) ? '0' : ''],
+
+            if (str_starts_with($name, 'padding-inline') || str_starts_with($name, 'padding-block')) {
+                $hiding += $this->zeroBox($value) ? ['logical padding' => '0'] : [];
+
+                continue;
+            }
+
+            $values = match ($name) {
+                'overflow' => $this->overflowAxes($value),
+                'padding' => array_combine(['padding-top', 'padding-right', 'padding-bottom', 'padding-left'], $this->boxSides($this->boxValues($value), '')),
                 default => [$name => $value],
             };
 
             foreach ($values as $longhand => $part) {
                 if ($this->clippingValue($longhand, $part)) {
-                    return true;
+                    $hiding[$longhand] = $part;
                 }
             }
         }
 
-        return false;
+        return $hiding;
     }
 
     /**
@@ -3335,8 +3392,8 @@ class CssParser
 
     /**
      * Whether a selector provably matches no element of the document (R10): a required compound names a class or an id
-     * that no element carries (compared ASCII case-insensitively, as in quirks mode), or needs :checked where no element
-     * has a checked or selected attribute and there is no option. Required are the compounds of the selector itself and
+     * that no element carries (compared ASCII case-insensitively, as in quirks mode), or needs a pseudo-class of
+     * STATE_ATTRIBUTES that no element can match (R12). Beyond MAX_DOCUMENT_TOKENS every selector may match. Required are the compounds of the selector itself and
      * of the argument lists of :is(), :where(), :matches(), :-webkit-any(), :-moz-any() and :has(), a list counting only
      * when every argument cannot match; the arguments of :not() and of every other function never count. Lists nested
      * deeper than MAX_MATCH_NESTING may match. One escape-aware scan per nesting level, without backtracking.
@@ -3344,6 +3401,11 @@ class CssParser
     private function cannotMatch(string $selector, int $nesting = 0): bool
     {
         $tokens = $this->documentTokens();
+
+        if ($tokens['all']) {
+            return false;
+        }
+
         $length = strlen($selector);
 
         for ($i = 0; $i < $length; $i++) {
@@ -3354,7 +3416,7 @@ class CssParser
             } elseif ($char === '"' || $char === "'") {
                 return false; // a string outside brackets and parentheses: not a selector this scan reads
             } elseif ($char === '[' || $char === '(') {
-                $end = $char === '[' ? $this->closingBracket($selector, $i) : $this->closingParenthesis($selector, $i, true);
+                $end = $char === '[' ? $this->closingBracket($selector, $i, true) : $this->closingParenthesis($selector, $i, true);
 
                 if ($end === null) {
                     return false;
@@ -3387,7 +3449,7 @@ class CssParser
                     }
 
                     $i = $close;
-                } elseif (! $pseudoElement && $name === 'checked' && ! $tokens['checked']) {
+                } elseif (! $pseudoElement && isset(self::STATE_ATTRIBUTES[$name]) && ! $tokens[$name]) {
                     return true;
                 }
             }
@@ -3464,10 +3526,10 @@ class CssParser
     }
 
     /**
-     * Once per parse: the class names and ids of the document (ASCII lower-cased) and whether an element may be :checked
-     * (a checked or selected attribute, or an option, which a select may select by default).
+     * Once per parse: the class names and ids of the document (ASCII lower-cased) and, per STATE_ATTRIBUTES pseudo-class,
+     * whether an element may match it. Beyond MAX_DOCUMENT_TOKENS `all` is set and nothing else is kept.
      *
-     * @return array{class: array<string, true>, id: array<string, true>, checked: bool}
+     * @return array{class: array<string, true>, id: array<string, true>, all: bool, checked?: bool, disabled?: bool, placeholder-shown?: bool, required?: bool}
      */
     private function documentTokens(): array
     {
@@ -3475,19 +3537,29 @@ class CssParser
             return $this->documentTokens;
         }
 
-        $tokens = ['class' => [], 'id' => [], 'checked' => false];
+        $tokens = ['class' => [], 'id' => [], 'all' => false];
+        $count = 0;
 
         foreach ($this->document?->query('//*[@class or @id]') ?? [] as $element) {
-            foreach (preg_split('/[ \t\n\r\f]++/', strtolower($element->getAttribute('class')), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $class) {
-                $tokens['class'][$class] = true;
+            $names = preg_split('/[ \t\n\r\f]++/', strtolower($element->getAttribute('class')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $count += count($names) + 1;
+
+            if ($count > self::MAX_DOCUMENT_TOKENS) {
+                return $this->documentTokens = ['class' => [], 'id' => [], 'all' => true]; // too many to keep: everything may match
             }
+
+            $tokens['class'] += array_fill_keys($names, true);
 
             if ($element->getAttribute('id') !== '') {
                 $tokens['id'][strtolower($element->getAttribute('id'))] = true;
             }
         }
 
-        $tokens['checked'] = $this->document?->xpath()->evaluate('boolean(//*[@checked or @selected or self::option])') === true;
+        $xpath = $this->document?->xpath();
+
+        foreach (self::STATE_ATTRIBUTES as $state => $test) {
+            $tokens[$state] = $xpath?->evaluate('boolean(//*['.$test.'])') === true;
+        }
 
         return $this->documentTokens = $tokens;
     }
@@ -3644,8 +3716,8 @@ class CssParser
         return in_array('', $compounds, true) ? [''] : $compounds;
     }
 
-    /** Index of the bracket closing the one at $open (quotes respected), or null. */
-    private function closingBracket(string $value, int $open): ?int
+    /** Index of the bracket closing the one at $open (quotes respected; with $escapes, backslash escapes outside them too), or null. */
+    private function closingBracket(string $value, int $open, bool $escapes = false): ?int
     {
         $quote = null;
         $length = strlen($value);
@@ -3653,7 +3725,9 @@ class CssParser
         for ($i = $open + 1; $i < $length; $i++) {
             $char = $value[$i];
 
-            if ($quote !== null) {
+            if ($escapes && $quote === null && $char === '\\') {
+                $i++;
+            } elseif ($quote !== null) {
                 if ($char === '\\') {
                     $i++;
                 } elseif ($char === $quote) {
@@ -3671,8 +3745,8 @@ class CssParser
 
     /**
      * Which index a rule belongs to: 'rule' when it carries one of INDEXED_PROPERTIES, 'custom' when it carries
-     * custom properties but none of them, 'clipping' when it carries only CLIPPING_PROPERTIES or content-visibility
-     * among these (its own budget, in the element index), null when it is not indexed.
+     * custom properties but none of them, 'clipping' when it carries only CLIPPING_PROPERTIES among these (its own
+     * budget, in the element index), null when it is not indexed.
      *
      * @param  array{properties: array<string, array{value: string, important: bool}>}  $rule
      * @return 'rule'|'custom'|'clipping'|null
@@ -3686,8 +3760,8 @@ class CssParser
                 $custom = true;
             } elseif (in_array($name, self::INDEXED_PROPERTIES, true)) {
                 return 'rule';
-            } elseif (isset(self::CLIPPING_PROPERTIES[$name]) || $name === 'content-visibility') {
-                $clipping = true; // content-visibility only for maybe rules (maybeHidden()); its budget is the clipping one
+            } elseif (isset(self::CLIPPING_PROPERTIES[$name])) {
+                $clipping = true;
             }
         }
 

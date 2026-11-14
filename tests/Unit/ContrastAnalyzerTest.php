@@ -1029,6 +1029,52 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame([], $this->analyze($this->page('.label{color:#111}'.substr($css, 18), '<div class="wrap"><b>b</b><span class="label">Label</span></div>')), 'a pass stays silent');
     }
 
+    /** Bootstrap 5.3: the stock button, nav link and dropdown item with their :disabled rules (heavier than the base rules). */
+    private const BOOTSTRAP_DISABLED = '.btn{color:var(--bs-btn-color);background-color:var(--bs-btn-bg)}
+.btn-primary{--bs-btn-color:#fff;--bs-btn-bg:#0d6efd;--bs-btn-disabled-color:#fff;--bs-btn-disabled-bg:#0d6efd}
+.btn:disabled,.btn.disabled{color:var(--bs-btn-disabled-color);background-color:var(--bs-btn-disabled-bg);opacity:.65}
+.nav-link{color:#0a58ca}.nav-link:disabled,.nav-link.disabled{color:#6c757d;opacity:.65}
+.dropdown-item{color:#212529;background-color:transparent}.dropdown-item:disabled,.dropdown-item.disabled{color:#adb5bd;background-color:transparent}';
+
+    // R12: :disabled needs a disabled attribute somewhere in the document, so stock Bootstrap components stay exact.
+    public function test_bootstrap_disabled_rules_need_a_disabled_element(): void
+    {
+        $body = '<button class="btn btn-primary">Save</button><a class="nav-link" href="/a">Link</a><a class="dropdown-item" href="/b">Item</a>';
+
+        $this->assertSame([], $this->analyze($this->page(self::BOOTSTRAP_DISABLED, $body)), 'nothing is disabled');
+        $this->assertHasViolation($this->analyze($this->page(self::BOOTSTRAP_DISABLED, $body.'<button class="btn btn-primary" disabled>Off</button>')), 'contrast.unverifiable', severity: Severity::Notice);
+    }
+
+    /** @return array<string, array{0: string, 1: string, 2: Severity}> R12 review: a maybe clipping rule over failing text (#aaa on .t), the body and the verdict */
+    public static function maybeClippingRules(): array
+    {
+        return [
+            'overflow:hidden on an ancestor' => ['.card:has(img){overflow:hidden}', '<div class="card"><img src="/a.png" alt=""><p class="t">Text</p></div>', Severity::Error],
+            'a zero padding' => [':where(ul.list) > li{padding:0}', '<ul class="list"><li class="t">Text</li></ul>', Severity::Error],
+            'typography logical padding' => [':where(tbody td:first-child){padding-inline-start:0}', '<table><tbody><tr><td class="t">Text</td></tr></tbody></table>', Severity::Error],
+            'min-width:auto on every child' => [':is(.flex) > *{min-width:auto}', '<div class="flex"><p class="t">Text</p></div>', Severity::Error],
+            'completing a 1px overflow clip' => ['.t{position:absolute;width:1px;height:1px} .wrap:has(b) .t{overflow:hidden}', '<div class="wrap"><b>b</b><span class="t">Text</span></div>', Severity::Warning],
+            'completing a clip on an ancestor' => ['.box{position:absolute} .wrap:has(b) .box{clip:rect(0,0,0,0)}', '<div class="wrap"><b>b</b><div class="box"><span class="t">Text</span></div></div>', Severity::Warning],
+        ];
+    }
+
+    // R12 review: only a maybe rule that can complete a clip to nothing makes the failure approximate.
+    #[DataProvider('maybeClippingRules')]
+    public function test_only_a_maybe_rule_that_can_complete_a_clip_makes_the_failure_approximate(string $rule, string $body, Severity $severity): void
+    {
+        $violation = $this->assertHasViolation($this->analyze($this->page('.t{color:#aaa} '.$rule, $body)), 'contrast.insufficient');
+
+        $this->assertSame($severity, $violation->severity);
+    }
+
+    // R12 review: content-visibility rules of the supported subset count against no budget, so an exempt sr-only stays exempt.
+    public function test_supported_content_visibility_rules_change_nothing(): void
+    {
+        $css = implode('', array_map(fn (int $i): string => ".cv$i{content-visibility:auto}", range(1, 2100))).self::TAILWIND_SR_ONLY;
+
+        $this->assertSame([], $this->analyze($this->page($css, self::ICON_BUTTON)));
+    }
+
     /** @return array<string, array{0: string, 1: bool}> R10: unsupported rules that may hide the text, and whether they make the failure approximate */
     public static function maybeHidingRules(): array
     {

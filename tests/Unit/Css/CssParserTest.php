@@ -1794,6 +1794,11 @@ class CssParserTest extends TestCase
             ':checked without a checked element' => ['.on:checked + p', false],
             ':checked inside :not()' => ['.on:not(:checked) + p', true],
             'a pseudo-element name is not a class' => ['.on:has(b) p:nth-last-child(1)', true],
+            ':disabled without a disabled element' => ['.on:has(:disabled) p', false],
+            ':placeholder-shown without a placeholder' => ['.on:placeholder-shown ~ p, p:placeholder-shown', false],
+            ':required without a required element' => ['.on:has(:required) p', false],
+            ':not(:disabled) never counts' => ['.on:not(:disabled) p:nth-child(1)', true],
+            'an escaped bracket inside an attribute selector' => ['[data-x=a\\].absent]:has(b) p', true],
         ];
     }
 
@@ -1813,6 +1818,24 @@ class CssParserTest extends TestCase
             [$parser, $document] = $this->parsed(':checked ~ p{color:#111}', $control.'<p id="t">x</p>');
             $this->assertSame($possible, $parser->maybeDeclares($this->target($document), 'color'), $control);
         }
+    }
+
+    // R12: :disabled, :placeholder-shown and :required need their attribute on some element.
+    public function test_state_pseudo_classes_need_their_attribute(): void
+    {
+        foreach ([':disabled' => '<fieldset disabled></fieldset>', ':placeholder-shown' => '<input placeholder="Name">', ':required' => '<input required>'] as $state => $control) {
+            [$parser, $document] = $this->parsed("$state ~ p{color:#111}", $control.'<p id="t">x</p>');
+            $this->assertTrue($parser->maybeDeclares($this->target($document), 'color'), $state);
+        }
+    }
+
+    // R12: beyond MAX_DOCUMENT_TOKENS class names the prefilter keeps nothing, and every rule may match.
+    public function test_too_many_document_tokens_disable_the_prefilter(): void
+    {
+        $classes = implode(' ', array_map(fn (int $i): string => "k$i", range(1, 100001)));
+        [$parser, $document] = $this->parsed('.absent:has(b) p{color:#111}', '<i class="'.$classes.'"></i><p id="t">x</p>');
+
+        $this->assertTrue($parser->maybeDeclares($this->target($document), 'color'));
     }
 
     public function test_custom_properties_from_unsupported_selectors_are_approximate(): void
