@@ -104,18 +104,24 @@ class ContrastPerformanceTest extends TestCase
         $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
-    /** @return array<string, array{0: string}> the selector of 3 900 universal rules that declare one custom property each (%d: its number) */
-    public static function universalRuleSelectors(): array
+    /** @return array<string, array{0: string, 1: int}> one of 3 900 universal rules (%1$d: its number) and the labels left visually hidden */
+    public static function universalRules(): array
     {
-        return ['custom-property rules' => ['*'], 'maybe rules' => [':has(.q%d)']];
+        return [
+            'custom-property rules' => ['*{--a%1$d:1}', 480],
+            'maybe rules' => [':has(.q%1$d){--a%1$d:1}', 480],
+            'custom-property rules with padding' => ['*{--a%1$d:1;padding:0}', 480],
+            'maybe rules with padding' => [':has(.q%1$d){--a%1$d:1;padding:0}', 0], // may reveal anything: nothing is hidden
+        ];
     }
 
-    // C2 review: universal custom-property and maybe rules are looked at once per index build, not once per element.
+    // C2 review: universal custom-property and maybe rules are folded once per index build, not once per element; with
+    // `*{position:relative}` every element is positioned, so each one's own clipping is looked at.
     #[Group('performance')]
-    #[DataProvider('universalRuleSelectors')]
-    public function test_visually_hidden_check_with_many_universal_rules_stays_in_budget(string $selector): void
+    #[DataProvider('universalRules')]
+    public function test_visually_hidden_check_with_many_universal_rules_stays_in_budget(string $rule, int $hiddenLabels): void
     {
-        $css = implode('', array_map(fn (int $i): string => sprintf($selector, $i)."{--a$i:1}", range(1, 3900)))
+        $css = '*{position:relative}'.implode('', array_map(fn (int $i): string => sprintf($rule, $i), range(1, 3900)))
             .'.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border-width:0}'
             .' .c{color:#aaa}';
         $sections = implode('', array_map(fn (int $i): string => "<section class=\"s$i\">".str_repeat('<div>', 30)
@@ -128,7 +134,7 @@ class ContrastPerformanceTest extends TestCase
         $hidden = array_map(fn (DOMElement $element): bool => $parser->isVisuallyHidden($element), $texts);
         $elapsed = microtime(true) - $start;
 
-        $this->assertSame(480, count(array_filter($hidden)), 'every label is exempt, every paragraph is not');
+        $this->assertSame($hiddenLabels, count(array_filter($hidden)), 'the labels are exempt, the paragraphs are not');
         $this->assertCount(960, $hidden);
         $this->assertLessThan(PerformanceBudget::seconds(0.5), $elapsed, sprintf('isVisuallyHidden() took %.2f s', $elapsed));
 
@@ -136,8 +142,32 @@ class ContrastPerformanceTest extends TestCase
         $violations = (new ContrastAnalyzer(level: 'AA'))->analyze($document);
         $elapsed = microtime(true) - $start;
 
-        $this->assertSame(['contrast.insufficient p.c'], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element, $violations));
-        $this->assertSame(480, $violations[0]->meta['occurrences']);
+        $this->assertSame('contrast.insufficient p.c', $violations[0]->key.' '.$violations[0]->element);
         $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+
+        if ($hiddenLabels > 0) {
+            // Exact and (beyond the 64 positioned siblings looked at, a `backdrop` estimate) approximate findings.
+            $this->assertSame(['contrast.insufficient p.c'], array_values(array_unique(array_map(fn (Violation $violation) => $violation->key.' '.$violation->element, $violations))));
+            $this->assertSame(480, array_sum(array_map(fn (Violation $violation) => $violation->meta['occurrences'], $violations)), 'every paragraph is measured');
+        }
+    }
+
+    // C2 review: universal clipping-only rules get no per-element index entries, so they leave the index deadline to the
+    // colour rules (the same page with `margin` instead of `padding` takes about 0.2 s).
+    #[Group('performance')]
+    public function test_universal_clipping_only_rules_stay_in_budget(): void
+    {
+        $css = implode('', array_map(fn (int $i): string => "*{padding:{$i}px}", range(1, 1900))).' .c{color:#aaa}';
+        $body = str_repeat('<div><p class="c">x</p><span>y</span></div>', 2500); // 7 500 elements
+        $document = HtmlDocument::fromHtml('<!DOCTYPE html><html lang="en"><head><title>Padding</title><style>'.$css.'</style></head><body>'.$body.'</body></html>');
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze($document);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame(['contrast.insufficient p.c'], array_map(fn (Violation $violation) => $violation->key.' '.$violation->element, $violations));
+        $this->assertSame(2500, $violations[0]->meta['occurrences']);
+        $this->assertSame([], $violations[0]->tags, 'the index is not truncated');
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 }

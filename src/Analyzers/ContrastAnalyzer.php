@@ -261,11 +261,13 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     /**
      * The style chain key (R40): a 16-byte hash over every level from the root to the element of its tag, its attributes
-     * that matter sorted by name, whether it is its parent's first and last element child, and whether a previous sibling
-     * may cover its backdrop (CssParser::coveringChildIndex()). The attributes that matter are CHAIN_ATTRIBUTES and those a
-     * selector sees (CssParser::selectorAttributes(): `id` when a selector has an id selector, others by value or only by
-     * presence; all of them when a name could not be read). Nothing else can change the cascade or the exemption, so text
-     * with the same key has the same colours, size and verdict, and a unique href or wire:key does not split a listing.
+     * that matter sorted by name, whether it is its parent's first and last element child, whether a previous sibling
+     * may cover its backdrop (CssParser::coveringChildIndex()) and whether it is focusable (Element::isFocusable(): a
+     * focusable element ends a visually hidden clip, CssParser::isVisuallyHidden()). The attributes that matter are
+     * CHAIN_ATTRIBUTES and those a selector sees (CssParser::selectorAttributes(): `id` when a selector has an id
+     * selector, others by value or only by presence; all of them when a name could not be read). Nothing else can change
+     * the cascade or the exemption, so text with the same key has the same colours, size and verdict, and a unique href
+     * or wire:key does not split a listing.
      * The path's keys are kept while the document-order walk stays below it, so each element is hashed once and memory
      * stays O(depth).
      */
@@ -298,7 +300,9 @@ class ContrastAnalyzer extends BaseAnalyzer
             }
 
             ksort($attributes, SORT_STRING);
-            $level = [$node->nodeName, $attributes, $node->previousElementSibling === null, $node->nextElementSibling === null, $this->isCovered($parser, $node)];
+            // Focusability decides isVisuallyHidden() (a skip link shows on focus, R7) and may hang on attributes no selector reads.
+            $focusable = ($node->hasAttribute('tabindex') || Element::isNativelyInteractive($node)) && Element::isFocusable($node);
+            $level = [$node->nodeName, $attributes, $node->previousElementSibling === null, $node->nextElementSibling === null, $this->isCovered($parser, $node), $focusable];
             $this->depths[spl_object_id($node)] = count($this->chain);
             $this->chain[] = [$node, hash('xxh128', ($this->chain === [] ? '' : $this->chain[array_key_last($this->chain)][1]).serialize($level), true), false, null];
         }

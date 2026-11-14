@@ -556,6 +556,27 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertSame(1, $violation->meta['occurrences'], 'the label in the button stays exempt');
     }
 
+    /** @return array<string, array{0: string, 1: string, 2: string}> a visually hidden element without and with focus, and the element label of the focusable one */
+    public static function focusableTwins(): array
+    {
+        return [
+            'link without and with href' => ['<a class="sr-only text-gray-400">Skip to content</a>', '<a href="#main" class="sr-only text-gray-400">Skip to content</a>', 'a.sr-only.text-gray-400'],
+            'span without and with tabindex' => ['<span class="sr-only text-gray-400">Skip</span>', '<span tabindex="0" class="sr-only text-gray-400">Skip</span>', 'span.sr-only.text-gray-400'],
+        ];
+    }
+
+    // C2, R7: the exemption memo of a style chain does not carry over to a focusable twin that no selector tells apart.
+    #[DataProvider('focusableTwins')]
+    public function test_focusable_twin_of_exempt_text_is_measured(string $exempt, string $focusable, string $element): void
+    {
+        $body = '<ul><li></li><li>'.$exempt.'</li><li>'.$focusable.'</li><li></li></ul>';
+
+        $violation = $this->assertHasViolation($this->analyze($this->page(self::TAILWIND_SR_ONLY, $body)), 'contrast.insufficient', element: $element, severity: Severity::Error);
+        $this->assertSame('2.60', $violation->params['ratio']);
+        $this->assertSame(1, $violation->meta['occurrences'], 'the twin without focus stays exempt');
+        $this->assertSame('/html[1]/body[1]/ul[1]/li[3]/'.explode('.', $element)[0].'[1]', $violation->selector);
+    }
+
     // C2: without absolute or fixed positioning a 1px box is not taken as clipped to nothing.
     public function test_one_px_box_without_absolute_position_is_measured(): void
     {

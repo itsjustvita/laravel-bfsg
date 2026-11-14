@@ -1153,6 +1153,26 @@ class CssParserTest extends TestCase
         $this->assertFalse($hidden('.wrap:has(> b) .x{--m:1;'.$sr.'}'), 'a maybe rule never hides');
     }
 
+    // C2: universal rules are folded once, and they take part in every element's clipping cascade.
+    public function test_universal_rules_take_part_in_the_clipping_cascade(): void
+    {
+        $box = '.o{position:absolute;width:1px;height:1px;overflow:hidden}';
+        $hidden = function (string $css, string $classes = 'o') {
+            [$parser, $document] = $this->parsed($css, '<div><span id="t" class="'.$classes.'">x</span></div>');
+
+            return $parser->isVisuallyHidden($this->target($document));
+        };
+
+        $this->assertFalse($hidden('*{padding:4px}'.$box), 'a universal padding');
+        $this->assertFalse($hidden('*{--a:1;padding:4px}'.$box), 'a universal custom-property rule');
+        $this->assertTrue($hidden('*{padding:4px}'.$box.' .o{padding:0}'));
+        $this->assertTrue($hidden('*{padding:0 !important}'.$box.' .o{padding:4px}'), 'a universal !important wins');
+        $this->assertFalse($hidden('*{padding:4px} @media (min-width:1px){*{padding:0}}'.$box), 'a hiding universal breakpoint rule changes nothing');
+        $this->assertFalse($hidden('@media (min-width:1px){*{padding:4px}}'.$box), 'a revealing universal breakpoint rule counts');
+        $this->assertTrue($hidden('*{clip:auto} .c{position:absolute;clip:rect(0,0,0,0)}', 'c'));
+        $this->assertFalse($hidden('*{all:unset} .c{position:absolute;clip:rect(0,0,0,0)}', 'c'));
+    }
+
     // C2: rules that only carry the clipping properties have their own budget, so a colour index stays as in 3.1.0.
     public function test_clipping_rules_have_their_own_budget(): void
     {

@@ -261,7 +261,10 @@ class CssParser
     /** @var array<string, int> node path => clipping state (clippingState()), within MAX_CLIPPED_CACHE_BYTES */
     private array $clippedCache = [];
 
-    /** @var list<int>|null universal custom-property rules that declare a clipping property; null until prepareClipping() */
+    /** @var list<int> clipping-only rules with the selector `*`: they weigh the same on every element, so they are not indexed per element */
+    private array $universalClippingRules = [];
+
+    /** @var array{0: array<string, array{declaration: array{value: string, important: bool}, weight: list<int>}>, 1: array<string, bool>}|null the universal rules' clipping cascade and flags (foldClipping()), where every element's starts; null until prepareClipping() */
     private ?array $clippingUniversals = null;
 
     /** Whether a universal maybe rule declares a clipping property: it may reveal any element, so nothing is visually hidden. */
@@ -408,6 +411,7 @@ class CssParser
         $this->layerCacheBytes = $this->clippedCacheBytes = 0;
         $this->clippedCache = [];
         $this->clippingUniversals = null;
+        $this->universalClippingRules = [];
         $this->viewportHiding = $this->clippingTruncated = $this->universalMaybeClipping = false;
         $this->selectorAttributes = null;
         $this->customProperties = null;
@@ -519,6 +523,12 @@ class CssParser
                 }
 
                 $custom = false; // every element declares these: no element is their owner
+            }
+
+            if ($kind === 'clipping' && $expression === '//*') {
+                $this->universalClippingRules[] = $position; // folded once for every element (prepareClipping())
+
+                continue;
             }
 
             if ($kind === 'custom') {
@@ -966,7 +976,11 @@ class CssParser
         return $state !== self::NOT_CLIPPED;
     }
 
-    /** Once per index build: the universal custom-property rules that declare a clipping property, and whether a universal maybe rule does. */
+    /**
+     * Once per index build: the clipping cascade of the universal rules (custom-property and clipping-only rules with
+     * the selector `*`), which weigh the same on every element, and whether a universal maybe rule declares a clipping
+     * property.
+     */
     private function prepareClipping(): void
     {
         if ($this->clippingUniversals !== null) {
@@ -974,8 +988,20 @@ class CssParser
         }
 
         $declares = fn (int $position): bool => array_intersect_key($this->rules[$position]['properties'], self::CLIPPING_PROPERTIES) !== [];
-        $this->clippingUniversals = array_values(array_filter($this->universalCustomRules, $declares));
         $this->universalMaybeClipping = array_filter($this->universalMaybeRules, $declares) !== [];
+        $this->clippingUniversals = $this->foldClipping(array_map(fn (int $position): array => $this->clippingRule($position), [...$this->universalCustomRules, ...$this->universalClippingRules]));
+    }
+
+    /**
+     * A rule's clipping declarations, its weight without the importance and whether it is a viewport rule (foldClipping()).
+     *
+     * @return array{0: array<string, array{value: string, important: bool}>, 1: list<int>, 2: bool}
+     */
+    private function clippingRule(int $position): array
+    {
+        $rule = $this->rules[$position];
+
+        return [array_intersect_key($rule['properties'], self::CLIPPING_PROPERTIES), [0, ...$rule['specificity'], $rule['order']], $rule['condition'] === 'viewport'];
     }
 
     /**
@@ -1016,32 +1042,36 @@ class CssParser
     }
 
     /**
-     * The element's cascade of the clipping properties: the element index, the universal custom-property rules that
-     * declare one (prepareClipping()) and the style attribute, with the `overflow` and `padding` shorthands split into
-     * their axes and sides. A declaration of a viewport rule that would hide (clippingValue()) is left out. The flags
-     * say whether any declaration sets `position: fixed` or `all`, or a non-zero logical padding (unmapped sides).
+     * The element's cascade of the clipping properties: the universal rules' (prepareClipping()), the element index, the
+     * custom-property index and the style attribute (foldClipping()).
      *
      * @return array{0: array<string, array{declaration: array{value: string, important: bool}, weight: list<int>}>, 1: array{fixed: bool, all: bool, 'logical padding': bool}}
      */
     private function clippingDeclarations(DOMElement $element, string $key): array
     {
-        $declared = [];
-
-        foreach ([...$this->index[$key] ?? [], ...$this->customIndex[$key] ?? [], ...$this->clippingUniversals ?? []] as $position) {
-            $rule = $this->rules[$position];
-            $declarations = array_intersect_key($rule['properties'], self::CLIPPING_PROPERTIES);
-
-            if ($declarations !== []) {
-                $declared[] = [$declarations, [0, ...$rule['specificity'], $rule['order']], $rule['condition'] === 'viewport'];
-            }
-        }
+        $declared = array_map(fn (int $position): array => $this->clippingRule($position), [...$this->index[$key] ?? [], ...$this->customIndex[$key] ?? []]);
 
         if ($element->hasAttribute('style')) {
             $declared[] = [array_intersect_key($this->inlineStyle($element), self::CLIPPING_PROPERTIES), [1, 0, 0, 0, PHP_INT_MAX], false];
         }
 
-        $winners = [];
-        $flags = ['fixed' => false, 'all' => false, 'logical padding' => false];
+        return $this->foldClipping($declared, ...($this->clippingUniversals ?? [[], []]));
+    }
+
+    /**
+     * Fold clipping declarations into a cascade, from $winners and $flags: the `overflow` and `padding` shorthands are
+     * split into their axes and sides, and a declaration of a viewport rule that would hide (clippingValue()) is left
+     * out. The flags say whether any declaration sets `position: fixed` or `all`, or a non-zero logical padding
+     * (unmapped sides).
+     *
+     * @param  list<array{0: array<string, array{value: string, important: bool}>, 1: list<int>, 2: bool}>  $declared
+     * @param  array<string, array{declaration: array{value: string, important: bool}, weight: list<int>}>  $winners
+     * @param  array{fixed?: bool, all?: bool, 'logical padding'?: bool}  $flags
+     * @return array{0: array<string, array{declaration: array{value: string, important: bool}, weight: list<int>}>, 1: array{fixed: bool, all: bool, 'logical padding': bool}}
+     */
+    private function foldClipping(array $declared, array $winners = [], array $flags = []): array
+    {
+        $flags += ['fixed' => false, 'all' => false, 'logical padding' => false];
 
         foreach ($declared as [$declarations, $weight, $viewport]) {
             foreach ($declarations as $name => $declaration) {
