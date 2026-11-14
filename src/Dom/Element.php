@@ -181,6 +181,7 @@ final class Element
         };
     }
 
+    /** Reachable by Tab: natively interactive or tabindex >= 0, not disabled, not hidden, inert or inside a template. */
     public static function isFocusable(DOMElement $element): bool
     {
         $tabindex = self::tabindex($element);
@@ -189,11 +190,47 @@ final class Element
             return false;
         }
 
-        if (self::isDisabled($element)) {
+        return self::canTakeFocus($element) && ($tabindex !== null || self::isNativelyInteractive($element));
+    }
+
+    /** tabindex < 0 on an element that could take focus by script (not disabled, hidden, inert or in a template). */
+    public static function isFocusableOnlyByScript(DOMElement $element): bool
+    {
+        $tabindex = self::tabindex($element);
+
+        return $tabindex !== null && $tabindex < 0 && self::canTakeFocus($element);
+    }
+
+    private static function canTakeFocus(DOMElement $element): bool
+    {
+        if (self::isNotRendered($element) || self::isDisabled($element)) {
             return false;
         }
 
-        return $tabindex !== null || self::isNativelyInteractive($element);
+        for ($node = $element; $node instanceof DOMElement; $node = $node->parentNode) {
+            if ($node->hasAttribute('inert')) {
+                return false;
+            }
+        }
+
+        if (self::tag($element) === 'summary' && self::tabindex($element) === null) {
+            $parent = $element->parentNode;
+
+            return $parent instanceof DOMElement && self::tag($parent) === 'details' && self::firstChildElement($parent) === $element;
+        }
+
+        return true;
+    }
+
+    private static function firstChildElement(DOMElement $parent): ?DOMElement
+    {
+        foreach ($parent->childNodes as $child) {
+            if ($child instanceof DOMElement) {
+                return $child;
+            }
+        }
+
+        return null;
     }
 
     public static function previousElement(DOMElement $element): ?DOMElement

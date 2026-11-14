@@ -2,6 +2,7 @@
 
 namespace ItsJustVita\LaravelBfsg\Analyzers;
 
+use DOMElement;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\Element;
 use ItsJustVita\LaravelBfsg\Severity;
@@ -17,6 +18,9 @@ class FocusAnalyzer extends BaseAnalyzer
         'background-position', 'background-repeat', 'background-clip', 'background-origin', 'background-attachment',
         'background-blend-mode',
     ];
+
+    /** Outline style keywords (none and hidden are handled separately). */
+    private const OUTLINE_STYLES = ['auto', 'solid', 'dashed', 'dotted', 'double', 'groove', 'ridge', 'inset', 'outset'];
 
     protected string $key = 'focus';
 
@@ -60,6 +64,7 @@ class FocusAnalyzer extends BaseAnalyzer
     {
         $removals = [];
         $indicators = [];
+        $outlines = [];
 
         foreach ($parser->rules() as $rule) {
             $parsed = $this->focusSelector($rule['selector']);
@@ -69,6 +74,11 @@ class FocusAnalyzer extends BaseAnalyzer
             }
 
             $declarations = $this->values($rule['properties']);
+            $parts = $this->outlineParts($declarations);
+
+            if ($parts !== null) {
+                $outlines[] = ['base' => $parsed['base'], 'parts' => $parts];
+            }
 
             if ($this->hasIndicator($declarations)) {
                 $indicators[] = $parsed['base'];
@@ -81,18 +91,26 @@ class FocusAnalyzer extends BaseAnalyzer
             return;
         }
 
+        $matches = [];
+
         $styles = $this->document->styleElements();
         $reported = [];
 
         foreach ($removals as $removal) {
             $global = $removal['base'] === '';
 
-            if (! $global && ! $this->uncoveredElementExists($parser, $removal['base'], $indicators)) {
+            if ($global) {
+                $severity = $this->outlineVisible($this->mergeParts(array_column(array_filter($outlines, fn (array $o) => $o['base'] === ''), 'parts'))) ? null : Severity::Error;
+            } else {
+                $severity = $this->uncoveredSeverity($parser, $removal['base'], $indicators, $outlines, $matches);
+            }
+
+            if ($severity === null) {
                 continue;
             }
 
             $style = $styles[$removal['sheet']] ?? null;
-            $slot = ($global ? 'global' : 'specific').'|'.$removal['sheet'];
+            $slot = ($global ? 'global' : 'specific').'|'.$severity->value.'|'.$removal['sheet'];
 
             if ($style === null || isset($reported[$slot])) {
                 continue;
@@ -103,43 +121,169 @@ class FocusAnalyzer extends BaseAnalyzer
             if ($global) {
                 $this->report('outline_removed_global', Severity::Error, '2.4.7', $style, ['selector' => $removal['selector']]);
             } else {
-                $this->report('outline_removed', Severity::Error, '2.4.7', $style, ['selector' => $removal['selector']]);
+                $this->report('outline_removed', $severity, '2.4.7', $style, ['selector' => $removal['selector']]);
             }
         }
     }
 
     /**
+     * Error when a focusable element matching $base has no indicator, Notice when only elements that take
+     * focus by script (tabindex="-1") are uncovered, null when nothing keyboard-reachable is left uncovered.
+     *
      * @param  list<string>  $indicators  base selectors of focus rules that paint an indicator
+     * @param  list<array{base: string, parts: array{style: ?string, width: ?string, color: ?string}}>  $outlines
+     * @param  array<string, array<int, DOMElement>>  $matches  element ids per base selector (cache)
      */
-    protected function uncoveredElementExists(CssParser $parser, string $base, array $indicators): bool
+    protected function uncoveredSeverity(CssParser $parser, string $base, array $indicators, array $outlines, array &$matches): ?Severity
     {
         if (in_array($base, $indicators, true)) {
-            return false;
+            return null;
         }
 
         $expression = $parser->simpleSelectorToXpath($base);
 
         if ($expression === null) {
-            return true;
+            return Severity::Error;
         }
+
+        $matching = function (string $selector) use ($parser, &$matches): array {
+            if (! isset($matches[$selector])) {
+                $ids = [];
+                $selectorExpression = $parser->simpleSelectorToXpath($selector);
+
+                foreach ($selectorExpression === null ? [] : $this->query($selectorExpression) as $element) {
+                    $ids[spl_object_id($element)] = $element; // kept alive so the object id stays this node's
+                }
+
+                $matches[$selector] = $ids;
+            }
+
+            return $matches[$selector];
+        };
 
         $covered = [];
 
         foreach ($indicators as $indicator) {
-            $indicatorExpression = $parser->simpleSelectorToXpath($indicator);
-
-            foreach ($indicatorExpression === null ? [] : $this->query($indicatorExpression) as $element) {
-                $covered[spl_object_id($element)] = true;
-            }
+            $covered += $matching($indicator);
         }
+
+        $severity = null;
 
         foreach ($this->query($expression) as $element) {
-            if (! isset($covered[spl_object_id($element)])) {
-                return true;
+            $id = spl_object_id($element);
+
+            if (isset($covered[$id])) {
+                continue;
+            }
+
+            $focusable = Element::isFocusable($element);
+
+            if (! $focusable && ! Element::isFocusableOnlyByScript($element)) {
+                continue;
+            }
+
+            $parts = [];
+
+            foreach ($outlines as $outline) {
+                if ($outline['base'] === '' || isset($matching($outline['base'])[$id])) {
+                    $parts[] = $outline['parts'];
+                }
+            }
+
+            if ($this->outlineVisible($this->mergeParts($parts))) {
+                continue;
+            }
+
+            if ($focusable) {
+                return Severity::Error;
+            }
+
+            $severity = Severity::Notice;
+        }
+
+        return $severity;
+    }
+
+    /**
+     * What a rule says about the outline, per longhand: 'set' (paints), 'off' (none/hidden, zero, transparent)
+     * or null (silent). Null when the rule does not mention the outline at all.
+     *
+     * @param  array<string, string>  $declarations
+     * @return array{style: ?string, width: ?string, color: ?string}|null
+     */
+    protected function outlineParts(array $declarations): ?array
+    {
+        $parts = ['style' => null, 'width' => null, 'color' => null];
+        $found = false;
+
+        if (isset($declarations['outline'])) {
+            $found = true;
+
+            foreach (preg_split('/\s+/', $declarations['outline'], -1, PREG_SPLIT_NO_EMPTY) ?: [] as $token) {
+                if (in_array($token, ['none', 'hidden'], true)) {
+                    $parts['style'] = 'off';
+                } elseif (in_array($token, self::OUTLINE_STYLES, true)) {
+                    $parts['style'] = 'set';
+                } elseif ($this->isZero($token)) {
+                    $parts['width'] = 'off';
+                } elseif ($token === 'transparent') {
+                    $parts['color'] = 'off';
+                } elseif (preg_match('/^(\d|\.\d)/', $token) === 1 || in_array($token, ['thin', 'medium', 'thick'], true)) {
+                    $parts['width'] = 'set';
+                } elseif (! in_array($token, self::NOTHING, true) && ! str_starts_with($token, 'var(')) {
+                    $parts['color'] = 'set';
+                }
             }
         }
 
-        return false;
+        if (isset($declarations['outline-style'])) {
+            $found = true;
+            $parts['style'] = in_array($declarations['outline-style'], ['none', 'hidden'], true) ? 'off' : 'set';
+        }
+
+        if (isset($declarations['outline-width'])) {
+            $found = true;
+            $parts['width'] = $this->isZero($declarations['outline-width']) ? 'off' : 'set';
+        }
+
+        if (isset($declarations['outline-color'])) {
+            $found = true;
+            $parts['color'] = $declarations['outline-color'] === 'transparent' ? 'off' : 'set';
+        }
+
+        return $found ? $parts : null;
+    }
+
+    /**
+     * Per longhand a value that paints wins over one that does not (utility classes are separate rules).
+     *
+     * @param  list<array{style: ?string, width: ?string, color: ?string}>  $parts
+     * @return array{style: ?string, width: ?string, color: ?string}
+     */
+    protected function mergeParts(array $parts): array
+    {
+        $merged = ['style' => null, 'width' => null, 'color' => null];
+
+        foreach ($parts as $part) {
+            foreach ($merged as $longhand => $value) {
+                if ($part[$longhand] === 'set' || ($part[$longhand] !== null && $value === null)) {
+                    $merged[$longhand] = $part[$longhand];
+                }
+            }
+        }
+
+        return $merged;
+    }
+
+    /**
+     * Visible when no longhand is switched off and the style was set: a lone outline-color or outline-width
+     * does not paint over a removed (none) style. A rule set that never mentions a style cannot add one.
+     *
+     * @param  array{style: ?string, width: ?string, color: ?string}  $merged
+     */
+    protected function outlineVisible(array $merged): bool
+    {
+        return $merged['style'] === 'set' && $merged['width'] !== 'off' && $merged['color'] !== 'off';
     }
 
     /**

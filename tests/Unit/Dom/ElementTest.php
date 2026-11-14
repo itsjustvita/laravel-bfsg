@@ -96,6 +96,47 @@ class ElementTest extends TestCase
         $this->assertTrue(Element::isDisabled($this->el('<fieldset disabled><input data-t></fieldset>')));
     }
 
+    public function test_is_focusable_rules(): void
+    {
+        $this->assertTrue(Element::isFocusable($this->el('<a data-t href="/">x</a>')));
+        $this->assertFalse(Element::isFocusable($this->el('<a data-t>x</a>')));
+        $this->assertTrue(Element::isFocusable($this->el('<map><area data-t href="/"></map>')));
+        $this->assertTrue(Element::isFocusable($this->el('<input data-t type="text">')));
+        $this->assertFalse(Element::isFocusable($this->el('<input data-t type="hidden">')));
+        $this->assertTrue(Element::isFocusable($this->el('<select data-t></select>')));
+        $this->assertTrue(Element::isFocusable($this->el('<textarea data-t></textarea>')));
+        $this->assertFalse(Element::isFocusable($this->el('<textarea data-t disabled></textarea>')));
+        $this->assertTrue(Element::isFocusable($this->el('<details><summary data-t>x</summary>y</details>')));
+        $this->assertFalse(Element::isFocusable($this->el('<details><p>a</p><summary data-t>x</summary></details>')));
+        $this->assertFalse(Element::isFocusable($this->el('<div><summary data-t>x</summary></div>')));
+        $this->assertTrue(Element::isFocusable($this->el('<iframe data-t></iframe>')));
+        $this->assertTrue(Element::isFocusable($this->el('<audio data-t controls></audio>')));
+        $this->assertFalse(Element::isFocusable($this->el('<video data-t></video>')));
+        $this->assertTrue(Element::isFocusable($this->el('<div data-t contenteditable>x</div>')));
+        $this->assertFalse(Element::isFocusable($this->el('<div data-t contenteditable="false">x</div>')));
+        $this->assertTrue(Element::isFocusable($this->el('<div data-t tabindex="3">x</div>')));
+        $this->assertFalse(Element::isFocusable($this->el('<div data-t tabindex="-1">x</div>')));
+    }
+
+    public function test_is_focusable_is_false_when_hidden_inert_or_in_a_template(): void
+    {
+        $this->assertFalse(Element::isFocusable($this->el('<button data-t hidden>x</button>')));
+        $this->assertFalse(Element::isFocusable($this->el('<div hidden><button data-t>x</button></div>')));
+        $this->assertFalse(Element::isFocusable($this->el('<div inert><button data-t>x</button></div>')));
+        $this->assertFalse(Element::isFocusable($this->el('<button data-t inert>x</button>')));
+        $this->assertFalse(Element::isFocusable($this->el('<template><button data-t>x</button></template>')));
+    }
+
+    public function test_is_focusable_only_by_script(): void
+    {
+        $this->assertTrue(Element::isFocusableOnlyByScript($this->el('<main data-t tabindex="-1">x</main>')));
+        $this->assertTrue(Element::isFocusableOnlyByScript($this->el('<button data-t tabindex="-1">x</button>')));
+        $this->assertFalse(Element::isFocusableOnlyByScript($this->el('<div data-t tabindex="0">x</div>')));
+        $this->assertFalse(Element::isFocusableOnlyByScript($this->el('<div data-t>x</div>')));
+        $this->assertFalse(Element::isFocusableOnlyByScript($this->el('<div hidden data-t tabindex="-1">x</div>')));
+        $this->assertFalse(Element::isFocusableOnlyByScript($this->el('<button data-t tabindex="-1" disabled>x</button>')));
+    }
+
     public function test_previous_element_and_closest(): void
     {
         $doc = HtmlDocument::fromHtml('<html><body><label><span>Name</span> <input id="i"></label></body></html>');
