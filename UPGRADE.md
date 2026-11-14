@@ -13,7 +13,7 @@
 - **`@layer`, `@supports`, visually hidden text, unsupported selectors.** Cascade layers and `@supports` conditions are evaluated, text hidden with `sr-only` / `visually-hidden` (skip links excepted) is not measured, and rules behind selectors the parser cannot evaluate give Notices or Warnings instead of definite results; rules that cannot match anything on the page are ignored. Expect some false Errors to disappear and a few Notices (`contrast.unverifiable`) or approximate Warnings to appear. Nothing to do.
 - **`focus.outline_removed`** reports only focusable elements; `tabindex="-1"` targets are a Notice; `outline-style`, `outline-width` and `outline-color` longhands count as an indicator. Fewer findings.
 - **`input_purpose.invalid_autocomplete`** is an Error only on personal-data fields (including `type="email"` and `type="tel"`) and a best-practice Notice otherwise; `false`, `none`, `nope` and similar are treated like `off`; hidden inputs are skipped. Some Errors become Notices.
-- **`links.non_descriptive`**: pagination words in a navigation or on `rel="next"` / `rel="prev"` links are the Notice `links.non_descriptive_in_context` instead of a finding.
+- **`links.non_descriptive`**: the pagination words "next", "previous", "prev", "weiter", "zurück" and "vor" in a navigation or on `rel="next"` / `rel="prev"` links are the Notice `links.non_descriptive_in_context` instead of a Warning. Nothing to do.
 - **`aria.hidden_focusable`** on an element that is only possibly hidden is a Warning tagged `approximate` instead of an Error.
 - A wrapping `<label>` names only its labelled control, and a `<label for>` can name a button; a few name findings on buttons and controls change accordingly.
 

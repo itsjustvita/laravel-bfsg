@@ -21,12 +21,13 @@ A bugfix release for 3.1.0: contrast no longer reports definite failures it cann
 - `aria.hidden_focusable`: an element that is only possibly hidden (behind a `@supports` condition or a selector the parser cannot evaluate, or in a stylesheet that was not seen) is a Warning tagged `approximate` instead of an Error.
 - `focus.outline_removed`: only elements that can take focus are reported; `tabindex="-1"` scripting targets are a Notice; `outline-style`, `outline-width` and `outline-color` longhands count as an indicator.
 - `input_purpose.invalid_autocomplete`: an invalid token is an Error only on personal-data fields (including `type="email"` and `type="tel"`) and a best-practice Notice elsewhere; `false`, `none`, `nope` and similar act like `off`; hidden inputs are skipped.
-- `links.non_descriptive`: pagination words ("next", "previous", "older" and similar) inside a navigation or on a link with `rel="next"` / `rel="prev"` are a Notice, `links.non_descriptive_in_context`, instead of a finding.
+- `links.non_descriptive`: the pagination words "next", "previous", "prev", "weiter", "zurück" and "vor" (with or without `»`, `«`, `›`, `‹` or arrows) inside a navigation or on a link with `rel="next"` / `rel="prev"` are a Notice, `links.non_descriptive_in_context`, instead of a Warning.
 - A wrapping `<label>` names only the control it labels (a button inside a label no longer takes the label's text), and a `<label for>` can name a button.
 - `bfsg:history --cleanup --url=...` deletes only the reports of that URL; before, `--url` was ignored and every old report was deleted.
+- `bfsg:check`: leading `@import` rules of a same-origin stylesheet are loaded too (counted against `fetch.max_stylesheets`, with their media, `supports()` and `layer()` conditions); stylesheets on other origins and imports that were not loaded give a fetch warning instead of being skipped silently.
 - The page and stylesheet size caps count decoded bytes, so a small gzip response can no longer expand beyond the cap.
 - MCP `analyze_url` and `generate_report` return an error for a page that redirects to the login page, like `bfsg:check` does, instead of analysing the login form.
-- `bfsg:check`, `bfsg:history` and `bfsg:mcp-server` are registered outside the console too, so `Artisan::call('bfsg:check', ...)` works from a web request or a queue worker.
+- `bfsg:check`, `bfsg:history` and `bfsg:mcp-server` are registered outside the console too, so `Artisan::call('bfsg:check', ...)` works from a web request (a controller, a Filament or Livewire action).
 - `BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD` and `BFSG_AUTH_TOKEN` keep working after `php artisan config:cache`.
 
 ### Changed
