@@ -8,12 +8,22 @@ use Illuminate\Support\Facades\Http;
 use ItsJustVita\LaravelBfsg\Http\AuthenticatedHttpClient;
 use ItsJustVita\LaravelBfsg\Http\AuthenticationFailed;
 use ItsJustVita\LaravelBfsg\Http\ResponseTooLarge;
+use ItsJustVita\LaravelBfsg\Tests\Support\LoopbackOrigin;
+use ItsJustVita\LaravelBfsg\Tests\Support\ProxyVariables;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 
 class AuthenticatedHttpClientTest extends TestCase
 {
+    use ProxyVariables;
+
     private const LOGIN_PAGE = '<html><head><meta name="csrf-token" content="meta-token"></head><body><form method="POST" action="/login">'
         .'<input type="hidden" name="_token" value="form-token"><input name="email"><input name="password" type="password"></form></body></html>';
+
+    protected function tearDown(): void
+    {
+        $this->restoreProxyEnvironment();
+        parent::tearDown();
+    }
 
     private function client(): AuthenticatedHttpClient
     {
@@ -473,5 +483,70 @@ class AuthenticatedHttpClientTest extends TestCase
         Http::fake(['*' => Http::response('', 200)]);
         $this->client()->withBearer('t', 'api.example.com')->get('https://api.example.com/x');
         Http::assertSent(fn (Request $request) => $request->hasHeader('Authorization', 'Bearer t'));
+    }
+
+    /** An origin on 127.0.0.1 served to real libcurl: /gzip?n=N decodes to about N bytes, /plain?n=N is N bytes uncompressed. */
+    private function loopback(): LoopbackOrigin
+    {
+        $this->clearProxyEnvironment();
+        $origin = new LoopbackOrigin(function (string $target): string {
+            parse_str((string) parse_url($target, PHP_URL_QUERY), $query);
+            $n = (int) ($query['n'] ?? 0);
+            $unit = '<p>Absatz mit Text.</p>';
+
+            return match (parse_url($target, PHP_URL_PATH)) {
+                '/gzip' => LoopbackOrigin::response(200, ['Content-Type' => 'text/html', 'Content-Encoding' => 'gzip'], LoopbackOrigin::gzip($n, $unit)),
+                default => LoopbackOrigin::response(200, ['Content-Type' => 'text/html'], str_repeat($unit, intdiv($n, strlen($unit))), false),
+            };
+        });
+        $origin->install();
+
+        return $origin;
+    }
+
+    public function test_compressed_body_over_the_cap_is_aborted_while_decoding(): void
+    {
+        $origin = $this->loopback();
+        gc_collect_cycles();
+        memory_reset_peak_usage();
+        $before = memory_get_usage(true);
+
+        try {
+            $this->client()->get($origin->url('/gzip?n='.(32 << 20)), maxBytes: 5 << 20);
+            $this->fail('Expected ResponseTooLarge.');
+        } catch (ResponseTooLarge $e) {
+            $this->assertSame(5 << 20, $e->limit);
+        }
+
+        $this->assertLessThan(3 * (5 << 20), memory_get_peak_usage(true) - $before);
+    }
+
+    public function test_uncompressed_body_over_the_cap_is_still_aborted(): void
+    {
+        $origin = $this->loopback();
+
+        $this->expectException(ResponseTooLarge::class);
+        $this->client()->get($origin->url('/plain?n='.(12 << 20)), maxBytes: 5 << 20);
+    }
+
+    public function test_body_under_the_cap_is_returned_unchanged(): void
+    {
+        $origin = $this->loopback();
+
+        $gzip = $this->client()->get($origin->url('/gzip?n=100000'), maxBytes: 5 << 20);
+        $plain = $this->client()->get($origin->url('/plain?n=100000'), maxBytes: 5 << 20);
+
+        $this->assertStringStartsWith('<p>Absatz mit Text.</p>', $gzip->body());
+        $this->assertGreaterThanOrEqual(100000, strlen($gzip->body()));
+        $this->assertSame(str_repeat('<p>Absatz mit Text.</p>', intdiv(100000, 23)), $plain->body());
+        $this->assertSame(200, $gzip->status());
+    }
+
+    public function test_faked_response_over_the_cap_is_still_rejected(): void
+    {
+        Http::fake(['*' => Http::response(str_repeat('a', 1001), 200)]);
+
+        $this->expectException(ResponseTooLarge::class);
+        $this->client()->get('https://example.com/', maxBytes: 1000);
     }
 }

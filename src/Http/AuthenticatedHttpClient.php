@@ -98,7 +98,8 @@ class AuthenticatedHttpClient
     /**
      * @param  array<string, string>  $headers
      * @param  int|null  $maxBytes  abort (ResponseTooLarge) once the body exceeds this many bytes: by Content-Length and
-     *                              download progress on a real transport, and by the received body in any case
+     *                              download progress on a real transport, by the decoded bytes written to the sink
+     *                              (a gzip body is inflated by curl) and by the received body in any case
      * @param  array<string, mixed>  $options  extra Guzzle request options (UrlFetcher: the CURLOPT_RESOLVE pin)
      *
      * @throws ResponseTooLarge
@@ -116,6 +117,7 @@ class AuthenticatedHttpClient
                     throw new ResponseTooLarge($url, $maxBytes);
                 }
             },
+            'sink' => new LimitedSink($url, $maxBytes),
         ]))->withOptions($options)->get($url), $maxBytes);
     }
 
