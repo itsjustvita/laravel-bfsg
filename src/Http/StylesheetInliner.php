@@ -14,7 +14,8 @@ use Throwable;
  * `<style data-bfsg-inlined="{href}">` (with the link's `media`, if any), in place so the cascade order is kept. At most `max_stylesheets`
  * are loaded, each at most `max_stylesheet_bytes`; failures leave the link and add a warning. Links inside comments,
  * `<script>`, `<style>`, `<template>`, `<noscript>`, `<textarea>` and `<title>` are not stylesheets and stay untouched,
- * and so do `disabled` links. Stylesheets on other origins are not loaded: one warning counts them (F3). The leading
+ * and so do `disabled` links. Stylesheets on other origins are not loaded: one warning counts them (F3); those of a
+ * web-font service (`bfsg.fetch.font_stylesheet_hosts`, CssParser::isFontStylesheet()) are neither loaded nor counted. The leading
  * `@import` rules of a loaded sheet are loaded too (expandImports(), F10). A sheet that stays out (a link, or an
  * `@import` kept in the inlined text) is counted by CssParser::missingStylesheets(), so the analysis knows its cascade
  * is incomplete.
@@ -31,10 +32,14 @@ final class StylesheetInliner
     /** Warnings about imports of the page being inlined (inline()). */
     private int $importWarnings = 0;
 
+    /** @var array<string, true> hosts of web-font stylesheets (CssParser::fontStylesheetHosts()) */
+    private array $fontHosts;
+
     public function __construct(?int $maxStylesheets = null, ?int $maxBytes = null)
     {
         $this->maxStylesheets = $maxStylesheets ?? (int) config('bfsg.fetch.max_stylesheets', 5);
         $this->maxBytes = $maxBytes ?? (int) config('bfsg.fetch.max_stylesheet_bytes', 524288);
+        $this->fontHosts = CssParser::fontStylesheetHosts();
     }
 
     /**
@@ -156,6 +161,10 @@ final class StylesheetInliner
 
         $url = (string) UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
 
+        if (CssParser::isFontStylesheet($url, $this->fontHosts)) {
+            return $tag; // @font-face rules only: not loaded, not counted (CssParser::missingStylesheets() skips it too)
+        }
+
         if (! $this->sameOrigin($url, $pageUrl)) {
             // Not counted when it holds only for another user preference (a dark theme): not in the base cascade anyway.
             $crossOrigin += HtmlDocument::mediaCondition($attributes['media'] ?? '') === 'preference' ? 0 : 1;
@@ -234,7 +243,8 @@ final class StylesheetInliner
      * the text they import: same-origin sheets loaded through load(), counted against max_stylesheets like links, with
      * their own imports expanded up to CssParser::MAX_IMPORT_DEPTH levels and wrapped in the import's conditions and
      * layer (`@media <media>{@supports (<condition>){@layer <name>{…}}}`). An import of a sheet on the current chain
-     * (a cycle) is dropped, as browsers do, and so is one whose conditions rule out the screen and an invalid one.
+     * (a cycle) is dropped, as browsers do, and so is one whose conditions rule out the screen, an invalid one and one
+     * of a web-font service (CssParser::isFontStylesheet()).
      * Every other import that is not loaded (another origin: counted in $crossOrigin; over the count, the
      * depth or the size; failed: a warning) is returned in the second list as `@import url("…") <media>;` (its URL as written)
      * for the caller to put
@@ -275,8 +285,8 @@ final class StylesheetInliner
 
             $imported = "{$import['url']} (imported by {$name})";
 
-            if (isset($chain[$target])) {
-                continue;
+            if (isset($chain[$target]) || CssParser::isFontStylesheet($target, $this->fontHosts)) {
+                continue; // a cycle, or @font-face rules only: neither loaded nor counted
             }
 
             $text = null;

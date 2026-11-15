@@ -67,6 +67,10 @@ return [
     | same-origin <link rel="stylesheet"> files so the contrast analyzer sees them.
     | Allowed-host lists (e.g. for MCP) name plain hosts without scheme or port, case-insensitive; IPv6 hosts
     | may be written with or without brackets ("::1", "[::1]") and a trailing dot is ignored ("example.com.").
+    |
+    | font_stylesheet_hosts: web-font services whose stylesheets hold only @font-face rules (exact hosts,
+    | case-insensitive). A <link rel="stylesheet"> or @import of such a host is not loaded and does not count as
+    | a missing stylesheet, so it does not make contrast results approximate. [] treats them like any other origin.
     |--------------------------------------------------------------------------
     */
     'fetch' => [
@@ -76,6 +80,7 @@ return [
         'inline_stylesheets' => env('BFSG_INLINE_CSS', true),
         'max_stylesheets' => 5,
         'max_stylesheet_bytes' => 524288,
+        'font_stylesheet_hosts' => ['fonts.googleapis.com', 'fonts.bunny.net', 'use.typekit.net', 'fonts.cdnfonts.com'],
     ],
 
     /*

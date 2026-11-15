@@ -1292,4 +1292,53 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertNull($notice->element);
         $this->assertCount(3, $violations);
     }
+
+    private const BOOTSTRAP_WARNING_TEXT = ':root{--bs-warning-rgb:255,193,7;--bs-body-bg:#fff;--bs-body-color:#212529}'
+        .'body{margin:0;color:var(--bs-body-color);background-color:var(--bs-body-bg)}'
+        .'.text-warning{--bs-text-opacity:1;color:rgba(var(--bs-warning-rgb),var(--bs-text-opacity))!important}';
+
+    // Final review I1: a stylesheet of a web-font service (bfsg.fetch.font_stylesheet_hosts) holds @font-face rules
+    // only; it does not make the cascade unknown, so a failing colour stays a definite Error.
+    public function test_font_service_stylesheets_do_not_make_results_approximate(): void
+    {
+        $links = '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">'
+            .'<link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600" rel="stylesheet" />'
+            .'<link rel="stylesheet" href="//FONTS.BUNNY.NET/css?family=figtree:400">'
+            .'<link rel="stylesheet" href="https://use.typekit.net/abc1def.css"><link rel="stylesheet" href="https://fonts.cdnfonts.com/css/inter">';
+        $style = "@import url('https://fonts.googleapis.com/css2?family=Inter'); @import \"https://fonts.bunny.net/css?family=x\";".self::BOOTSTRAP_WARNING_TEXT;
+        $violations = $this->analyze('<html><head>'.$links.'<style>'.$style.'</style></head><body><p class="text-warning">Careful</p></body></html>');
+
+        $error = $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.text-warning', severity: Severity::Error);
+        $this->assertSame('1.63', $error->params['ratio']);
+        $this->assertSame([], $error->tags);
+        $this->assertNoViolation($violations, 'contrast.stylesheets_missing');
+        $this->assertCount(1, $violations);
+    }
+
+    // I1: only the exact hosts of the list; any other origin (a CDN, a look-alike host) is still a missing stylesheet.
+    public function test_other_hosts_and_an_empty_font_host_list_keep_stylesheets_missing(): void
+    {
+        $page = fn (string $head): string => '<html><head>'.$head.'<style>'.self::BOOTSTRAP_WARNING_TEXT.'</style></head><body><p class="text-warning">Careful</p></body></html>';
+
+        foreach ([
+            '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">',
+            '<link rel="stylesheet" href="https://fonts.googleapis.com.example.net/css2?family=Inter">',
+            '<link rel="stylesheet" href="https://myfonts.bunny.net/css?family=x">',
+            '<link rel="stylesheet" href="/fonts.googleapis.com/css2">',
+            '<link rel="stylesheet" href="https://cdn.example.net\@fonts.bunny.net/css">',
+            '<link rel="stylesheet" href="https://x@fonts.bunny.net/css">',
+            '<link rel="stylesheet" href="ftp://fonts.bunny.net/css">',
+            '<style>@import url(https://cdn.example.net/theme.css);</style>',
+        ] as $head) {
+            $violations = $this->analyze($page($head));
+
+            $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.text-warning', severity: Severity::Warning);
+            $this->assertHasViolation($violations, 'contrast.stylesheets_missing', severity: Severity::Notice);
+        }
+
+        config()->set('bfsg.fetch.font_stylesheet_hosts', []);
+        $violations = $this->analyze($page('<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">'));
+        $this->assertHasViolation($violations, 'contrast.insufficient', element: 'p.text-warning', severity: Severity::Warning);
+        $this->assertHasViolation($violations, 'contrast.stylesheets_missing', severity: Severity::Notice);
+    }
 }

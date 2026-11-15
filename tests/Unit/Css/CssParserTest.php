@@ -3,6 +3,7 @@
 namespace ItsJustVita\LaravelBfsg\Tests\Unit\Css;
 
 use DOMElement;
+use Illuminate\Container\Container;
 use ItsJustVita\LaravelBfsg\Css\Color;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
@@ -2232,6 +2233,8 @@ class CssParserTest extends TestCase
             'one import with 200 000 nested supports()' => ['<style>@import url(x.css) supports('.str_repeat('(', 200000).'display: grid'.str_repeat(')', 200000).');</style>', 1],
             'an import ended by the end of the sheet after 1 MB of whitespace' => ['<style>@import url(x.css)'.str_repeat(' ', 1000000).'</style>', 1],
             'an unclosed url( of 1 MB' => ['<style>@import url('.str_repeat('a', 1000000).'</style>', 0],
+            '8 000 font links and imports (I1)' => [str_repeat('<link rel=stylesheet href=https://fonts.bunny.net/css?family=a>', 4000).'<style>'.str_repeat('@import url(//fonts.googleapis.com/css);', 4000).'</style>', 0],
+            'a font host link with a 400 KB host' => ['<link rel=stylesheet href="https://fonts.bunny.net.'.str_repeat('a', 400000).'/css">', 1],
             'a 1 MB media prelude around a layer' => ['<style>@media (min-width:640px){@layer b{.z{color:red}}} @layer a{p{color:#111}} @media '.str_repeat(' ( min-width : 640px ) and', 40000).' (x){@layer b{p{color:#ddd}}}</style>', 0],
         ];
     }
@@ -2250,5 +2253,28 @@ class CssParserTest extends TestCase
 
         $this->assertSame($missing, $parser->missingStylesheets());
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('took %.3f s', $elapsed));
+    }
+
+    // Final review I1: the font host list is read once per parse; without an application the built-in list applies.
+    public function test_font_stylesheet_hosts_come_from_config_or_the_built_in_list(): void
+    {
+        config()->set('bfsg.fetch.font_stylesheet_hosts', ['Fonts.Example.COM.', '', 7]);
+        $this->assertSame(['fonts.example.com' => true], CssParser::fontStylesheetHosts());
+
+        $container = Container::getInstance();
+
+        try {
+            Container::setInstance(new Container);
+            $this->assertSame(array_fill_keys(CssParser::FONT_STYLESHEET_HOSTS, true), CssParser::fontStylesheetHosts());
+        } finally {
+            Container::setInstance($container);
+        }
+
+        $hosts = CssParser::fontStylesheetHosts();
+        $this->assertTrue(CssParser::isFontStylesheet('https://FONTS.example.com/css?family=a@b', $hosts));
+        $this->assertTrue(CssParser::isFontStylesheet('//fonts.example.com./x', $hosts));
+        $this->assertFalse(CssParser::isFontStylesheet('/x.css', $hosts));
+        $this->assertFalse(CssParser::isFontStylesheet('data:text/css,a', $hosts));
+        $this->assertFalse(CssParser::isFontStylesheet('https://a.fonts.example.com/x', $hosts));
     }
 }

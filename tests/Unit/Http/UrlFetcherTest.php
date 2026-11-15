@@ -1085,4 +1085,31 @@ class UrlFetcherTest extends TestCase
         $this->assertStringContainsString('<style data-bfsg-inlined="/css/main.css">'.$imported.' .z{margin:0}</style>', $page->html);
         $this->assertSame([['contrast.insufficient', Severity::Error, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']]], self::contrast($page->html));
     }
+
+    // Final review I1: web-font stylesheets (bfsg.fetch.font_stylesheet_hosts), linked as in every Laravel starter kit or
+    // imported as Vite keeps them, are neither loaded nor reported as cross-origin, and the Error stays definite.
+    public function test_font_service_links_and_imports_are_not_cross_origin_stylesheets(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="preconnect" href="https://fonts.bunny.net"><link href="https://fonts.bunny.net/css?family=instrument-sans:400,500,600" rel="stylesheet" /><link rel="stylesheet" href="/build/assets/app.css">'), 200),
+            'https://example.com/build/assets/app.css' => Http::response("@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap'); @import url(//Fonts.GoogleApis.com/css?family=Roboto); .t{color:#ccc;background:#fff}", 200),
+            'https://example.com/cdn' => Http::response(self::contrastPage('<link rel="stylesheet" href="/build/assets/cdn.css">'), 200),
+            'https://example.com/build/assets/cdn.css' => Http::response("@import url('https://fonts.googleapis.com/css2?family=Inter'); @import url('https://cdn.example.net/theme.css'); .t{color:#ccc;background:#fff}", 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertSame([], $page->warnings);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/build/assets/app.css">  .t{color:#ccc;background:#fff}</style>', $page->html);
+        $this->assertSame([['contrast.insufficient', Severity::Error, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']]], self::contrast($page->html));
+        Http::assertNotSent(fn (Request $request) => ! str_starts_with($request->url(), 'https://example.com/'));
+
+        // Another origin next to it still counts.
+        $cdn = $this->fetcher()->fetch('https://example.com/cdn');
+        $this->assertSame(['1 stylesheet on another origin was not inlined; contrast results are approximate.'], $cdn->warnings);
+        $this->assertSame([
+            ['contrast.insufficient', Severity::Warning, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']],
+            ['contrast.stylesheets_missing', Severity::Notice, ['count' => 1]],
+        ], self::contrast($cdn->html));
+    }
 }

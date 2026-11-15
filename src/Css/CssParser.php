@@ -390,6 +390,12 @@ class CssParser
     /** Stylesheets of the document the parser did not read: stylesheet links and leading @import rules that apply (missingStylesheets()). */
     private int $missingStylesheets = 0;
 
+    /** Default of `bfsg.fetch.font_stylesheet_hosts`: web-font services whose stylesheets hold @font-face rules only. */
+    public const FONT_STYLESHEET_HOSTS = ['fonts.googleapis.com', 'fonts.bunny.net', 'use.typekit.net', 'fonts.cdnfonts.com'];
+
+    /** @var array<string, true> lowercase hosts of fontStylesheetHosts(), read once per parse() */
+    private array $fontHosts = [];
+
     protected bool $indexed = false;
 
     protected bool $truncated = false;
@@ -579,7 +585,12 @@ class CssParser
         $this->cachedBytes = 0;
 
         $media = $document->styleSheetMedia();
-        $this->missingStylesheets = count($document->stylesheetLinks());
+        $this->fontHosts = self::fontStylesheetHosts();
+        $this->missingStylesheets = 0;
+
+        foreach ($document->stylesheetLinks() as $link) {
+            $this->missingStylesheets += self::isFontStylesheet($link->getAttribute('href'), $this->fontHosts) ? 0 : 1;
+        }
 
         foreach ($this->stylesheetsFor($document) as $sheet => $css) {
             $condition = HtmlDocument::mediaCondition($media[$sheet] ?? '');
@@ -763,8 +774,9 @@ class CssParser
     /**
      * The number of stylesheets of the parsed document the parser did not read (C3): `<link>` stylesheets still in the
      * document (HtmlDocument::stylesheetLinks(); StylesheetInliner replaces the ones it loads) and the leading @import
-     * rules of its <style> elements that apply to a screen (unresolvedImports()). When it is not 0 the cascade is
-     * incomplete: every resolveColors() is uncertain (`stylesheets`) and every element possibly hidden (possiblyHidden()).
+     * rules of its <style> elements that apply to a screen (unresolvedImports()), except stylesheets of a web-font
+     * service (isFontStylesheet()). When it is not 0 the cascade is incomplete: every resolveColors() is uncertain
+     * (`stylesheets`) and every element possibly hidden (possiblyHidden()).
      */
     public function missingStylesheets(): int
     {
@@ -772,9 +784,68 @@ class CssParser
     }
 
     /**
+     * `bfsg.fetch.font_stylesheet_hosts` as a set of lowercase hosts; the built-in FONT_STYLESHEET_HOSTS when there is
+     * no Laravel configuration (the parser used on its own) or the setting is not a list.
+     *
+     * @internal shared with StylesheetInliner, not part of the public API
+     *
+     * @return array<string, true>
+     */
+    public static function fontStylesheetHosts(): array
+    {
+        $hosts = self::FONT_STYLESHEET_HOSTS;
+
+        if (function_exists('config')) {
+            try {
+                $configured = config('bfsg.fetch.font_stylesheet_hosts', $hosts);
+                $hosts = is_array($configured) ? $configured : $hosts;
+            } catch (Throwable) {
+                // no application container: the built-in list
+            }
+        }
+
+        $set = [];
+
+        foreach ($hosts as $host) {
+            if (is_string($host) && ($host = rtrim(strtolower(trim($host)), '.')) !== '') {
+                $set[$host] = true;
+            }
+        }
+
+        return $set;
+    }
+
+    /**
+     * Whether $url (as written, or resolved) loads a stylesheet of a web-font service: an http(s) or scheme-relative
+     * URL whose host is exactly one of $hosts (fontStylesheetHosts(); ASCII case-insensitive, a trailing dot ignored).
+     * Such a sheet holds only @font-face rules, so it is neither a missing stylesheet nor loaded. A relative URL never is.
+     *
+     * @internal shared with StylesheetInliner, not part of the public API
+     *
+     * @param  array<string, true>  $hosts
+     */
+    public static function isFontStylesheet(string $url, array $hosts): bool
+    {
+        if ($hosts === []) {
+            return false;
+        }
+
+        $url = trim($url, " \t\n\f\r");
+        // A backslash, an inner tab or newline or user info: a browser may read another host than parse_url() does.
+        $parts = strpbrk($url, "\\\t\n\r\f") === false ? parse_url($url) : false;
+
+        if (! is_array($parts) || ! isset($parts['host']) || isset($parts['user']) || ! in_array(strtolower($parts['scheme'] ?? 'https'), ['http', 'https'], true)) {
+            return false;
+        }
+
+        return isset($hosts[rtrim(strtolower($parts['host']), '.')]);
+    }
+
+    /**
      * The @import rules of a stylesheet that a browser would load for the screen: the leading ones (leadingStatements()),
      * with a URL (importRule()), whose conditions do not rule out the screen (importApplies()), except those whose media
-     * hold only for other user preferences (HtmlDocument::mediaCondition() 'preference').
+     * hold only for other user preferences (HtmlDocument::mediaCondition() 'preference') and those of a web-font
+     * service (isFontStylesheet()).
      */
     private function unresolvedImports(string $css): int
     {
@@ -788,7 +859,8 @@ class CssParser
             $import = $name === 'import' ? self::importRule($prelude) : null;
 
             // A sheet only for another user preference (a dark theme) is not in the base cascade either way.
-            if ($import !== null && self::importApplies($import) && HtmlDocument::mediaCondition($import['media']) !== 'preference') {
+            if ($import !== null && self::importApplies($import) && HtmlDocument::mediaCondition($import['media']) !== 'preference'
+                && ! self::isFontStylesheet($import['url'], $this->fontHosts)) {
                 $count++;
             }
         }

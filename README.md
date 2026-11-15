@@ -597,6 +597,7 @@ All settings live in `config/bfsg.php` (`php artisan vendor:publish --tag=bfsg-c
 | `bfsg.fetch.inline_stylesheets` | `BFSG_INLINE_CSS` | `true` | Inline same-origin stylesheets (fetch and `--browser`) |
 | `bfsg.fetch.max_stylesheets` | | `5` | Stylesheets inlined per page |
 | `bfsg.fetch.max_stylesheet_bytes` | | `524288` | Largest stylesheet inlined |
+| `bfsg.fetch.font_stylesheet_hosts` | | `fonts.googleapis.com`, `fonts.bunny.net`, `use.typekit.net`, `fonts.cdnfonts.com` | Web-font services (exact hosts, case-insensitive): their `<link rel="stylesheet">` and `@import` are not loaded and do not count as missing stylesheets, so they do not make contrast results approximate; `[]` treats them like any other origin |
 | `bfsg.authentication.default_login_url` | | `/login` | Login page for `--auth`, and the page a redirect is recognised as "login page" by |
 | `bfsg.authentication.email` | `BFSG_AUTH_EMAIL` | `null` | Login e-mail for `--auth`; read from the config so it works after `config:cache` |
 | `bfsg.authentication.password` | `BFSG_AUTH_PASSWORD` | `null` | Login password for `--auth` |
