@@ -107,19 +107,23 @@ class InputPurposeAnalyzerTest extends AnalyzerTestCase
         $this->assertViolationCount($violations, 'input_purpose.invalid_autocomplete', 2);
     }
 
-    public function test_autocomplete_off_synonyms_are_not_errors(): void
+    // Final review M3 (spec): off synonyms behave exactly like `off` on every field, so a non-personal field gets nothing.
+    public function test_autocomplete_off_synonyms_behave_like_off_on_other_fields(): void
     {
         $html = '<label for="d">Delivery date</label><input id="d" name="delivery_date" type="text" autocomplete="false"><label for="s">Search products</label><input id="s" name="q" type="text" autocomplete="none"><input type="hidden" name="t" autocomplete="nope">';
 
-        $violations = $this->analyze($html);
+        $this->assertSame([], $this->analyze($html));
 
-        foreach ($violations as $violation) {
-            $this->assertNotSame(Severity::Error, $violation->severity);
-            $this->assertSame('input_purpose.invalid_autocomplete', $violation->key);
-            $this->assertSame(Severity::Notice, $violation->severity);
-            $this->assertContains('best-practice', $violation->tags);
+        foreach (['false', 'true', 'none', 'nope', 'disabled', 'NoPe', ' off '] as $value) {
+            $this->assertSame([], $this->analyze('<label for="c">Coupon</label><input id="c" name="coupon" autocomplete="'.$value.'"><select name="sort" autocomplete="'.$value.'"><option>A</option></select><textarea name="note" autocomplete="'.$value.'"></textarea>'), $value);
         }
-        $this->assertCount(2, $violations);
+    }
+
+    public function test_other_invalid_tokens_on_other_fields_stay_a_best_practice_notice(): void
+    {
+        $violation = $this->assertHasViolation($this->analyze('<label for="c">Coupon</label><input id="c" name="coupon" autocomplete="nein">'), 'input_purpose.invalid_autocomplete', severity: Severity::Notice);
+
+        $this->assertContains('best-practice', $violation->tags);
     }
 
     public function test_invalid_autocomplete_on_a_personal_data_field_is_still_an_error(): void

@@ -69,9 +69,9 @@ class InputPurposeAnalyzer extends BaseAnalyzer
             $personal = $this->isPersonalDataField($field);
             $offSynonym = in_array(strtolower($value), self::OFF_SYNONYMS, true);
 
-            // Off synonyms ("false", "none", "nope") are the common way to switch autofill off: on a personal-data
-            // field they count as "off" below, elsewhere they are only a best-practice hint.
-            if ($value !== '' && ! $this->isValidAutocomplete($value) && ! ($offSynonym && $personal)) {
+            // Off synonyms ("false", "none", "nope") are the common way to switch autofill off: on every field they
+            // count exactly as "off" (on a personal-data field the notice below, elsewhere nothing).
+            if ($value !== '' && ! $offSynonym && ! $this->isValidAutocomplete($value)) {
                 $params = ['name' => $this->fieldName($field), 'value' => $value];
 
                 if ($personal) {
