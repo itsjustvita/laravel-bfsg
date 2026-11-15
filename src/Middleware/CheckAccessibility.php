@@ -39,7 +39,7 @@ class CheckAccessibility
                     $result = $this->analyze($request, $response);
                     $request->attributes->set(self::RESULT, $result);
 
-                    if ($result->count() > 0) {
+                    if ($this->hasFindings($result)) {
                         $response->headers->set('X-BFSG-Violations', (string) $result->count());
                     }
                 }
@@ -110,10 +110,10 @@ class CheckAccessibility
         return Bfsg::analyze((string) $response->getContent(), ['url' => $request->url()]);
     }
 
-    /** One line per page with findings; counts only, at warning level when the page is not accessible. */
+    /** One line per page with findings (hasFindings()); counts only, at warning level when the page is not accessible. */
     protected function log(AnalysisResult $result): void
     {
-        if ($result->count() === 0 || ! config('bfsg.middleware.log_violations', true)) {
+        if (! $this->hasFindings($result) || ! config('bfsg.middleware.log_violations', true)) {
             return;
         }
 
@@ -124,6 +124,22 @@ class CheckAccessibility
             "BFSG: {$result->count()} violations on {$result->url()}",
             ['errors' => $counts['error'], 'warnings' => $counts['warning'], 'notices' => $counts['notice']],
         );
+    }
+
+    /**
+     * Whether the result has a finding worth a log line and the header. The middleware sees the page before its
+     * stylesheets are inlined, so `contrast.stylesheets_missing` is on every page that links one (every Vite page);
+     * alone it is not one. The stored report keeps it.
+     */
+    protected function hasFindings(AnalysisResult $result): bool
+    {
+        foreach ($result->all() as $violation) {
+            if ($violation->key !== 'contrast.stylesheets_missing') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function failed(Request $request, Throwable $e): void

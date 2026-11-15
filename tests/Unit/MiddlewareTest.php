@@ -205,6 +205,29 @@ class MiddlewareTest extends TestCase
         $this->assertTrue($this->logs()->hasInfoThatContains('BFSG: 1 violations on'));
     }
 
+    // Final review I3: the middleware sees the page before its stylesheets are inlined, so every Vite page has the
+    // missing-stylesheet Notice; alone it is neither logged nor counted in the header. The stored report keeps it.
+    public function test_the_missing_stylesheet_notice_alone_is_not_logged_or_put_in_the_header(): void
+    {
+        config()->set('app.debug', true);
+        config()->set('bfsg.reporting.save_to_database', true);
+        $vite = str_replace('</head>', '<link rel="preload" as="style" href="/build/assets/app.css"><link rel="stylesheet" href="/build/assets/app.css"></head>', self::ACCESSIBLE);
+
+        $response = $this->through(Request::create('/vite'), $this->html($vite));
+
+        $this->assertFalse($response->headers->has('X-BFSG-Violations'));
+        $this->assertSame([], $this->logs()->getRecords());
+        $stored = BfsgReport::query()->sole();
+        $this->assertSame(1, $stored->total_violations, 'the stored report keeps the notice');
+
+        // Next to another finding it is counted as before.
+        $broken = str_replace('</main>', '<img src="x.png"></main>', $vite);
+        $response = $this->through(Request::create('/vite-broken'), $this->html($broken));
+
+        $this->assertSame('2', $response->headers->get('X-BFSG-Violations'));
+        $this->assertTrue($this->logs()->hasWarningThatContains('BFSG: 2 violations on http://localhost/vite-broken'));
+    }
+
     public function test_logging_can_be_switched_off(): void
     {
         config()->set('bfsg.middleware.log_violations', false);
