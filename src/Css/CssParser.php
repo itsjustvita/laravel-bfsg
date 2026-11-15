@@ -885,8 +885,10 @@ class CssParser
      * When the parenthesis at $open opens an unquoted url() token (`url(` after no identifier character, its first
      * non-space character no quote): the offset of its closing parenthesis (escapes respected), or of the last
      * character when it is not closed. Null otherwise.
+     *
+     * @internal shared with StylesheetInliner, not part of the public API
      */
-    private static function unquotedUrlEnd(string $css, int $open): ?int
+    public static function unquotedUrlEnd(string $css, int $open): ?int
     {
         if ($open < 3 || strncasecmp(substr($css, $open - 3, 3), 'url', 3) !== 0 || ($open > 3 && preg_match('/[\w\\-]/A', $css, $m, 0, $open - 4) === 1)) {
             return null;

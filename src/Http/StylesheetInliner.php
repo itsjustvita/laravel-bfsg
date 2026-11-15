@@ -316,7 +316,7 @@ final class StylesheetInliner
         $out = '';
         $copied = 0;
 
-        for ($position = 0; ($position += strcspn($css, "/{}\"'\\", $position)) < $length; $position++) {
+        for ($position = 0; ($position += strcspn($css, "/{}()\"'\\", $position)) < $length; $position++) {
             $char = $css[$position];
 
             if ($char === '/' && ($css[$position + 1] ?? '') === '*') {
@@ -340,14 +340,20 @@ final class StylesheetInliner
                 }
             } elseif ($char === '\\') {
                 $position++;
+            } elseif ($char === '(') {
+                // An unquoted url() is one token: braces and slashes inside it are part of the URL.
+                $position = CssParser::unquotedUrlEnd($css, $position) ?? $position;
             } elseif ($char === '{') {
                 $depth++;
-            } elseif ($depth > 0) {
-                $depth--;
-            } else {
-                $out .= substr($css, $copied, $position - $copied); // a stray `}` at the top level
-                $copied = $position + 1;
+            } elseif ($char === '}') {
+                if ($depth > 0) {
+                    $depth--;
+                } else {
+                    $out .= substr($css, $copied, $position - $copied); // a stray `}` at the top level
+                    $copied = $position + 1;
+                }
             }
+            // A `/` that does not open a comment and a lone `)` are ordinary characters.
         }
 
         return $out.substr($css, $copied).str_repeat('}', $depth);

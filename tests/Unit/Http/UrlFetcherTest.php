@@ -1067,4 +1067,22 @@ class UrlFetcherTest extends TestCase
         $this->assertStringContainsString('@media (prefers-color-scheme: dark){.a{color:red} .t{color:#eee}} .t{color:#111}', $stray->html);
         $this->assertSame([], self::contrast($stray->html), 'the dark rule stays behind its preference');
     }
+
+    // Fix round 2: slashes and braces inside blocks and unquoted url() tokens of an imported sheet are kept as they are.
+    public function test_slashes_and_url_braces_in_an_imported_sheet_are_kept(): void
+    {
+        // `.c` comes last: the parser itself still splits rules at a `}` inside an unquoted url() (3.2 backlog).
+        $imported = '.a{font:12px/1.5 serif} .t{color:#ccc;background:#fff} .b{background:url(/img/x.png);color:rgb(0 0 0 / 50%);grid-area:1 / -1;aspect-ratio:16/9} .c{background:url(a}b.png)}';
+
+        Http::fake([
+            'https://example.com/slash' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/main.css">'), 200),
+            'https://example.com/css/main.css' => Http::response('@import url(parts.css); .z{margin:0}', 200),
+            'https://example.com/css/parts.css' => Http::response($imported, 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/slash');
+
+        $this->assertStringContainsString('<style data-bfsg-inlined="/css/main.css">'.$imported.' .z{margin:0}</style>', $page->html);
+        $this->assertSame([['contrast.insufficient', Severity::Error, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']]], self::contrast($page->html));
+    }
 }
