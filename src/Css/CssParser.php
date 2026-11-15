@@ -69,7 +69,7 @@ class CssParser
     /** Nesting levels of :is(), :where() and :has() argument lists cannotMatch() looks into; deeper ones may match. */
     private const MAX_MATCH_NESTING = 8;
 
-    /** Distinct class names and ids documentTokens() keeps; beyond it every selector may match. */
+    /** Distinct class names, ids and attribute names documentTokens() keeps; beyond it every selector may match. */
     private const MAX_DOCUMENT_TOKENS = 100000;
 
     /**
@@ -3885,7 +3885,8 @@ class CssParser
 
     /**
      * Whether a selector provably matches no element of the document (R10): a required compound names a class or an id
-     * that no element carries (compared ASCII case-insensitively, as in quirks mode), or needs a pseudo-class of
+     * that no element carries (compared ASCII case-insensitively, as in quirks mode), an attribute selector whose
+     * attribute no element carries (attributeNameAt(), I2), or needs a pseudo-class of
      * STATE_ATTRIBUTES that no element can match (R12). Beyond MAX_DOCUMENT_TOKENS every selector may match. Required are the compounds of the selector itself and
      * of the argument lists of :is(), :where(), :matches(), :-webkit-any(), :-moz-any() and :has(), a list counting only
      * when every argument cannot match; the arguments of :not() and of every other function never count. Lists nested
@@ -3913,6 +3914,10 @@ class CssParser
 
                 if ($end === null) {
                     return false;
+                }
+
+                if ($char === '[' && ($name = $this->attributeNameAt($selector, $i + 1, $end)) !== null && ! isset($tokens['attribute'][$name])) {
+                    return true;
                 }
 
                 $i = $end;
@@ -3949,6 +3954,30 @@ class CssParser
         }
 
         return false;
+    }
+
+    /**
+     * The attribute name of the attribute selector whose content runs from $from to the `]` at $close (I2): an
+     * identifier (identifierAt(), lower-cased: HTML attribute names are ASCII case-insensitive) followed by the `]` or a
+     * matcher (`=`, `~=`, `|=`, `^=`, `$=`, `*=`). Null for a namespace prefix (`*|a`, `|a`, `ns|a`), a name with a colon
+     * and anything else this scan does not read: such a selector may match.
+     */
+    private function attributeNameAt(string $selector, int $from, int $close): ?string
+    {
+        $name = $this->identifierAt($selector, $from + strspn($selector, " \t\n\r\f", $from), $after);
+
+        if ($name === '' || str_contains($name, ':') || $after > $close) {
+            return null;
+        }
+
+        $after += strspn($selector, " \t\n\r\f", $after);
+        $next = $selector[$after] ?? '';
+
+        if ($after === $close || $next === '=' || (str_contains('~|^$*', $next) && ($selector[$after + 1] ?? '') === '=')) {
+            return $name;
+        }
+
+        return null;
     }
 
     /** Whether no selector of a comma-separated list can match (cannotMatch()); an unclosed string or bracket may match. */
@@ -4019,10 +4048,11 @@ class CssParser
     }
 
     /**
-     * Once per parse: the class names and ids of the document (ASCII lower-cased) and, per STATE_ATTRIBUTES pseudo-class,
-     * whether an element may match it. Beyond MAX_DOCUMENT_TOKENS `all` is set and nothing else is kept.
+     * Once per parse: the class names, ids and attribute names of the document (ASCII lower-cased) and, per
+     * STATE_ATTRIBUTES pseudo-class, whether an element may match it. Beyond MAX_DOCUMENT_TOKENS distinct names `all` is
+     * set and nothing else is kept.
      *
-     * @return array{class: array<string, true>, id: array<string, true>, all: bool, checked?: bool, disabled?: bool, placeholder-shown?: bool, required?: bool}
+     * @return array{class: array<string, true>, id: array<string, true>, attribute: array<string, true>, all: bool, checked?: bool, disabled?: bool, placeholder-shown?: bool, required?: bool}
      */
     private function documentTokens(): array
     {
@@ -4030,7 +4060,8 @@ class CssParser
             return $this->documentTokens;
         }
 
-        $tokens = ['class' => [], 'id' => [], 'all' => false];
+        $tokens = ['class' => [], 'id' => [], 'attribute' => [], 'all' => false];
+        $everything = ['class' => [], 'id' => [], 'attribute' => [], 'all' => true]; // too many to keep: everything may match
 
         foreach ($this->document?->query('//*[@class or @id]') ?? [] as $element) {
             $tokens['class'] += array_fill_keys(preg_split('/[ \t\n\r\f]++/', strtolower($element->getAttribute('class')), -1, PREG_SPLIT_NO_EMPTY) ?: [], true);
@@ -4040,11 +4071,21 @@ class CssParser
             }
 
             if (count($tokens['class']) + count($tokens['id']) > self::MAX_DOCUMENT_TOKENS) {
-                return $this->documentTokens = ['class' => [], 'id' => [], 'all' => true]; // too many to keep: everything may match
+                return $this->documentTokens = $everything;
             }
         }
 
         $xpath = $this->document?->xpath();
+
+        foreach ($xpath?->query('//@*') ?: [] as $attribute) {
+            // The qualified and the local name: a selector names either, and a name too many only keeps a rule.
+            $tokens['attribute'][strtolower($attribute->nodeName)] = true;
+            $tokens['attribute'][strtolower((string) $attribute->localName)] = true;
+
+            if (count($tokens['class']) + count($tokens['id']) + count($tokens['attribute']) > self::MAX_DOCUMENT_TOKENS) {
+                return $this->documentTokens = $everything;
+            }
+        }
 
         foreach (self::STATE_ATTRIBUTES as $state => $test) {
             $tokens[$state] = $xpath?->evaluate('boolean(//*['.$test.'])') === true;

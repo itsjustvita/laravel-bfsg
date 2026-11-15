@@ -303,6 +303,36 @@ class ContrastPerformanceTest extends TestCase
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
 
+    /** @return array<string, array{0: int, 1: bool, 2: bool, 3: list<string>}> I2: rules, inside an undecidable @supports, an element with data-x1, and the findings */
+    public static function attributeRules(): array
+    {
+        return [
+            '20 000 rules naming absent attributes' => [20000, false, false, []],
+            '20 000 such rules behind an undecidable @supports' => [20000, true, false, []],
+            '20 000 such rules, one attribute present' => [20000, true, true, ['contrast.unverifiable']],
+            '1 990 rules naming absent attributes' => [1990, false, false, []],
+        ];
+    }
+
+    // I2: the attribute names of the document are collected once (under MAX_DOCUMENT_TOKENS), each selector scanned once.
+    #[Group('performance')]
+    #[DataProvider('attributeRules')]
+    public function test_twenty_thousand_attribute_rules_stay_in_budget(int $rules, bool $undecided, bool $present, array $findings): void
+    {
+        $css = implode('', array_map(fn (int $i): string => '[data-x'.base_convert((string) $i, 10, 36).']+p{opacity:.5}', range(1, $rules)));
+        $css = '.c{color:#111} '.($undecided ? '@supports (-webkit-x:y){'.$css.'}' : $css);
+        $html = '<!DOCTYPE html><html lang="en"><head><title>Attributes</title><style>'.$css.'</style></head><body>'
+            .($present ? '<i data-x1></i>' : '').str_repeat('<p class="c" data-y>x</p>', 3000).'</body></html>';
+        $this->assertLessThan(600 * 1024, strlen($html));
+
+        $start = microtime(true);
+        $violations = (new ContrastAnalyzer(level: 'AA'))->analyze(HtmlDocument::fromHtml($html));
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame($findings, array_values(array_unique(array_map(fn (Violation $violation) => $violation->key, $violations))));
+        $this->assertLessThan(PerformanceBudget::seconds(1.5), $elapsed, sprintf('contrast took %.2f s', $elapsed));
+    }
+
     // R10: the existence prefilter scans each selector once per nesting level (at most MAX_MATCH_NESTING), linear.
     #[Group('performance')]
     #[DataProvider('hostilePrefilterSelectors')]

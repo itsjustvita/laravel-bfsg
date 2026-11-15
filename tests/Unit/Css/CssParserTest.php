@@ -1833,7 +1833,10 @@ class CssParserTest extends TestCase
             ':placeholder-shown without a placeholder' => ['.on:placeholder-shown ~ p, p:placeholder-shown', false],
             ':required without a required element' => ['.on:has(:required) p', false],
             ':not(:disabled) never counts' => ['.on:not(:disabled) p:nth-child(1)', true],
-            'an escaped bracket inside an attribute selector' => ['[data-x=a\\].absent]:has(b) p', true],
+            // I2: the attribute must be in the document (class is); the escaped bracket still does not end it.
+            'an escaped bracket inside an attribute selector' => ['[class=a\\].absent]:has(b) p', true],
+            'an attribute no element carries (I2)' => ['[data-x=a\\].absent]:has(b) p', false],
+            'an attribute in :not() never counts (I2)' => [':not([data-x]) p:nth-child(1)', true],
         ];
     }
 

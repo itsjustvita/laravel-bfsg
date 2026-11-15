@@ -1072,6 +1072,82 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($this->analyze($this->page(self::BOOTSTRAP_DISABLED, $body.'<button class="btn btn-primary" disabled>Off</button>')), 'contrast.unverifiable', severity: Severity::Notice);
     }
 
+    /** Bootstrap 5.3: the base rules of a btn-check group and a form check, and the `[disabled]` twins of their :disabled rules. */
+    private const BOOTSTRAP_CHECKS = '.btn{color:#212529;background-color:#fff}.form-check-label{color:#212529}'
+        .'.btn-check{position:absolute;clip:rect(0,0,0,0);pointer-events:none}';
+
+    private const BOOTSTRAP_DISABLED_TWINS = '.btn-check:disabled+.btn,.btn-check[disabled]+.btn{pointer-events:none;filter:none;opacity:.65}'
+        .'.form-check-input[disabled]~.form-check-label,.form-check-input:disabled~.form-check-label{cursor:default;opacity:.5}';
+
+    private const BOOTSTRAP_CHECKS_BODY = '<div class="btn-group" role="group" aria-label="Choice">'
+        .'<input type="radio" class="btn-check" name="r" id="r1" autocomplete="off" checked><label class="btn" for="r1">One</label>'
+        .'<input type="radio" class="btn-check" name="r" id="r2" autocomplete="off"><label class="btn" for="r2">Two</label></div>'
+        .'<div class="form-check"><input class="form-check-input" type="checkbox" id="c1"><label class="form-check-label" for="c1">Agree</label></div>';
+
+    // Final review I2: an attribute selector needs an element that carries the attribute, so the `[disabled]` twins of
+    // Bootstrap's :disabled rules add no Notice to a page where nothing is disabled.
+    public function test_bootstrap_disabled_attribute_rules_need_a_disabled_element(): void
+    {
+        $plain = $this->analyze($this->page(self::BOOTSTRAP_CHECKS, self::BOOTSTRAP_CHECKS_BODY));
+        $this->assertSame([], $plain);
+        $this->assertSame($plain, $this->analyze($this->page(self::BOOTSTRAP_CHECKS.self::BOOTSTRAP_DISABLED_TWINS, self::BOOTSTRAP_CHECKS_BODY)), 'nothing is disabled');
+
+        $disabled = str_replace('id="c1"', 'id="c1" DISABLED', self::BOOTSTRAP_CHECKS_BODY);
+        $twinsOnly = '.btn-check[disabled]+.btn{opacity:.65}.form-check-input[disabled]~.form-check-label{opacity:.5}';
+        $this->assertHasViolation($this->analyze($this->page(self::BOOTSTRAP_CHECKS.$twinsOnly, $disabled)), 'contrast.unverifiable', element: 'label.btn', severity: Severity::Notice);
+        // Attribute names are ASCII case-insensitive; the label of the disabled checkbox itself is exempt (inactive control).
+        $this->assertHasViolation($this->analyze($this->page(self::BOOTSTRAP_CHECKS.'.btn-check[DISABLED=""]+.btn{opacity:.65}', $disabled)), 'contrast.unverifiable', element: 'label.btn', severity: Severity::Notice);
+    }
+
+    /** @return array<string, array{0: string}> I2: maybe rules over passing text whose attribute selector is not required, or not decided */
+    public static function attributeRulesThatMayMatch(): array
+    {
+        return [
+            ':not([disabled]) before the compound' => [':not([disabled])+p{opacity:.5}'],
+            ':not([disabled]) in the compound' => ['div:not([disabled])+p{opacity:.5}'],
+            'one :is() argument without the attribute' => [':is([disabled],div)+p{opacity:.5}'],
+            'an attribute of the document' => ['[class=x]+p{opacity:.5}'],
+            'a namespace prefix' => ['[*|disabled]+p{opacity:.5}'],
+            'an empty namespace' => ['[|disabled]+p{opacity:.5}'],
+            'an unclosed bracket' => ['[disabled+p{opacity:.5}'],
+        ];
+    }
+
+    #[DataProvider('attributeRulesThatMayMatch')]
+    public function test_attribute_selectors_that_are_not_required_are_kept(string $rule): void
+    {
+        $violations = $this->analyze($this->page('p{color:#111} '.$rule, '<div class="x">x</div><p>Text</p>'));
+
+        $this->assertHasViolation($violations, 'contrast.unverifiable', element: 'p', severity: Severity::Notice);
+    }
+
+    // I2: `:not([disabled]) p` is in the supported subset and applies (#111 at half opacity is 3.6:1 here).
+    public function test_a_negated_attribute_selector_is_never_dropped(): void
+    {
+        $violation = $this->assertHasViolation($this->analyze($this->page('p{color:#111} :not([disabled]) p{opacity:.5}', '<div><p>Text</p></div>')), 'contrast.insufficient', element: 'p', severity: Severity::Error);
+        $this->assertSame([], $violation->tags);
+    }
+
+    /** @return array<string, array{0: string}> I2: maybe rules whose required compound names an attribute no element carries */
+    public static function attributeRulesThatCannotMatch(): array
+    {
+        return [
+            'presence' => ['[disabled]+p{opacity:.5}'],
+            'a value' => ['[data-state="open"]+p{opacity:.5}'],
+            'an operator' => ['[aria-expanded~=true]+p{opacity:.5}'],
+            'dash match' => ['[hreflang|=en]+p{opacity:.5}'],
+            'escaped and spaced' => ['[ data\\-state = "open" i ]+p{opacity:.5}'],
+            'inside :has()' => ['div:has([hidden])+p{opacity:.5}'],
+            'every :is() argument' => [':is([open],[inert])+p{opacity:.5}'],
+        ];
+    }
+
+    #[DataProvider('attributeRulesThatCannotMatch')]
+    public function test_attribute_selectors_need_the_attribute_in_the_document(string $rule): void
+    {
+        $this->assertSame([], $this->analyze($this->page('p{color:#111} '.$rule, '<div class="x">x</div><p>Text</p>')));
+    }
+
     /** @return array<string, array{0: string, 1: string, 2: Severity}> R12 review: a maybe clipping rule over failing text (#aaa on .t), the body and the verdict */
     public static function maybeClippingRules(): array
     {
