@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.1.1] - 2026-11-14
+## [3.1.1] - 2026-11-15
 
 A bugfix release for 3.1.0: contrast no longer reports definite failures it cannot be sure of, several analyzers stop flagging correct markup, and a few commands and fetches behave as documented. There are no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names, violation keys or the JSON report shape; findings, scores and severities change only where listed below. See [UPGRADE.md](UPGRADE.md).
 
@@ -16,11 +16,12 @@ A bugfix release for 3.1.0: contrast no longer reports definite failures it cann
 - Contrast: CSS cascade layers (`@layer`) are honoured, so a layered rule no longer beats an unlayered one and the declared layer order decides between layers. Invalid `@layer` blocks are dropped the way browsers drop them. When the order cannot be determined the colour counts as unknown (Notice or approximate Warning) instead of a definite result.
 - Contrast: `@supports` conditions are evaluated instead of applying their rules unconditionally; a condition that cannot be decided is reported as uncertain.
 - Contrast: visually hidden text (`sr-only`, `visually-hidden` and similar clipping patterns) is no longer measured. Skip links that become visible on focus are still measured.
-- Contrast: rules behind selectors the parser cannot evaluate no longer vanish silently. They make the result a Notice or Warning instead of a definite one, and rules that cannot match anything on the page (a class the page does not use, `:disabled` without a disabled element) are ignored, so ordinary Bootstrap or Tailwind pages are not flooded with new notices.
-- Contrast: stylesheet links marked `disabled` are ignored; a `:disabled` or similar rule only applies to elements that carry the attribute.
+- Contrast: rules behind selectors the parser cannot evaluate no longer vanish silently. They make the result a Notice or Warning instead of a definite one, and rules that cannot match anything on the page (a class or attribute the page does not use, `:disabled` without a disabled element) are ignored, so ordinary Bootstrap or Tailwind pages are not flooded with new notices.
+- Contrast: stylesheet links marked `disabled` are ignored; a `:disabled` (or `[disabled]`) rule is ignored when no element on the page carries the attribute. Any attribute selector (`[data-state=open]`) counts the same way, so Bootstrap's `.btn-check[disabled]+.btn` adds no notice to a page where nothing is disabled.
+- Contrast: stylesheets of web-font services (Google Fonts, Bunny Fonts as in the Laravel starter kits, Adobe Fonts, cdnfonts; `bfsg.fetch.font_stylesheet_hosts`) linked or imported by a page are not loaded and do not count as missing stylesheets, so they do not make contrast failures approximate.
 - `aria.hidden_focusable`: an element that is only possibly hidden (behind a `@supports` condition or a selector the parser cannot evaluate, or in a stylesheet that was not seen) is a Warning tagged `approximate` instead of an Error.
 - `focus.outline_removed`: only elements that can take focus are reported; `tabindex="-1"` scripting targets are a Notice; `outline-style`, `outline-width` and `outline-color` longhands count as an indicator.
-- `input_purpose.invalid_autocomplete`: an invalid token is an Error only on personal-data fields (including `type="email"` and `type="tel"`) and a best-practice Notice elsewhere; `false`, `none`, `nope` and similar act like `off`; hidden inputs are skipped.
+- `input_purpose.invalid_autocomplete`: an invalid token is an Error only on personal-data fields (including `type="email"` and `type="tel"`) and a best-practice Notice elsewhere; `false`, `true`, `none`, `nope` and `disabled` act exactly like `off` on every field (no `invalid_autocomplete` finding; on a personal-data field the `autocomplete_off_on_personal_field` Notice, as for `off`); hidden inputs are skipped.
 - `links.non_descriptive`: the pagination words "next", "previous", "prev", "weiter", "zurück" and "vor" (with or without `»`, `«`, `›`, `‹` or arrows) inside a navigation or on a link with `rel="next"` / `rel="prev"` are a Notice, `links.non_descriptive_in_context`, instead of a Warning.
 - A wrapping `<label>` names only the control it labels (a button inside a label no longer takes the label's text), and a `<label for>` can name a button.
 - `bfsg:history --cleanup --url=...` deletes only the reports of that URL; before, `--url` was ignored and every old report was deleted.
@@ -33,9 +34,11 @@ A bugfix release for 3.1.0: contrast no longer reports definite failures it cann
 ### Changed
 - Contrast failures on pages with unseen stylesheets are Warnings (tagged `approximate`) instead of Errors, and such pages gain one Notice; scores and `--fail-on=error` results move accordingly.
 - `bfsg:history --cleanup --trend` exits 2 (the two options contradict each other).
+- Middleware: a page whose only finding is `contrast.stylesheets_missing` (every page that links a stylesheet, since the middleware sees the HTML only) gets no log line and no `X-BFSG-Violations` header; a stored report keeps the notice.
 
 ### Added
 - `contrast.stylesheets_missing` (Notice, WCAG 1.4.3, param `count`): the page links stylesheets that were not analysed, so its contrast failures are estimates. Translations in `lang/en` and `lang/de`.
+- `bfsg.fetch.font_stylesheet_hosts` (default `fonts.googleapis.com`, `fonts.bunny.net`, `use.typekit.net`, `fonts.cdnfonts.com`): hosts of web-font stylesheets that are neither loaded nor counted as missing; `[]` treats them like any other origin.
 - `bfsg.authentication.email`, `bfsg.authentication.password` and `bfsg.authentication.token` (`BFSG_AUTH_EMAIL`, `BFSG_AUTH_PASSWORD`, `BFSG_AUTH_TOKEN`, default `null`): credentials for `bfsg:check --auth` are read from the config, so they survive `config:cache`.
 
 ## [3.1.0] - 2026-11-03

@@ -319,7 +319,7 @@ class CssParser
      */
     private ?array $universalMaybeWeights = null;
 
-    /** @var array{class: array<string, true>, id: array<string, true>, all: bool, checked?: bool, disabled?: bool, placeholder-shown?: bool, required?: bool}|null see documentTokens(); null until then */
+    /** @var array{class: array<string, true>, id: array<string, true>, attribute: array<string, true>, all: bool, checked?: bool, disabled?: bool, placeholder-shown?: bool, required?: bool}|null see documentTokens(); null until then */
     private ?array $documentTokens = null;
 
     /** @var array<string, bool> node path => whether a maybe rule may hide the element or an ancestor (maybeHidden()) */
@@ -875,6 +875,8 @@ class CssParser
      * input also ends a statement. The list ends before the first other token: a style rule, an at-rule with a block or
      * `@namespace` (after which an @import is invalid). One linear pass: strings and parentheses are skipped by strcspn().
      *
+     * @internal shared with StylesheetInliner, not part of the public API
+     *
      * @return list<array{0: string, 1: string, 2: int, 3: int}>
      */
     public static function leadingStatements(string $css): array
@@ -1000,6 +1002,8 @@ class CssParser
      * anonymous `layer`), the condition of supports() (null: none) and the media query list; null without a URL or with
      * an unclosed url() or supports(). Linear in the prelude.
      *
+     * @internal shared with StylesheetInliner, not part of the public API
+     *
      * @return array{url: string, layer: ?string, supports: ?string, media: string}|null
      */
     public static function importRule(string $prelude): ?array
@@ -1069,6 +1073,8 @@ class CssParser
      * Whether a browser applies the sheet of an @import (importRule()) to the screen: its media query list applies
      * (HtmlDocument::mediaAppliesToScreen()) and its supports() condition is not false (SupportsCondition::evaluate(),
      * a declaration as `(declaration)`).
+     *
+     * @internal shared with StylesheetInliner, not part of the public API
      *
      * @param  array{url: string, layer: ?string, supports: ?string, media: string}  $import
      */
