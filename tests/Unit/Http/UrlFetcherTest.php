@@ -913,7 +913,7 @@ class UrlFetcherTest extends TestCase
     public function test_cross_origin_stylesheets_give_one_fetch_warning(): void
     {
         Http::fake([
-            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="https://cdn.example.net/build/app.css"><link rel="stylesheet" href="//static.example.org/x.css"><link rel="stylesheet" href="/off.css" disabled><link rel="stylesheet" href="/app.css">'), 200),
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="https://cdn.example.net/build/app.css"><link rel="stylesheet" href="//static.example.org/x.css"><link rel="stylesheet" href="/off.css" disabled><link rel="stylesheet" media="(prefers-color-scheme: dark)" href="https://cdn.example.net/dark.css"><link rel="stylesheet" href="/app.css">'), 200),
             'https://example.com/one' => Http::response(self::contrastPage('<link rel="stylesheet" href="https://cdn.example.net/build/app.css">'), 200),
             'https://example.com/app.css' => Http::response('.t{color:#ccc;background:#fff}', 200),
         ]);
@@ -980,7 +980,8 @@ class UrlFetcherTest extends TestCase
         Http::fake([
             'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/app.css">'), 200),
             'https://example.com/css/app.css' => Http::response('@charset "utf-8"; @layer base, utilities; @import url(dark.css) screen and (prefers-color-scheme: dark); @import "reset.css" layer(base); '
-                .'@import url(grid.css) supports(display: grid); @import url(anon.css) layer; @import url(print.css) print; @import url(app.css); @import url(https://cdn.example.net/x.css); p{color:#111} @import url(late.css);', 200),
+                .'@import url(grid.css) supports(display: grid); @import url(anon.css) layer; @import url(print.css) print; @import url(app.css); @import url(https://cdn.example.net/x.css); @import url(all.css) layer(base) supports(display:grid) screen; p{color:#111} @import url(late.css);', 200),
+            'https://example.com/css/all.css' => Http::response('.all{color:#111}', 200),
             'https://example.com/css/dark.css' => Http::response('p{color:#eee}', 200),
             'https://example.com/css/reset.css' => Http::response('@import url(/css/app.css); @import url(a1.css); *{margin:0}', 200),
             'https://example.com/css/a1.css' => Http::response('@import url(a2.css); .a1{color:#111}', 200),
@@ -997,6 +998,7 @@ class UrlFetcherTest extends TestCase
         $this->assertStringContainsString('.a2{color:#111}', $css);
         $this->assertStringContainsString('*{margin:0}}', $css);
         $this->assertStringContainsString(' @supports (display: grid){.g{display:grid}} @layer{.n{color:#111}}', $css);
+        $this->assertStringContainsString(' @media screen{@supports (display:grid){@layer base{.all{color:#111}}}}', $css, 'media outside supports outside layer');
         $this->assertStringEndsWith(' p{color:#111} @import url(late.css);', $css);
         $this->assertSame([
             'Stylesheet a3.css (imported by a2.css) was not inlined: imports nested more than 3 levels deep.',
@@ -1008,7 +1010,7 @@ class UrlFetcherTest extends TestCase
             Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/css/'.$file);
         }
 
-        Http::assertSentCount(8); // the page, app.css once, dark, reset, a1, a2, grid, anon: none twice
+        Http::assertSentCount(9); // the page, app.css once, dark, reset, a1, a2, grid, anon, all: none twice
     }
 
     // F10: a sheet of 450 KB of imports costs one pass, at most max_stylesheets loads and at most 21 warnings.
@@ -1037,5 +1039,32 @@ class UrlFetcherTest extends TestCase
         $this->assertSame(24996, HtmlDocument::fromHtml($page->html)->cssParser()->missingStylesheets());
         $this->assertStringContainsString(str_repeat('/* unclosed*/', 4).'.t{color:#111}</style>', $page->html, 'an unclosed comment of an imported sheet is closed');
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('took %.3f s', $elapsed));
+    }
+
+    // Fix round 1: a byte order mark, braces in an unquoted url() and a stray `}` do not hide or misplace imports.
+    public function test_a_byte_order_mark_braces_in_urls_and_a_stray_brace_keep_imports_in_place(): void
+    {
+        Http::fake([
+            'https://example.com/bom' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/bom.css">'), 200),
+            'https://example.com/css/bom.css' => Http::response("\xEF\xBB\xBF@import url(colors.css); .x{margin:0}", 200),
+            'https://example.com/css/colors.css' => Http::response('.t{color:#ccc;background:#fff}', 200),
+            'https://example.com/data' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/data.css">'), 200),
+            'https://example.com/css/data.css' => Http::response('@import url(data:text/css,.q{color:red}); @import url(https://cdn.test/c.css); .t{color:#111}', 200),
+            'https://example.com/stray' => Http::response(self::contrastPage('<link rel="stylesheet" href="/css/stray.css">'), 200),
+            'https://example.com/css/stray.css' => Http::response('@import url(dark.css) (prefers-color-scheme: dark); .t{color:#111}', 200),
+            'https://example.com/css/dark.css' => Http::response('.a{color:red}} .t{color:#eee}', 200),
+        ]);
+
+        $bom = $this->fetcher()->fetch('https://example.com/bom');
+        $this->assertStringContainsString('<style data-bfsg-inlined="/css/bom.css">.t{color:#ccc;background:#fff} .x{margin:0}</style>', $bom->html);
+        $this->assertSame([['contrast.insufficient', Severity::Error, ['ratio' => '1.61', 'required' => 4.5, 'foreground' => '#cccccc', 'background' => '#ffffff']]], self::contrast($bom->html));
+
+        $data = $this->fetcher()->fetch('https://example.com/data');
+        $this->assertSame(['2 stylesheets on other origins were not inlined; contrast results are approximate.'], $data->warnings);
+        $this->assertSame(2, HtmlDocument::fromHtml($data->html)->cssParser()->missingStylesheets());
+
+        $stray = $this->fetcher()->fetch('https://example.com/stray');
+        $this->assertStringContainsString('@media (prefers-color-scheme: dark){.a{color:red} .t{color:#eee}} .t{color:#111}', $stray->html);
+        $this->assertSame([], self::contrast($stray->html), 'the dark rule stays behind its preference');
     }
 }

@@ -157,7 +157,8 @@ final class StylesheetInliner
         $url = (string) UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
 
         if (! $this->sameOrigin($url, $pageUrl)) {
-            $crossOrigin++;
+            // Not counted when it holds only for another user preference (a dark theme): not in the base cascade anyway.
+            $crossOrigin += HtmlDocument::mediaCondition($attributes['media'] ?? '') === 'preference' ? 0 : 1;
 
             return $tag;
         }
@@ -185,8 +186,8 @@ final class StylesheetInliner
     }
 
     /**
-     * The CSS at $url (named $name in warnings) through $load, counted against max_stylesheets; null with a warning when
-     * it is over the count, cannot be loaded or is larger than max_stylesheet_bytes.
+     * The CSS at $url (named $name in warnings) through $load, counted against max_stylesheets, without a leading byte
+     * order mark; null with a warning when it is over the count, cannot be loaded or is larger than max_stylesheet_bytes.
      *
      * @param  list<string>  $warnings
      */
@@ -224,7 +225,8 @@ final class StylesheetInliner
             return null;
         }
 
-        return $css;
+        // A byte order mark is not CSS: before an @import it would hide the import from leadingStatements().
+        return str_starts_with($css, "\xEF\xBB\xBF") ? substr($css, 3) : $css;
     }
 
     /**
@@ -234,7 +236,7 @@ final class StylesheetInliner
      * layer (`@media <media>{@supports (<condition>){@layer <name>{…}}}`). An import of a sheet on the current chain
      * (a cycle) is dropped, as browsers do, and so is one whose conditions rule out the screen and an invalid one.
      * Every other import that is not loaded (another origin: counted in $crossOrigin; over the count, the
-     * depth or the size; failed: a warning) is returned in the second list as `@import url("…");` (its URL as written)
+     * depth or the size; failed: a warning) is returned in the second list as `@import url("…") <media>;` (its URL as written)
      * for the caller to put
      * first in the sheet, where CssParser::missingStylesheets() counts it. The depth is bounded, so is the recursion.
      *
@@ -280,7 +282,7 @@ final class StylesheetInliner
             $text = null;
 
             if (! $this->sameOrigin($target, $pageUrl)) {
-                $crossOrigin++;
+                $crossOrigin += HtmlDocument::mediaCondition($import['media']) === 'preference' ? 0 : 1;
             } elseif (count($chain) > CssParser::MAX_IMPORT_DEPTH) {
                 $warnings[] = "Stylesheet {$imported} was not inlined: imports nested more than ".CssParser::MAX_IMPORT_DEPTH.' levels deep.';
             } else {
@@ -288,7 +290,8 @@ final class StylesheetInliner
             }
 
             if ($text === null) {
-                $unresolved[] = '@import url("'.addcslashes($import['url'], "\"\\\n\r\f").'");'; // as written: the output stays linear in the input
+                // As written (the output stays linear in the input), with its media so the count skips a preference-only one.
+                $unresolved[] = '@import url("'.addcslashes($import['url'], "\"\\\n\r\f").'")'.($import['media'] === '' ? '' : ' '.$import['media']).';';
 
                 continue;
             }
@@ -302,13 +305,16 @@ final class StylesheetInliner
     }
 
     /**
-     * $css with a comment, string or blocks left open at its end closed, as the end of a sheet closes them: imported
-     * text is followed by the rest of the importing sheet, which must not end up inside them. One linear pass.
+     * $css with a comment, string or blocks left open at its end closed, as the end of a sheet closes them, and every `}`
+     * outside a block dropped (a browser ignores it there): imported text is followed by the rest of the importing sheet
+     * and sits inside the import's wrapper, neither of which it may reach into. One linear pass.
      */
     private function terminated(string $css): string
     {
         $length = strlen($css);
         $depth = 0;
+        $out = '';
+        $copied = 0;
 
         for ($position = 0; ($position += strcspn($css, "/{}\"'\\", $position)) < $length; $position++) {
             $char = $css[$position];
@@ -317,7 +323,7 @@ final class StylesheetInliner
                 $end = strpos($css, '*/', $position + 2);
 
                 if ($end === false) {
-                    return $css.'*/'.str_repeat('}', $depth);
+                    return $out.substr($css, $copied).'*/'.str_repeat('}', $depth);
                 }
 
                 $position = $end + 1;
@@ -330,18 +336,21 @@ final class StylesheetInliner
                 }
 
                 if ($position >= $length) {
-                    return $css.$char.str_repeat('}', $depth);
+                    return $out.substr($css, $copied).$char.str_repeat('}', $depth);
                 }
             } elseif ($char === '\\') {
                 $position++;
             } elseif ($char === '{') {
                 $depth++;
-            } elseif ($char === '}' && $depth > 0) {
+            } elseif ($depth > 0) {
                 $depth--;
+            } else {
+                $out .= substr($css, $copied, $position - $copied); // a stray `}` at the top level
+                $copied = $position + 1;
             }
         }
 
-        return $css.str_repeat('}', $depth);
+        return $out.substr($css, $copied).str_repeat('}', $depth);
     }
 
     /**

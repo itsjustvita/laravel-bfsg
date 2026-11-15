@@ -79,8 +79,8 @@ return [
             'suggestion' => 'Übrige Texte mit einem browserbasierten Kontrastwerkzeug prüfen oder kleinere Seiten analysieren',
         ],
         'stylesheets_missing' => [
-            'message' => 'Kontrastprüfung unvollständig: :count Stylesheet(s) der Seite nicht analysiert',
-            'suggestion' => 'Kontrastmängel auf dieser Seite sind Schätzungen; mit einem browserbasierten Werkzeug prüfen oder die Seite mit bfsg:check analysieren, das Stylesheets desselben Ursprungs einbindet',
+            'message' => 'Nicht analysierte Stylesheets: :count (Kontrastmängel auf dieser Seite sind Schätzungen)',
+            'suggestion' => 'Mit der Middleware oder der Bfsg-Fassade werden verlinkte Stylesheets nie gelesen: bfsg:check <url> ausführen, das Stylesheets desselben Ursprungs einbindet. Stylesheets anderer Ursprünge oder solche, die nicht geladen werden konnten, werden nie gelesen: den Kontrast dieser Seiten mit einem browserbasierten Werkzeug prüfen',
         ],
     ],
     'links' => [

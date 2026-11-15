@@ -79,8 +79,8 @@ return [
             'suggestion' => 'Check the remaining text with a browser-based contrast tool, or analyze smaller pages',
         ],
         'stylesheets_missing' => [
-            'message' => 'Contrast analysis is incomplete: :count stylesheet(s) of the page were not analyzed',
-            'suggestion' => 'Contrast failures on this page are estimates; check them with a browser-based tool, or analyze the page with bfsg:check, which inlines same-origin stylesheets',
+            'message' => 'Stylesheets not analyzed: :count (contrast failures on this page are estimates)',
+            'suggestion' => 'With the middleware or the Bfsg facade, linked stylesheets are never read: run bfsg:check <url>, which inlines same-origin stylesheets. Stylesheets on other origins or that failed to load are never read: check the contrast of those pages with a browser-based tool',
         ],
     ],
     'links' => [

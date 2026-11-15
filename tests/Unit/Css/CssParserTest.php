@@ -2178,6 +2178,10 @@ class CssParserTest extends TestCase
             'without a URL' => ['<style>@import ; @import screen;</style>', 0],
             'in a print <style>' => ['<style media="print">@import url(x.css);</style>', 0],
             'a semicolon in the URL string' => ['<style>@import "a;b.css" screen; @import url(y.css);</style>', 2],
+            'after a byte order mark' => ["<style>\u{FEFF}@import url(x.css);</style>", 1],
+            'braces in an unquoted url()' => ['<style>@import url(data:text/css,.q{color:red}); @import url(https://cdn.test/c.css);</style>', 2],
+            'a preference-only @import' => ['<style>@import url(dark.css) (prefers-color-scheme: dark);</style>', 0],
+            'a preference-only link' => ['<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="/dark.css">', 0],
             'two <style> elements and two links' => ['<link rel="stylesheet" href="/a.css"><style>@import url(x.css);</style><style>@import url(y.css);</style><link rel="stylesheet" href="/b.css">', 4],
         ];
     }
@@ -2200,6 +2204,7 @@ class CssParserTest extends TestCase
         $this->assertSame(['url' => 'a b.css', 'layer' => 'base.reset', 'supports' => 'selector(:has(a)) and (display: grid)', 'media' => 'screen and (min-width: 40em)'],
             CssParser::importRule("'a b.css' LAYER( base.reset ) supports(selector(:has(a)) and (display: grid)) screen and (min-width: 40em)"));
         $this->assertSame(['url' => 'x.css', 'layer' => null, 'supports' => 'display: grid', 'media' => 'layers'], CssParser::importRule('url(x.css) supports(display: grid) layers'));
+        $this->assertSame(['url' => 'all.css', 'layer' => 'base', 'supports' => 'display:grid', 'media' => 'screen'], CssParser::importRule('url(all.css) layer(base) supports(display:grid) screen'));
         $this->assertNull(CssParser::importRule(' screen'));
         $this->assertNull(CssParser::importRule('url(x.css'));
         $this->assertNull(CssParser::importRule('url(x.css) supports(display: grid'));
@@ -2223,6 +2228,7 @@ class CssParserTest extends TestCase
         return [
             '50 000 links' => [str_repeat('<link rel=stylesheet href=a>', 25000).str_repeat('<link rel="alternate stylesheet" href=b>', 25000), 25000],
             '50 000 imports' => ['<style>'.str_repeat('@import url(x.css);', 50000).'</style>', 50000],
+            '50 000 imports with braces in unquoted url()' => ['<style>'.str_repeat('@import url(a{b);', 50000).'</style>', 50000],
             'one import with 200 000 nested supports()' => ['<style>@import url(x.css) supports('.str_repeat('(', 200000).'display: grid'.str_repeat(')', 200000).');</style>', 1],
             'an import ended by the end of the sheet after 1 MB of whitespace' => ['<style>@import url(x.css)'.str_repeat(' ', 1000000).'</style>', 1],
             'an unclosed url( of 1 MB' => ['<style>@import url('.str_repeat('a', 1000000).'</style>', 0],

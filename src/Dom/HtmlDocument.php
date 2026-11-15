@@ -268,8 +268,9 @@ final class HtmlDocument
     /**
      * `<link>` elements a browser loads as a screen stylesheet: the `rel` token list (ASCII case-insensitive) contains
      * `stylesheet` and not `alternate`, the `href` is not empty, there is no `disabled` attribute, and the media attribute
-     * applies to screen (mediaAppliesToScreen()); outside <template> and <noscript>, as styleElements(). Their rules
-     * are not in styleSheets() (CssParser::missingStylesheets()).
+     * applies to screen with the default preferences (mediaCondition() neither false nor 'preference': a dark-theme
+     * sheet is not in the base cascade); outside <template> and <noscript>, as styleElements(). Their rules are not in
+     * styleSheets() (CssParser::missingStylesheets()).
      *
      * @return list<DOMElement>
      */
@@ -280,8 +281,10 @@ final class HtmlDocument
             function (DOMElement $link): bool {
                 $rel = preg_split('/[\t\n\f\r ]++/', strtolower($link->getAttribute('rel')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
 
+                $condition = self::mediaCondition($link->getAttribute('media'));
+
                 return in_array('stylesheet', $rel, true) && ! in_array('alternate', $rel, true)
-                    && trim($link->getAttribute('href'), " \t\n\f\r") !== '' && self::mediaAppliesToScreen($link->getAttribute('media'));
+                    && trim($link->getAttribute('href'), " \t\n\f\r") !== '' && $condition !== false && $condition !== 'preference';
             },
         ));
     }

@@ -211,7 +211,8 @@ class BfsgTest extends TestCase
     {
         $links = '<link rel="alternate stylesheet" href="/alt.css"><link rel="stylesheet" href="/off.css" disabled>'
             .'<link rel="stylesheet" media="print" href="/print.css"><link rel="stylesheet" href=""><link rel="stylesheet">'
-            .'<template><link rel="stylesheet" href="/t.css"></template><noscript><link rel="stylesheet" href="/n.css"></noscript>';
+            .'<template><link rel="stylesheet" href="/t.css"></template><noscript><link rel="stylesheet" href="/n.css"></noscript>'
+            .'<link rel="stylesheet" media="(prefers-color-scheme: dark)" href="/dark.css">';
         $violations = $this->contrastFindings('<html lang="en"><head><title>Links</title>'.$links.'</head><body><main><h1>Links</h1><p style="color:#999">Muted</p></main></body></html>');
 
         $this->assertSame([], $this->withKey($violations, 'contrast.stylesheets_missing'));

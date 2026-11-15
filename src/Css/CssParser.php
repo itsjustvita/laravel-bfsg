@@ -773,7 +773,8 @@ class CssParser
 
     /**
      * The @import rules of a stylesheet that a browser would load for the screen: the leading ones (leadingStatements()),
-     * with a URL (importRule()), whose conditions do not rule out the screen (importApplies()).
+     * with a URL (importRule()), whose conditions do not rule out the screen (importApplies()), except those whose media
+     * hold only for other user preferences (HtmlDocument::mediaCondition() 'preference').
      */
     private function unresolvedImports(string $css): int
     {
@@ -786,7 +787,8 @@ class CssParser
         foreach (self::leadingStatements($css) as [$name, $prelude]) {
             $import = $name === 'import' ? self::importRule($prelude) : null;
 
-            if ($import !== null && self::importApplies($import)) {
+            // A sheet only for another user preference (a dark theme) is not in the base cascade either way.
+            if ($import !== null && self::importApplies($import) && HtmlDocument::mediaCondition($import['media']) !== 'preference') {
                 $count++;
             }
         }
@@ -797,7 +799,7 @@ class CssParser
     /**
      * The statements at the start of a stylesheet, before which an @import may stand (CSS Cascade 5): `@charset`,
      * `@import`, `@layer` statements and unknown statement at-rules (browsers drop those), with whitespace, comments and
-     * `<!--` / `-->` between them. Each is [lowercase name, prelude, offset of its `@`, offset after its `;`]; the end of the
+     * `<!--` / `-->` between them (and a byte order mark first). Each is [lowercase name, prelude, offset of its `@`, offset after its `;`]; the end of the
      * input also ends a statement. The list ends before the first other token: a style rule, an at-rule with a block or
      * `@namespace` (after which an @import is invalid). One linear pass: strings and parentheses are skipped by strcspn().
      *
@@ -807,7 +809,7 @@ class CssParser
     {
         $statements = [];
         $length = strlen($css);
-        $position = 0;
+        $position = str_starts_with($css, "\xEF\xBB\xBF") ? 3 : 0; // a byte order mark is not a token
 
         while (true) {
             while ($position < $length) {
@@ -841,7 +843,10 @@ class CssParser
         }
     }
 
-    /** Offset of the `;` that ends the statement from $position (the length at the end of the input), null at a brace first; strings and parentheses respected. */
+    /**
+     * Offset of the `;` that ends the statement from $position (the length at the end of the input), null at a brace
+     * first; strings, parentheses and unquoted `url(…)` tokens (which may hold braces) respected.
+     */
     private static function statementEnd(string $css, int $position): ?int
     {
         $length = strlen($css);
@@ -858,7 +863,9 @@ class CssParser
                 return $position;
             }
 
-            if ($char === '"' || $char === "'") {
+            if ($char === '(' && ($end = self::unquotedUrlEnd($css, $position)) !== null) {
+                $position = $end;
+            } elseif ($char === '"' || $char === "'") {
                 $position = self::stringEnd($css, $position);
             } elseif ($char === '\\') {
                 $position++;
@@ -872,6 +879,31 @@ class CssParser
         }
 
         return $length;
+    }
+
+    /**
+     * When the parenthesis at $open opens an unquoted url() token (`url(` after no identifier character, its first
+     * non-space character no quote): the offset of its closing parenthesis (escapes respected), or of the last
+     * character when it is not closed. Null otherwise.
+     */
+    private static function unquotedUrlEnd(string $css, int $open): ?int
+    {
+        if ($open < 3 || strncasecmp(substr($css, $open - 3, 3), 'url', 3) !== 0 || ($open > 3 && preg_match('/[\w\\-]/A', $css, $m, 0, $open - 4) === 1)) {
+            return null;
+        }
+
+        $length = strlen($css);
+        $position = $open + 1 + strspn($css, " \t\n\r\f", $open + 1);
+
+        if ($position < $length && ($css[$position] === '"' || $css[$position] === "'")) {
+            return null;
+        }
+
+        while (($position += strcspn($css, ')\\', $position)) < $length && $css[$position] === '\\') {
+            $position += 2;
+        }
+
+        return min($position, $length - 1);
     }
 
     /** Offset of the quote that closes the string opened at $open (escapes respected), or of the last character when it is not closed. */
