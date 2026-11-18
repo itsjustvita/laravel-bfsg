@@ -18,13 +18,12 @@ A patch release for 3.1.1: a set of false positives disappears, a few wrong resu
 - `page_title.missing_title`: a `<title>` that the HTML parser moved into the body is found instead of reported as missing. Hyphenated compounds ("Neu-Ulm", "Home-Office") are no longer split into title segments; a hyphen separates segments only with spaces around it.
 - Keyboard: items of composite widgets (tabs in a tablist, options in a listbox, menu items and similar) with `onclick` are no longer `keyboard.click_without_keyboard` when they carry their role and sit inside their widget. A role-less clickable `div`, or an item role outside any widget, is still reported.
 - `keyboard.dialog_missing_aria_modal`: `aria-modal="false"` is no longer reported; the attribute is present and valid.
-- `keyboard.anchor_not_focusable` and `keyboard.negative_tabindex_on_interactive`: an `aria-disabled="true"` link or control, and an anchor whose only attribute is `tabindex="-1"` (a scripting focus target), are no longer reported.
+- `keyboard.anchor_not_focusable` and `keyboard.negative_tabindex_on_interactive`: a link or control with `aria-disabled="true"` is no longer reported, and neither is an anchor without `href` whose only sign of interactivity is `tabindex="-1"` (a focus target for scripts, such as a skip-link target).
 - Accessible names: `aria-labelledby` now uses the `aria-label` of the referenced element, or the `alt` of a referenced image, before its text, as browsers do.
 - Contrast: fallback text inside `video`, `audio`, `canvas`, `iframe` and the SVG `desc` and `metadata` elements is no longer measured, because it is not rendered.
 - Contrast: a `.` or `#` inside an attribute selector value (`a[href$=".pdf"]`, `a[href="#top"]`) no longer counts toward the selector's specificity, so the rule that wins in the browser wins here too.
 - Middleware: `bfsg.middleware.ignored_paths` entries with a leading slash (`/admin/*`) now match; before, only `admin/*` did.
-- `bfsg:history`: `--days` and `--limit` accept at most 6 digits. A longer `--days` used to be cast to a huge number and delete every report with `--cleanup`.
-- `bfsg:history`: unknown options and stray arguments exit 2, like `bfsg:check` (before: 1).
+- `bfsg:history`: `--days` and `--limit` accept at most 6 digits; a longer value exits 2. A `--days` value of 16 or more digits used to overflow and delete every report with `--cleanup`.
 - HTML report: the `lang` attribute uses a hyphen for region locales (`pt-BR`, not `pt_BR`).
 - `bfsg:check --auth`: the interactive prompts are written to stderr, so `--format=json` and `--format=markdown` output on stdout stays clean.
 - Reports with many findings are stored in smaller inserts, which stays under the bound-parameter limits of SQL Server and older SQLite versions.
@@ -34,8 +33,7 @@ A patch release for 3.1.1: a set of false positives disappears, a few wrong resu
 - Private-network guard (`bfsg:check`, MCP, stylesheet fetches): multicast addresses (`224.0.0.0/4`, `ff00::/8`) and IPv4-translated IPv6 addresses (`::ffff:0:a.b.c.d`) are classified like their IPv4 counterparts.
 
 ### Changed
-- Invalid `bfsg:history` invocations (unknown option, stray argument) exit 2 instead of 1.
-- `bfsg:history --days` and `--limit` with more than 6 digits are rejected with exit 2 as invalid options.
+- `bfsg:history` with an unknown option or a stray argument exits 2, like `bfsg:check` (before: 1).
 - The `ignored_paths` pattern `/*` ignores every path; before, it matched only the homepage.
 
 ## [3.1.1] - 2026-11-15
