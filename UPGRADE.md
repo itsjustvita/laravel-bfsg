@@ -1,5 +1,19 @@
 # Upgrading
 
+## From 3.1.1 to 3.1.2
+
+3.1.2 has no breaking changes to the PHP API, config keys, env vars, MCP tool names, violation keys or the JSON report shape. Requirements are unchanged.
+
+1. `composer require itsjustvita/laravel-bfsg:^3.1.2`. No migration is needed.
+2. Re-run your accessibility checks. Nothing in your code or config has to change.
+
+What could matter:
+
+- **Some findings disappear.** Collapsed `aria-controls` triggers, key/value tables, clickable items of tabs, listboxes and menus, `aria-modal="false"`, `aria-disabled` links, text that is not rendered (`video`, `audio`, `canvas`, `iframe` fallbacks) and a few more false positives are no longer reported, so scores can rise slightly. Check CI thresholds that sit right at the line.
+- **`bfsg:history` exit codes.** An unknown option or a stray argument exits 2 (it used to exit 1), like `bfsg:check`. Scripts that test for exit code 1 on invalid invocations need to test for 2.
+- **`--days` and `--limit` take at most 6 digits.** A longer value is an invalid option and exits 2.
+- **`ignored_paths`.** An entry with a leading slash (`/admin/*`) now matches. The pattern `/*` ignores every path (it used to match only the homepage); remove it if you did not mean that.
+
 ## From 3.1.0 to 3.1.1
 
 3.1.1 has no breaking changes to the PHP API, config keys, env vars, command options, MCP tool names, violation keys or the JSON report shape. Requirements are unchanged. What changes is a handful of severities and counts; check CI thresholds that are close to the line.

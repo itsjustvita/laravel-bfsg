@@ -262,7 +262,7 @@ php artisan bfsg:history --cleanup --days=90               # delete reports olde
 php artisan bfsg:history --cleanup --days=90 --url=/pricing   # only the reports of that URL
 ```
 
-`--limit` and `--days` must be positive integers (`--cleanup --days=abc` deletes nothing). Exit codes: `0` success, `2` operational error (invalid option, missing `--url` with `--trend`, `--cleanup` with `--trend`, tables not migrated, database error).
+`--limit` and `--days` must be positive integers of at most 6 digits (`--cleanup --days=abc` deletes nothing). Exit codes: `0` success, `2` operational error (invalid option, unknown option, stray argument, missing `--url` with `--trend`, `--cleanup` with `--trend`, tables not migrated, database error).
 
 | Option | Default | Description |
 |---|---|---|
@@ -272,7 +272,7 @@ php artisan bfsg:history --cleanup --days=90 --url=/pricing   # only the reports
 | `--cleanup` | | Delete reports older than `--days`; with `--url` only those of that URL |
 | `--days=` | `30` | Age limit for `--cleanup` |
 
-Operational errors exit 2: the tables are missing (with the `php artisan migrate` hint), a database error, `--trend` without `--url`, `--cleanup` with `--trend`, and an invalid `--days` or `--limit`.
+Operational errors exit 2: the tables are missing (with the `php artisan migrate` hint), a database error, `--trend` without `--url`, `--cleanup` with `--trend`, an invalid `--days` or `--limit`, and an unknown option or stray argument.
 
 ## Middleware
 
@@ -605,7 +605,7 @@ All settings live in `config/bfsg.php` (`php artisan vendor:publish --tag=bfsg-c
 | `bfsg.middleware.enabled` | `BFSG_MIDDLEWARE_ENABLED` | `false` | Switches the middleware on |
 | `bfsg.middleware.log_violations` | | `true` | Log one line per page with findings |
 | `bfsg.middleware.log_channel` | | `null` | Log channel; `null` = the default channel |
-| `bfsg.middleware.ignored_paths` | | `admin/*`, `api/*`, `_debugbar/*`, `livewire/*`, `telescope/*`, `horizon/*`, `reset-password/*`, `password/reset/*` | Paths the middleware skips (`Request::is()` patterns) |
+| `bfsg.middleware.ignored_paths` | | `admin/*`, `api/*`, `_debugbar/*`, `livewire/*`, `telescope/*`, `horizon/*`, `reset-password/*`, `password/reset/*` | Paths the middleware skips (`Request::is()` patterns; a leading slash is accepted, `/admin/*` equals `admin/*`) |
 | `bfsg.reporting.save_to_database` | `BFSG_SAVE_TO_DB` | `false` | Middleware: store every analyzed page |
 | `bfsg.reporting.database.connection` | `BFSG_DB_CONNECTION` | `null` | Connection of the report tables; `null` = default |
 | `bfsg.reporting.output_path` | | `storage/app/bfsg-reports` | Directory of `html`/`pdf` reports written without `--output` |
