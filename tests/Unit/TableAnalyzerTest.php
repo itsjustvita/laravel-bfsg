@@ -135,6 +135,13 @@ class TableAnalyzerTest extends AnalyzerTestCase
         $this->assertViolationCount($this->analyze($html), 'tables.th_missing_scope', 2);
     }
 
+    public function test_thead_row_counts_as_a_header_row_even_with_one_header_cell(): void
+    {
+        $html = '<table><caption>c</caption><thead><tr><th>Name</th><td>Value</td></tr></thead><tbody><tr><th>North</th><td>1</td></tr></tbody></table>';
+
+        $this->assertViolationCount($this->analyze($html), 'tables.th_missing_scope', 2);
+    }
+
     public function test_table_with_two_header_rows_still_needs_scope(): void
     {
         $html = '<table><caption>c</caption><tr><th>A</th><th>B</th></tr><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>';

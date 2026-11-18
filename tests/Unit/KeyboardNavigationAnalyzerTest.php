@@ -273,4 +273,12 @@ class KeyboardNavigationAnalyzerTest extends AnalyzerTestCase
 
         $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div#c', severity: Severity::Error);
     }
+
+    public function test_non_item_roles_inside_an_activedescendant_widget_are_still_errors(): void
+    {
+        $violations = $this->analyze($this->page('<div role="listbox" aria-label="L" tabindex="0" aria-activedescendant="o1"><div role="option" id="o1">A</div><div id="p" role="presentation" onclick="more()">More</div><span id="b" role="button" onclick="more()">Load</span></div>'));
+
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div#p', severity: Severity::Error);
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'span#b', severity: Severity::Error);
+    }
 }

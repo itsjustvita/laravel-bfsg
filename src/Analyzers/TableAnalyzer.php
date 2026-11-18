@@ -131,8 +131,10 @@ class TableAnalyzer extends BaseAnalyzer
             }
 
             if ($index === 0) {
-                // A header only in the first column is a row header, not a column header.
-                $firstRowHasHeader = $cells !== [] && (count($headerCells) === count($cells) || array_diff_key($headerCells, [0 => true]) !== []);
+                // A header only in the first column is a row header, not a column header, unless the row sits in a thead.
+                $firstRowHasHeader = $headerCells !== [] && (count($headerCells) === count($cells)
+                    || array_diff_key($headerCells, [0 => true]) !== []
+                    || ($row->parentNode instanceof DOMElement && Element::tag($row->parentNode) === 'thead'));
             } elseif ($cells !== [] && Element::tag($cells[0]) === 'th') {
                 $firstColumnHasHeader = true;
             }

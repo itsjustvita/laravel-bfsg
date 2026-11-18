@@ -35,7 +35,7 @@ class PageTitleAnalyzer extends BaseAnalyzer
 
         if ($titles === []) {
             // The parser moves a title behind stray head content into the body; document.title is still the first title element.
-            $titles = array_slice($this->query('//title[not(ancestor::svg) and not(ancestor::template)]'), 0, 1);
+            $titles = array_slice($this->query('//title[not(ancestor::svg) and not(ancestor::template) and not(ancestor::noscript)]'), 0, 1);
         }
 
         if ($titles === []) {

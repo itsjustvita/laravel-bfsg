@@ -181,7 +181,7 @@ class AriaAnalyzer extends BaseAnalyzer
     }
 
     /** Popup and tab libraries mount the controlled element only while it is open or selected. */
-    protected function isCollapsed(DOMElement $element): bool
+    private function isCollapsed(DOMElement $element): bool
     {
         foreach (['aria-expanded', 'aria-selected'] as $state) {
             if ($element->hasAttribute($state) && strtolower(trim($element->getAttribute($state))) === 'false') {

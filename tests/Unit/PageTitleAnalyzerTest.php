@@ -102,6 +102,13 @@ class PageTitleAnalyzerTest extends AnalyzerTestCase
         $this->assertHasViolation($violations, 'page_title.missing_title', severity: Severity::Error);
     }
 
+    public function test_title_inside_noscript_does_not_count_as_page_title(): void
+    {
+        $violations = $this->analyze('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><noscript><title>Fallback</title></noscript><p>x</p></body></html>');
+
+        $this->assertHasViolation($violations, 'page_title.missing_title', severity: Severity::Error);
+    }
+
     public function test_page_without_any_title_is_still_missing_title(): void
     {
         $this->assertHasViolation($this->analyze('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><p>x</p></body></html>'), 'page_title.missing_title', severity: Severity::Error);

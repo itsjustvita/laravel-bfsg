@@ -127,8 +127,8 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
             $role = Roles::effective($element);
 
             // An item of a composite widget is operated through the widget's own key handling. Only an element that
-            // carries a role itself qualifies, and an item role only inside its composite.
-            if ($role !== null && ($this->insideActivedescendant($element) || (in_array($role, Roles::ROVING, true) && $this->insideComposite($element)))) {
+            // carries an item role itself qualifies, and only inside its widget.
+            if ($role !== null && in_array($role, Roles::ROVING, true) && ($this->insideActivedescendant($element) || $this->insideComposite($element))) {
                 continue;
             }
 
