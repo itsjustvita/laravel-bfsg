@@ -79,8 +79,8 @@ class FixtureExpectationsTest extends TestCase
             ]],
             'data grid with ARIA' => ['data-grid-aria.html', [
                 'aria.missing_required_state',
-                'aria.dangling_idref',
             ], [
+                'aria.dangling_idref',
                 'aria.unsupported_state',
                 'aria.invalid_role',
                 'aria.redundant_role',

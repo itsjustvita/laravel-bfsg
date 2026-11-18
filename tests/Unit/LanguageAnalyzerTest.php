@@ -104,4 +104,42 @@ class LanguageAnalyzerTest extends AnalyzerTestCase
 
         $this->assertNoViolation($this->analyze($html), 'language.possible_language_change');
     }
+
+    // A11: the guess only knows English and German, so it has nothing to say on a page in a third language.
+    public function test_language_guess_does_not_run_on_a_french_page(): void
+    {
+        $html = '<html lang="fr"><body><p>Nous sommes fiers du travail que notre équipe a fait pour vous. This is the best of the work that we have done for you and your family this year.</p>'
+            .'<p>Wir sind stolz auf die Arbeit, die unser Team in diesem Jahr für Sie und Ihre Familie geleistet hat.</p></body></html>';
+
+        $this->assertNoViolation($this->analyze($html), 'language.possible_language_change');
+    }
+
+    public function test_language_guess_does_not_run_on_a_dutch_page(): void
+    {
+        $html = '<html lang="nl-BE"><body><p>Wij zijn trots op het werk dat we hebben gedaan. This is the best of the work that we have done for you and your family this year.</p>'
+            .'<p>Wir sind stolz auf die Arbeit, die unser Team in diesem Jahr für Sie und Ihre Familie geleistet hat.</p></body></html>';
+
+        $this->assertNoViolation($this->analyze($html), 'language.possible_language_change');
+    }
+
+    public function test_english_paragraph_on_a_german_page_is_still_reported(): void
+    {
+        $html = '<html lang="de-AT"><body><p>We are proud of the work that our team has done for you and your family this year.</p></body></html>';
+
+        $this->assertSame('en', $this->assertHasViolation($this->analyze($html), 'language.possible_language_change')->params['lang']);
+    }
+
+    public function test_german_paragraph_on_an_english_page_is_still_reported(): void
+    {
+        $html = '<html lang="en-GB"><body><p>Wir sind stolz auf die Arbeit, die unser Team in diesem Jahr für Sie und Ihre Familie geleistet hat.</p></body></html>';
+
+        $this->assertSame('de', $this->assertHasViolation($this->analyze($html), 'language.possible_language_change')->params['lang']);
+    }
+
+    public function test_page_without_lang_behaves_as_before(): void
+    {
+        $html = '<html><body><p>We are proud of the work that our team has done for you and your family this year.</p></body></html>';
+
+        $this->assertNoViolation($this->analyze($html), 'language.possible_language_change');
+    }
 }

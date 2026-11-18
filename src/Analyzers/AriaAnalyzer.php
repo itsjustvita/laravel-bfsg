@@ -164,6 +164,10 @@ class AriaAnalyzer extends BaseAnalyzer
             foreach (self::IDREF_ATTRIBUTES as $attribute) {
                 foreach (Element::idrefs($element, $attribute) as $id) {
                     if (! isset($byId[$id])) {
+                        if ($attribute === 'aria-controls' && $this->isCollapsed($element)) {
+                            continue;
+                        }
+
                         $dangling[] = ['attribute' => $attribute, 'id' => $id];
                     }
                 }
@@ -174,6 +178,18 @@ class AriaAnalyzer extends BaseAnalyzer
                 $this->report('dangling_idref', $naming ? Severity::Error : Severity::Warning, '1.3.1', $element, $dangling[0], ['references' => $dangling], related: ['4.1.2']);
             }
         }
+    }
+
+    /** Popup and tab libraries mount the controlled element only while it is open or selected. */
+    protected function isCollapsed(DOMElement $element): bool
+    {
+        foreach (['aria-expanded', 'aria-selected'] as $state) {
+            if ($element->hasAttribute($state) && strtolower(trim($element->getAttribute($state))) === 'false') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Duplicate ids only matter when something references them. */

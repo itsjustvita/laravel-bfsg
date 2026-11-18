@@ -110,7 +110,8 @@ class LanguageAnalyzer extends BaseAnalyzer
 
             $inherited = $this->inheritedLanguage($element);
 
-            if ($inherited === null || $inherited === $detected) {
+            // The guess only knows English and German; on a page in any other language it has no basis.
+            if ($inherited === null || ! in_array($inherited, ['en', 'de'], true) || $inherited === $detected) {
                 continue;
             }
 

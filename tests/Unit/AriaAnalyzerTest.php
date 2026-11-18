@@ -252,4 +252,41 @@ class AriaAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertNoViolation($this->analyze(str_replace($search, $replace, self::BOOTSTRAP_MODAL)), 'aria.hidden_focusable');
     }
+
+    // A6: popup and tab libraries mount the controlled element only while it is open or selected.
+    public function test_dangling_aria_controls_on_a_collapsed_trigger_is_not_reported(): void
+    {
+        $html = '<button type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="radix-:r0:" data-state="closed">Open sheet</button>'
+            .'<input type="text" role="combobox" aria-expanded="false" aria-controls="headlessui-combobox-options-:r5:" aria-label="Assignee">';
+
+        $this->assertNoViolation($this->analyze($html), 'aria.dangling_idref');
+    }
+
+    public function test_dangling_aria_controls_on_an_unselected_tab_is_not_reported(): void
+    {
+        $html = '<div role="tablist"><button role="tab" aria-selected="false" aria-controls="tabs-content-password">Password</button></div>';
+
+        $this->assertNoViolation($this->analyze($html), 'aria.dangling_idref');
+    }
+
+    public function test_dangling_aria_controls_on_an_expanded_trigger_is_still_reported(): void
+    {
+        $violations = $this->analyze('<button type="button" aria-expanded="true" aria-controls="gone">Menu</button>');
+
+        $this->assertViolationCount($violations, 'aria.dangling_idref', 1);
+    }
+
+    public function test_dangling_aria_controls_without_state_is_still_reported(): void
+    {
+        $violations = $this->analyze('<button type="button" aria-controls="gone">Menu</button>');
+
+        $this->assertViolationCount($violations, 'aria.dangling_idref', 1);
+    }
+
+    public function test_dangling_aria_labelledby_on_a_collapsed_trigger_is_still_reported(): void
+    {
+        $violations = $this->analyze('<button type="button" aria-expanded="false" aria-labelledby="gone">Menu</button>');
+
+        $this->assertHasViolation($violations, 'aria.dangling_idref', element: 'button', severity: Severity::Error);
+    }
 }

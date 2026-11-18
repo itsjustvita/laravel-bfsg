@@ -119,4 +119,33 @@ class TableAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<div hidden><table><tr><td>1</td></tr><tr><td>2</td></tr></table></div>'));
     }
+
+    // A9: header cells in one direction only are row headers; the header-association algorithm resolves them without scope.
+    public function test_key_value_table_with_row_headers_only_needs_no_scope(): void
+    {
+        $html = '<table><caption>Order details</caption><tbody><tr><th>Order number</th><td>1234</td></tr><tr><th>Date</th><td>2026-01-01</td></tr><tr><th>Status</th><td>Shipped</td></tr></tbody></table>';
+
+        $this->assertNoViolation($this->analyze($html), 'tables.th_missing_scope');
+    }
+
+    public function test_table_with_headers_on_both_axes_still_needs_scope(): void
+    {
+        $html = '<table><caption>c</caption><tr><td></td><th>Q1</th></tr><tr><th>North</th><td>1</td></tr></table>';
+
+        $this->assertViolationCount($this->analyze($html), 'tables.th_missing_scope', 2);
+    }
+
+    public function test_table_with_two_header_rows_still_needs_scope(): void
+    {
+        $html = '<table><caption>c</caption><tr><th>A</th><th>B</th></tr><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2</td></tr></table>';
+
+        $this->assertViolationCount($this->analyze($html), 'tables.th_missing_scope', 4);
+    }
+
+    public function test_table_whose_first_row_is_all_th_and_first_column_th_still_needs_scope(): void
+    {
+        $html = '<table><caption>c</caption><tr><th>Name</th></tr><tr><th>North</th><td>1</td></tr></table>';
+
+        $this->assertViolationCount($this->analyze($html), 'tables.th_missing_scope', 2);
+    }
 }
