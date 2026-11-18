@@ -30,6 +30,9 @@ class ContrastAnalyzer extends BaseAnalyzer
 
     private const SKIPPED_TAGS = ['script', 'style', 'noscript', 'template', 'title'];
 
+    /** Text below these is fallback content a browser does not render (C10); desc and metadata only count inside an svg. */
+    private const UNRENDERED_TEXT_QUERY = '//*[text()[normalize-space()]][not(ancestor-or-self::video or ancestor-or-self::audio or ancestor-or-self::canvas or ancestor-or-self::iframe or ancestor-or-self::desc[ancestor::svg] or ancestor-or-self::metadata[ancestor::svg])]';
+
     /** Uncertainties of resolveColors() that leave a colour unknown; `limit` (a truncated index) and `stylesheets` (a stylesheet not read) alone do not. */
     private const UNKNOWN_COLOUR = ['backdrop', 'colour'];
 
@@ -86,7 +89,7 @@ class ContrastAnalyzer extends BaseAnalyzer
         $measured = 0;
         $truncated = false;
 
-        foreach ($this->query('//*[text()[normalize-space()]]') as $element) {
+        foreach ($this->query(self::UNRENDERED_TEXT_QUERY) as $element) {
             if (in_array(Element::tag($element), self::SKIPPED_TAGS, true) || $this->ownText($element) === '') {
                 continue;
             }

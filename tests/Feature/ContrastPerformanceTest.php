@@ -349,4 +349,32 @@ class ContrastPerformanceTest extends TestCase
         $this->assertSame([['contrast.insufficient p.c', $severity]], array_map(fn (Violation $violation) => [$violation->key.' '.$violation->element, $violation->severity], $violations));
         $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('contrast took %.2f s', $elapsed));
     }
+
+    // C9: the attribute-value scan is one pass; unclosed brackets, nested quotes and long values do not backtrack.
+    #[Group('performance')]
+    public function test_specificity_of_hostile_attribute_selectors_stays_in_budget(): void
+    {
+        $parser = new CssParser;
+        $long = str_repeat('a.b#c"\'[', 512);
+        $selectors = [];
+
+        for ($i = 0; $i < 20000; $i++) {
+            $selectors[] = match ($i % 4) {
+                0 => 'a[href="x'.$i.'.y#z',
+                1 => '[a="\'[[[""\'[b="'.str_repeat('[', 40),
+                2 => '[data-x="'.$long.'"].k'.$i,
+                default => str_repeat('[a', 30).'.b#c',
+            };
+        }
+
+        $start = microtime(true);
+
+        foreach ($selectors as $selector) {
+            $parser->calculateSpecificity($selector);
+        }
+
+        $elapsed = microtime(true) - $start;
+
+        $this->assertLessThan(PerformanceBudget::seconds(1.0), $elapsed, sprintf('20 000 selectors took %.2f s', $elapsed));
+    }
 }

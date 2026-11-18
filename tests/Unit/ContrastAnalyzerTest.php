@@ -741,6 +741,47 @@ class ContrastAnalyzerTest extends AnalyzerTestCase
         }
     }
 
+    // C10: fallback content of media elements and unrendered SVG metadata is not page text.
+    public function test_fallback_text_of_video_audio_canvas_and_iframe_is_not_measured(): void
+    {
+        $body = '<div class="c"><video autoplay>Your browser does not support HTML5 video.</video><audio>Audio fallback</audio>'
+            .'<canvas>Chart fallback</canvas><iframe src="x">Frame fallback</iframe><video><div>Nested fallback</div></video></div>';
+
+        $this->assertSame([], $this->analyze($this->page('.c{color:#ccc}', $body)));
+    }
+
+    public function test_svg_desc_and_metadata_text_is_not_measured(): void
+    {
+        $body = '<a class="icon" href="/"><svg viewBox="0 0 100 20"><desc>Brand logo</desc><metadata>Meta text</metadata><title>Logo title</title></svg></a>';
+
+        $this->assertSame([], $this->analyze($this->page('.icon{color:#d1d5db}', $body)));
+    }
+
+    public function test_object_fallback_text_is_still_measured(): void
+    {
+        $this->assertHasViolation($this->analyze($this->page('.c{color:#ccc}', '<div class="c"><object data="x">Object fallback</object></div>')), 'contrast.insufficient', element: 'object');
+    }
+
+    public function test_svg_text_element_is_still_measured(): void
+    {
+        $this->assertHasViolation($this->analyze($this->page('svg{color:#ccc}', '<svg viewBox="0 0 100 20"><desc>Logo</desc><text x="2" y="14">Brand</text></svg>')), 'contrast.insufficient', element: 'text');
+    }
+
+    public function test_text_next_to_a_video_is_still_measured(): void
+    {
+        $this->assertHasViolation($this->analyze($this->page('.c{color:#ccc}', '<div class="c"><video>Fallback</video>Visible text</div>')), 'contrast.insufficient', element: 'div.c');
+    }
+
+    // C9: an attribute selector counts once, whatever its value contains.
+    public function test_dot_and_hash_inside_attribute_values_do_not_count_for_specificity(): void
+    {
+        $nav = '<nav class="nav"><a class="link" href="#top">x</a></nav>';
+        $this->assertSame([], $this->analyze($this->page('a[href="#top"]{color:#eee} .nav .link{color:#111}', $nav)));
+
+        $doc = '<a class="doc" href="a.pdf">x</a>';
+        $this->assertSame([], $this->analyze($this->page('a[href$=".pdf"]{color:#eee} a.doc{color:#111}', $doc)));
+    }
+
     // R38: an icon sprite sheet paints nothing, so it is no backdrop.
     public function test_svg_sprite_sheet_is_not_a_backdrop(): void
     {

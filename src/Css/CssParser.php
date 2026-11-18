@@ -1505,6 +1505,7 @@ class CssParser
     /** Specificity as [ids, classes/attributes/pseudo-classes, types/pseudo-elements]. */
     public function calculateSpecificity(string $selector): array
     {
+        $selector = $this->withoutAttributeValues($selector);
         $selector = preg_replace('/\\\\./', 'x', $selector) ?? $selector;
         $selector = preg_replace('/:(?:not|is|where|has)\(/i', ' ', $selector) ?? $selector;
         $selector = str_replace(')', ' ', $selector);
@@ -1518,6 +1519,34 @@ class CssParser
         $types = preg_match_all('/(?:^|[\s>+~])([a-zA-Z][\w-]*)/', $stripped);
 
         return [$ids, $classes, $types + $pseudoElements];
+    }
+
+    /** Every attribute selector [...] reduced to an empty `[]` (quotes and escapes respected, an unclosed one runs to the end), so its value cannot count as an id or class. Linear. */
+    private function withoutAttributeValues(string $selector): string
+    {
+        $length = strlen($selector);
+        $result = '';
+        $position = 0;
+
+        while (($open = $position + strcspn($selector, '[\\', $position)) < $length) {
+            if ($selector[$open] === '\\') {
+                $result .= substr($selector, $position, $open + 2 - $position);
+                $position = $open + 2;
+
+                continue;
+            }
+
+            $result .= substr($selector, $position, $open - $position).'[]';
+            $close = $this->closingBracket($selector, $open, true);
+
+            if ($close === null) {
+                return $result;
+            }
+
+            $position = $close + 1;
+        }
+
+        return $result.substr($selector, $position);
     }
 
     /**

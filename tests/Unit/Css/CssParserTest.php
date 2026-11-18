@@ -196,6 +196,36 @@ class CssParserTest extends TestCase
         $this->assertSame([0, 0, 2], $parser->calculateSpecificity('p::before'));
     }
 
+    /** @return array<string, array{0: string, 1: array{int, int, int}}> */
+    public static function attributeSelectorSpecificities(): array
+    {
+        return [
+            'dot in a value' => ['a[href$=".pdf"]', [0, 1, 1]],
+            'dot and star in a value' => ['[href*="example.com"]', [0, 1, 0]],
+            'hash in a value' => ['a[href="#top"]', [0, 1, 1]],
+            'bracket, dot and hash in a quoted value' => ['[data-x="a]b.c#d"]', [0, 1, 0]],
+            'compound' => ['input[type="text"].big#id', [1, 2, 1]],
+            'word match' => ['[class~="x"]', [0, 1, 0]],
+            'plain attribute' => ['a[href]', [0, 1, 1]],
+            'unclosed bracket' => ['a[href="x.y', [0, 1, 1]],
+            'two attributes' => ['[a="1.2"][b=\'#c\']', [0, 2, 0]],
+            'escaped quote in a value' => ['[a="x\\"].b#c"]', [0, 1, 0]],
+            'escaped brackets in a class' => ['.a\\[b\\]', [0, 1, 0]],
+            'tailwind length' => ['.w-\\[32px\\]', [0, 1, 0]],
+            'tailwind color' => ['.bg-\\[\\#fff\\]', [0, 1, 0]],
+            'tailwind variable' => ['.text-\\[color\\:var\\(--x\\)\\]', [0, 1, 0]],
+            'tailwind arbitrary value with a dot' => ['.w-\\[1\\.5rem\\]', [0, 1, 0]],
+            'tailwind with a descendant' => ['.p-\\[3px\\] a', [0, 1, 1]],
+        ];
+    }
+
+    /** @param  array{int, int, int}  $expected */
+    #[DataProvider('attributeSelectorSpecificities')]
+    public function test_attribute_selectors_count_once_whatever_their_value_holds(string $selector, array $expected): void
+    {
+        $this->assertSame($expected, (new CssParser)->calculateSpecificity($selector));
+    }
+
     public function test_selector_to_xpath_supports_the_documented_subset(): void
     {
         $document = HtmlDocument::fromHtml('<html><body><main><ul class="nav main"><li><a href="/de/kontakt" data-x="a b" id="k" lang="de-AT">K</a></li><li><a>L</a></li></ul></main></body></html>');
