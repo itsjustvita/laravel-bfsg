@@ -34,6 +34,22 @@ final class LoopbackOrigin
         $this->port = (int) substr((string) strrchr((string) stream_socket_get_name($this->socket, false), ':'), 1);
     }
 
+    /** Closes the open client connections and the server socket (idempotent). */
+    public function __destruct()
+    {
+        foreach ($this->conns as $conn) {
+            if (is_resource($conn['s'])) {
+                @fclose($conn['s']);
+            }
+        }
+
+        $this->conns = [];
+
+        if (is_resource($this->socket)) {
+            @fclose($this->socket);
+        }
+    }
+
     public function url(string $path): string
     {
         return "http://127.0.0.1:{$this->port}{$path}";

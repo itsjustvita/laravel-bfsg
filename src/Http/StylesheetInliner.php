@@ -7,6 +7,7 @@ use GuzzleHttp\Psr7\UriResolver;
 use GuzzleHttp\Psr7\Utils;
 use ItsJustVita\LaravelBfsg\Css\CssParser;
 use ItsJustVita\LaravelBfsg\Dom\HtmlDocument;
+use ItsJustVita\LaravelBfsg\Support\Sanitizer;
 use Throwable;
 
 /**
@@ -32,6 +33,12 @@ final class StylesheetInliner
     /** Warnings about imports of the page being inlined (inline()). */
     private int $importWarnings = 0;
 
+    /** The URL relative stylesheet links resolve against: the first `<base href>` (http/https) of the page, else the page URL. */
+    private string $baseUrl = '';
+
+    /** Whether the page's first `<base href>` was seen (only that one counts, whatever it holds). */
+    private bool $baseSeen = false;
+
     /** @var array<string, true> hosts of web-font stylesheets (CssParser::fontStylesheetHosts()) */
     private array $fontHosts;
 
@@ -50,6 +57,8 @@ final class StylesheetInliner
     {
         $warnings = [];
         $loaded = $crossOrigin = $this->importWarnings = 0;
+        $this->baseUrl = $pageUrl;
+        $this->baseSeen = false;
         $out = '';
         $copied = 0;
         $pos = 0;
@@ -82,6 +91,23 @@ final class StylesheetInliner
                 continue;
             }
 
+            if (! $this->baseSeen && preg_match('/^base(?![a-z0-9-])/', $next) === 1) {
+                $tag = $this->match('/\G<base\b(?:[^>"\']++|"[^"]*+"|\'[^\']*+\')*+>/i', $html, $lt);
+
+                if ($tag === false) {
+                    $warnings[] = 'Stylesheet inlining stopped early: '.preg_last_error_msg().'.';
+
+                    break;
+                }
+
+                if ($tag !== null) {
+                    $this->readBase($tag, $pageUrl);
+                    $pos = $lt + strlen($tag);
+
+                    continue;
+                }
+            }
+
             if (str_starts_with($next, 'link')) {
                 $tag = $this->match('/\G<link\b(?:[^>"\']++|"[^"]*+"|\'[^\']*+\')*+>/i', $html, $lt);
 
@@ -111,6 +137,31 @@ final class StylesheetInliner
         }
 
         return [$out.substr($html, $copied), $warnings];
+    }
+
+    /**
+     * Takes the `href` of the first `<base>` that has one as the base of the page's relative stylesheet links, when it
+     * resolves against the page URL to an http(s) URL with a host; the same-origin test still compares with the page URL.
+     */
+    private function readBase(string $tag, string $pageUrl): void
+    {
+        $href = trim($this->attributes($tag)['href'] ?? '');
+
+        if ($href === '') {
+            return;
+        }
+
+        $this->baseSeen = true;
+
+        try {
+            $base = UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
+        } catch (Throwable) {
+            return;
+        }
+
+        if (in_array(strtolower($base->getScheme()), ['http', 'https'], true) && $base->getHost() !== '') {
+            $this->baseUrl = (string) $base;
+        }
     }
 
     /** @return string|null|false the match at $offset, null for none, false on a PCRE error */
@@ -159,7 +210,13 @@ final class StylesheetInliner
             return $tag;
         }
 
-        $url = (string) UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
+        try {
+            $url = (string) UriResolver::resolve(Utils::uriFor($this->baseUrl), Utils::uriFor($href));
+        } catch (Throwable) {
+            $warnings[] = 'Stylesheet '.Sanitizer::truncate(Sanitizer::terminal(UrlFetcher::redact($href)), 200).' was not inlined: not a valid URL.';
+
+            return $tag;
+        }
 
         if (CssParser::isFontStylesheet($url, $this->fontHosts)) {
             return $tag; // @font-face rules only: not loaded, not counted (CssParser::missingStylesheets() skips it too)

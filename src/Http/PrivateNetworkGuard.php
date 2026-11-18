@@ -16,14 +16,14 @@ use Closure;
  */
 class PrivateNetworkGuard
 {
-    /** IPv4 ranges on top of FILTER_FLAG_GLOBAL_RANGE: this network, private, loopback, link-local, CGNAT, reserved. */
-    private const BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '198.18.0.0/15', '240.0.0.0/4'];
+    /** IPv4 ranges on top of FILTER_FLAG_GLOBAL_RANGE: this network, private, loopback, link-local, CGNAT, multicast, reserved. */
+    private const BLOCKED_V4 = ['0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16', '198.18.0.0/15', '224.0.0.0/4', '240.0.0.0/4'];
 
     /**
      * IPv6 ranges on top of FILTER_FLAG_GLOBAL_RANGE: unspecified, loopback, local-use NAT64 (RFC 8215), unique local,
-     * link-local, site-local.
+     * link-local, site-local, multicast.
      */
-    private const BLOCKED_V6 = ['::/128', '::1/128', '64:ff9b:1::/48', 'fc00::/7', 'fe80::/10', 'fec0::/10'];
+    private const BLOCKED_V6 = ['::/128', '::1/128', '64:ff9b:1::/48', 'fc00::/7', 'fe80::/10', 'fec0::/10', 'ff00::/8'];
 
     /** @var Closure(string): list<string> */
     private Closure $resolver;
@@ -139,7 +139,7 @@ class PrivateNetworkGuard
      * Whether $ip is not a public address: anything PHP's FILTER_FLAG_GLOBAL_RANGE rejects (RFC 6890 non-global ranges:
      * private, loopback, link-local, CGNAT 100.64/10, 192.0.0/24, documentation, benchmarking 198.18/15, reserved
      * 240/4, 2001::/23, 2002::/16, …), the blocked lists below, and IPv6 addresses whose embedded IPv4 address
-     * (IPv4-mapped ::ffff:0:0/96, IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16) is not public.
+     * (IPv4-mapped ::ffff:0:0/96, IPv4-translated ::ffff:0:0:0/96, IPv4-compatible ::/96, NAT64 64:ff9b::/96, 6to4 2002::/16) is not public.
      */
     public static function isBlocked(string $ip): bool
     {
@@ -158,8 +158,8 @@ class PrivateNetworkGuard
                     return true;
                 }
 
-                if (str_starts_with($packed, str_repeat("\0", 10)."\xff\xff")) {
-                    return false; // ::ffff:a.b.c.d is a.b.c.d, which is public
+                if (self::inRange($packed, (string) inet_pton('::ffff:0:0'), 96) || self::inRange($packed, (string) inet_pton('::ffff:0:0:0'), 96)) {
+                    return false; // ::ffff:a.b.c.d and ::ffff:0:a.b.c.d are a.b.c.d, which is public
                 }
             }
         }
@@ -179,10 +179,10 @@ class PrivateNetworkGuard
         return false;
     }
 
-    /** The IPv4 address (4 bytes) embedded in an IPv4-mapped, IPv4-compatible, NAT64 or 6to4 IPv6 address, else null. */
+    /** The IPv4 address (4 bytes) embedded in an IPv4-mapped, IPv4-translated (RFC 2765/7915), IPv4-compatible, NAT64 or 6to4 IPv6 address, else null. */
     private static function embeddedIpv4(string $packed): ?string
     {
-        if (str_starts_with($packed, str_repeat("\0", 10)."\xff\xff") || str_starts_with($packed, str_repeat("\0", 12))) {
+        if (str_starts_with($packed, str_repeat("\0", 10)."\xff\xff") || str_starts_with($packed, str_repeat("\0", 8)."\xff\xff\0\0") || str_starts_with($packed, str_repeat("\0", 12))) {
             return substr($packed, 12);
         }
 

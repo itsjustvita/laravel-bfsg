@@ -376,6 +376,59 @@ class AuthenticatedHttpClientTest extends TestCase
         }
     }
 
+    public function test_credentials_fall_back_to_env_when_config_values_are_null_or_empty(): void
+    {
+        putenv('BFSG_AUTH_EMAIL=ci@example.com');
+        putenv('BFSG_AUTH_PASSWORD=from-env');
+        putenv('BFSG_AUTH_TOKEN=tok-env');
+
+        try {
+            foreach ([null, ''] as $value) {
+                config()->set('bfsg.authentication.email', $value);
+                config()->set('bfsg.authentication.password', $value);
+                config()->set('bfsg.authentication.token', $value);
+
+                $this->assertSame(['email' => 'ci@example.com', 'password' => 'from-env', 'token' => 'tok-env'], AuthenticatedHttpClient::credentialsFromEnv(), var_export($value, true));
+            }
+        } finally {
+            putenv('BFSG_AUTH_EMAIL');
+            putenv('BFSG_AUTH_PASSWORD');
+            putenv('BFSG_AUTH_TOKEN');
+        }
+    }
+
+    public function test_login_failure_messages_do_not_contain_url_credentials(): void
+    {
+        $url = 'https://deploy:s3cret@staging.example.com/login';
+        $failures = [
+            AuthenticationFailed::csrf($url),
+            AuthenticationFailed::csrf($url, null),
+            AuthenticationFailed::credentials($url, 401),
+            AuthenticationFailed::credentials($url, null),
+            AuthenticationFailed::validation($url, 'bad'),
+            AuthenticationFailed::validation($url, null),
+            AuthenticationFailed::noSession($url, 200),
+            AuthenticationFailed::twoFactor($url),
+            AuthenticationFailed::loginPage($url, 500),
+            AuthenticationFailed::connection($url, 'cURL error 6: Could not resolve host for '.$url),
+        ];
+
+        foreach ($failures as $failure) {
+            $this->assertStringNotContainsString('s3cret', $failure->getMessage());
+            $this->assertStringNotContainsString('deploy:', $failure->getMessage());
+            $this->assertStringContainsString('https://staging.example.com/login', $failure->getMessage());
+        }
+    }
+
+    public function test_a_login_against_a_url_with_credentials_fails_without_them_in_the_message(): void
+    {
+        $this->fakeLogin(['', 401], 'https://staging.example.com/login');
+
+        $failure = $this->failure(fn () => $this->client()->loginWithForm('https://deploy:s3cret@staging.example.com/login', 'u', 'p'));
+
+        $this->assertStringNotContainsString('s3cret', $failure->getMessage());
+    }
+
     public function test_credential_headers_are_bound_to_one_origin(): void
     {
         Http::fake(['https://api.example.com/login' => Http::response(['token' => 'from-login'], 200), '*' => Http::response('', 200)]);

@@ -934,6 +934,134 @@ class UrlFetcherTest extends TestCase
         $this->assertSame(['2 Stylesheets anderer Ursprünge wurden nicht eingebunden; die Kontrastergebnisse sind Näherungen.'], $this->fetcher()->fetch('https://example.com/page')->warnings);
     }
 
+    // K2: a href the URL parser rejects leaves its tag and gives one warning; the rest of the page is still processed.
+    public function test_a_malformed_stylesheet_href_gives_a_warning_and_does_not_abort(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="http://[::1"><link rel="stylesheet" href="/app.css">'), 200),
+            'https://example.com/app.css' => Http::response('.t{color:#ccc}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertCount(1, $page->warnings);
+        $this->assertStringContainsString('http://[::1', $page->warnings[0]);
+        $this->assertStringContainsString('<link rel="stylesheet" href="http://[::1">', $page->html);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/app.css">.t{color:#ccc}</style>', $page->html);
+    }
+
+    public function test_a_malformed_stylesheet_href_is_named_without_credentials_or_control_characters(): void
+    {
+        Http::fake(['https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="http://u:pw@[::1&#27;[31m">'), 200)]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertCount(1, $page->warnings);
+        $this->assertStringNotContainsString('pw', $page->warnings[0]);
+        $this->assertStringNotContainsString("\e", $page->warnings[0]);
+    }
+
+    public function test_a_malformed_import_url_is_dropped_without_aborting(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="/app.css">'), 200),
+            'https://example.com/app.css' => Http::response('@import url("http://[::1"); .t{color:#ccc}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        $this->assertSame([], $page->warnings);
+        $this->assertStringContainsString('<style data-bfsg-inlined="/app.css">', $page->html);
+        $this->assertStringContainsString('.t{color:#ccc}', $page->html);
+    }
+
+    // F5: the first <base href> resolves relative stylesheet links.
+    public function test_stylesheet_links_resolve_against_base_href(): void
+    {
+        Http::fake([
+            'https://example.com/a/page' => Http::response(self::contrastPage('<base href="/assets/"><link rel="stylesheet" href="app.css">'), 200),
+            'https://example.com/assets/app.css' => Http::response('.t{color:#ccc;background:#fff}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/a/page');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/assets/app.css');
+        Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/a/app.css');
+        $this->assertStringContainsString('<style data-bfsg-inlined="app.css">', $page->html);
+        $this->assertSame([], $page->warnings);
+    }
+
+    public function test_base_href_on_another_origin_does_not_make_its_stylesheets_same_origin(): void
+    {
+        Http::fake([
+            'https://example.com/page' => Http::response(self::contrastPage('<base href="https://cdn.other.test/"><link rel="stylesheet" href="app.css">'), 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/page');
+
+        Http::assertNotSent(fn (Request $request) => str_contains($request->url(), 'cdn.other.test') || str_ends_with($request->url(), 'app.css'));
+        $this->assertSame(['1 stylesheet on another origin was not inlined; contrast results are approximate.'], $page->warnings);
+        $this->assertStringContainsString('<link rel="stylesheet" href="app.css">', $page->html);
+    }
+
+    public function test_only_the_first_base_href_counts(): void
+    {
+        Http::fake([
+            'https://example.com/a/page' => Http::response(self::contrastPage('<base target="_blank"><base href="/first/"><base href="/second/"><link rel="stylesheet" href="app.css">'), 200),
+            'https://example.com/first/app.css' => Http::response('.t{color:#ccc}', 200),
+        ]);
+
+        $this->fetcher()->fetch('https://example.com/a/page');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/first/app.css');
+        Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/second/app.css');
+    }
+
+    public function test_a_base_in_a_comment_or_template_does_not_count(): void
+    {
+        Http::fake([
+            'https://example.com/a/page' => Http::response(self::contrastPage('<!-- <base href="/c/"> --><template><base href="/t/"></template><link rel="stylesheet" href="app.css">'), 200),
+            'https://example.com/a/app.css' => Http::response('.t{color:#ccc}', 200),
+        ]);
+
+        $this->fetcher()->fetch('https://example.com/a/page');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/a/app.css');
+    }
+
+    /** @return array<string, array{string}> */
+    public static function nonHttpBases(): array
+    {
+        return ['javascript' => ['javascript:void(0)'], 'data' => ['data:text/plain,x'], 'file' => ['file:///etc/'], 'unparsable' => ['http://[::1']];
+    }
+
+    #[DataProvider('nonHttpBases')]
+    public function test_non_http_base_href_is_ignored(string $base): void
+    {
+        Http::fake([
+            'https://example.com/a/page' => Http::response(self::contrastPage('<base href="'.$base.'"><link rel="stylesheet" href="app.css">'), 200),
+            'https://example.com/a/app.css' => Http::response('.t{color:#ccc}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/a/page');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/a/app.css');
+        $this->assertSame([], $page->warnings);
+    }
+
+    public function test_page_without_base_is_unchanged(): void
+    {
+        Http::fake([
+            'https://example.com/a/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="app.css">'), 200),
+            'https://example.com/a/app.css' => Http::response('.t{color:#ccc}', 200),
+        ]);
+
+        $page = $this->fetcher()->fetch('https://example.com/a/page');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/a/app.css');
+        $this->assertSame([], $page->warnings);
+    }
+
     // F10: a leading @import of a same-origin sheet is loaded in its place, through the same loader.
     public function test_same_origin_import_is_loaded_and_counted(): void
     {
