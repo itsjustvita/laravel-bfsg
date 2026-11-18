@@ -32,6 +32,7 @@ final class AuthenticationFailed extends RuntimeException
 
     public static function validation(string $url, ?string $detail): self
     {
+        $detail = $detail === null ? null : self::withoutCredentials($detail, $url);
         $url = UrlFetcher::redact($url);
 
         return new self("Login at {$url} failed validation (HTTP 422)".($detail === null ? '' : ": {$detail}").'.', 'validation', 422);
@@ -60,10 +61,17 @@ final class AuthenticationFailed extends RuntimeException
 
     public static function connection(string $url, string $detail): self
     {
-        $redacted = UrlFetcher::redact($url);
-        $detail = $redacted === $url ? $detail : str_replace($url, $redacted, $detail);
-        $url = $redacted;
+        $detail = self::withoutCredentials($detail, $url);
+        $url = UrlFetcher::redact($url);
 
         return new self("Could not reach the login URL {$url}: {$detail}", 'connection');
+    }
+
+    /** $detail with every occurrence of the login URL replaced by its redacted form. */
+    private static function withoutCredentials(string $detail, string $url): string
+    {
+        $redacted = UrlFetcher::redact($url);
+
+        return $redacted === $url ? $detail : str_replace($url, $redacted, $detail);
     }
 }

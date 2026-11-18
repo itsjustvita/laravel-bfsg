@@ -406,6 +406,7 @@ class AuthenticatedHttpClientTest extends TestCase
             AuthenticationFailed::credentials($url, 401),
             AuthenticationFailed::credentials($url, null),
             AuthenticationFailed::validation($url, 'bad'),
+            AuthenticationFailed::validation($url, 'The form at '.$url.' rejected the email'),
             AuthenticationFailed::validation($url, null),
             AuthenticationFailed::noSession($url, 200),
             AuthenticationFailed::twoFactor($url),

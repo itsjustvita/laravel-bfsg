@@ -952,7 +952,7 @@ class UrlFetcherTest extends TestCase
 
     public function test_a_malformed_stylesheet_href_is_named_without_credentials_or_control_characters(): void
     {
-        Http::fake(['https://example.com/page' => Http::response(self::contrastPage('<link rel="stylesheet" href="http://u:pw@[::1&#27;[31m">'), 200)]);
+        Http::fake(['https://example.com/page' => Http::response(self::contrastPage("<link rel=\"stylesheet\" href=\"http://u:pw@[::1\e[31m\">"), 200)]);
 
         $page = $this->fetcher()->fetch('https://example.com/page');
 
@@ -1014,6 +1014,19 @@ class UrlFetcherTest extends TestCase
         $this->fetcher()->fetch('https://example.com/a/page');
 
         Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/first/app.css');
+        Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/second/app.css');
+    }
+
+    public function test_an_empty_first_base_href_keeps_the_page_url_and_ends_the_search(): void
+    {
+        Http::fake([
+            'https://example.com/a/page' => Http::response(self::contrastPage('<base href=""><base href="/second/"><link rel="stylesheet" href="app.css">'), 200),
+            'https://example.com/a/app.css' => Http::response('.t{color:#ccc}', 200),
+        ]);
+
+        $this->fetcher()->fetch('https://example.com/a/page');
+
+        Http::assertSent(fn (Request $request) => $request->url() === 'https://example.com/a/app.css');
         Http::assertNotSent(fn (Request $request) => $request->url() === 'https://example.com/second/app.css');
     }
 

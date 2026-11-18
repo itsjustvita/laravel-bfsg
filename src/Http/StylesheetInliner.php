@@ -145,13 +145,19 @@ final class StylesheetInliner
      */
     private function readBase(string $tag, string $pageUrl): void
     {
-        $href = trim($this->attributes($tag)['href'] ?? '');
+        $attributes = $this->attributes($tag);
+
+        if (! array_key_exists('href', $attributes)) {
+            return;
+        }
+
+        // The first base element with an href attribute wins, also when its value is empty (the page URL stays the base).
+        $this->baseSeen = true;
+        $href = trim($attributes['href']);
 
         if ($href === '') {
             return;
         }
-
-        $this->baseSeen = true;
 
         try {
             $base = UriResolver::resolve(Utils::uriFor($pageUrl), Utils::uriFor($href));
