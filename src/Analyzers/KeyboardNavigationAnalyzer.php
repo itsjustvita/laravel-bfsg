@@ -124,7 +124,9 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
                 continue;
             }
 
-            if (Roles::isRoving($element) || $this->query('ancestor::*[@aria-activedescendant]', $element) !== []) {
+            $role = Roles::effective($element);
+
+            if ($role !== null && (in_array($role, Roles::ROVING, true) || $this->insideActivedescendant($element))) {
                 continue;
             }
 
@@ -152,7 +154,7 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
                 || Element::tag($element) === 'a'
                 || Element::enumAttr($element, 'aria-disabled') === 'true'
                 || Roles::isRoving($element)
-                || $this->query('ancestor::*[@aria-activedescendant]', $element) !== []) {
+                || $this->insideActivedescendant($element)) {
                 continue;
             }
 
@@ -187,6 +189,12 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
 
             $this->report('mouse_only_handler', Severity::Notice, '2.1.1', $element, ['tag' => Element::tag($element)]);
         }
+    }
+
+    /** The element is managed by an ancestor that points at its active descendant (listbox, combobox, grid). */
+    private function insideActivedescendant(DOMElement $element): bool
+    {
+        return $this->query('ancestor::*[@aria-activedescendant]', $element) !== [];
     }
 
     protected function hasMainLandmark(): bool
