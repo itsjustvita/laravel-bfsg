@@ -245,6 +245,14 @@ class KeyboardNavigationAnalyzerTest extends AnalyzerTestCase
         $this->assertViolationCount($violations, 'keyboard.dialog_missing_aria_modal', 2);
     }
 
+    public function test_item_role_outside_its_composite_widget_is_still_an_error(): void
+    {
+        $violations = $this->analyze($this->page('<div id="o" role="option" onclick="pick(1)">Red</div><div id="t" role="tab" onclick="show(1)">One</div>'));
+
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div#o', severity: Severity::Error);
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div#t', severity: Severity::Error);
+    }
+
     public function test_role_less_clickable_div_inside_a_toolbar_is_still_an_error(): void
     {
         $violations = $this->analyze($this->page('<div role="toolbar" aria-label="Tools"><div id="t" onclick="x()">Bold</div></div>'));

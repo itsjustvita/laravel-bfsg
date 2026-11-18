@@ -126,7 +126,9 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
 
             $role = Roles::effective($element);
 
-            if ($role !== null && (in_array($role, Roles::ROVING, true) || $this->insideActivedescendant($element))) {
+            // An item of a composite widget is operated through the widget's own key handling. Only an element that
+            // carries a role itself qualifies, and an item role only inside its composite.
+            if ($role !== null && ($this->insideActivedescendant($element) || (in_array($role, Roles::ROVING, true) && $this->insideComposite($element)))) {
                 continue;
             }
 
@@ -189,6 +191,18 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
 
             $this->report('mouse_only_handler', Severity::Notice, '2.1.1', $element, ['tag' => Element::tag($element)]);
         }
+    }
+
+    /** An ancestor is a composite widget that manages the focus of its items (tablist, menu, listbox, grid, ...). */
+    private function insideComposite(DOMElement $element): bool
+    {
+        for ($node = $element->parentNode; $node instanceof DOMElement; $node = $node->parentNode) {
+            if (in_array(Roles::effective($node), Roles::COMPOSITES, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** The element is managed by an ancestor that points at its active descendant (listbox, combobox, grid). */

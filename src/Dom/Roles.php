@@ -65,6 +65,9 @@ final class Roles
 
     public const ROVING = ['gridcell', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'option', 'radio', 'row', 'tab', 'treeitem'];
 
+    /** Composite widgets that manage the focus of their items (roving tabindex or aria-activedescendant). */
+    public const COMPOSITES = ['toolbar', 'menubar', 'tablist', 'menu', 'listbox', 'tree', 'grid', 'radiogroup'];
+
     private const SECTIONING = ['article', 'aside', 'main', 'nav', 'section'];
 
     public static function isValid(string $role): bool
@@ -159,7 +162,7 @@ final class Roles
         }
 
         for ($node = $element->parentNode; $node instanceof DOMElement; $node = $node->parentNode) {
-            if (in_array(self::effective($node), ['toolbar', 'menubar', 'tablist', 'menu', 'listbox', 'tree', 'grid', 'radiogroup'], true)) {
+            if (in_array(self::effective($node), self::COMPOSITES, true)) {
                 return true;
             }
         }
