@@ -134,7 +134,9 @@ class ReportRepositoryTest extends TestCase
         $this->assertNotEmpty($inserts);
         preg_match('/^insert into "bfsg_violations" \(([^)]*)\)/', $inserts[0], $match);
         $columns = count(explode(',', $match[1]));
-        $this->assertLessThanOrEqual(999, ReportRepository::CHUNK * $columns, 'SQLite allowed 999 bound parameters before 3.32');
+        $chunk = (new \ReflectionClassConstant(ReportRepository::class, 'CHUNK'))->getValue();
+
+        $this->assertLessThanOrEqual(999, $chunk * $columns, 'SQLite allowed 999 bound parameters before 3.32');
     }
 
     public function test_long_urls_are_stored_whole_up_to_2048_characters_and_found_through_the_hash(): void
