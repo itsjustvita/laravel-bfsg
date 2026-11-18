@@ -118,6 +118,25 @@ class ReportRepositoryTest extends TestCase
         $this->assertSame(450, $report->violations()->distinct()->count('fingerprint'));
     }
 
+    public function test_violations_are_inserted_in_chunks_below_the_parameter_limit(): void
+    {
+        $violations = array_map(fn (int $i) => new Violation('images', 'images.missing_alt', Severity::Error, '1.1.1', selector: "/html[1]/body[1]/img[$i]"), range(1, 250));
+        $inserts = [];
+        DB::listen(function ($query) use (&$inserts) {
+            if (str_starts_with($query->sql, 'insert into "bfsg_violations"')) {
+                $inserts[] = $query->sql;
+            }
+        });
+
+        $report = (new ReportRepository)->store(new AnalysisResult(['images' => $violations], ['images'], 'https://example.com/chunks'));
+
+        $this->assertSame(250, $report->violations()->count());
+        $this->assertNotEmpty($inserts);
+        preg_match('/^insert into "bfsg_violations" \(([^)]*)\)/', $inserts[0], $match);
+        $columns = count(explode(',', $match[1]));
+        $this->assertLessThanOrEqual(999, ReportRepository::CHUNK * $columns, 'SQLite allowed 999 bound parameters before 3.32');
+    }
+
     public function test_long_urls_are_stored_whole_up_to_2048_characters_and_found_through_the_hash(): void
     {
         $url = 'https://example.com/'.str_repeat('segment/', 200);

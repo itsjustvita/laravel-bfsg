@@ -92,6 +92,12 @@ class ReportGeneratorTest extends TestCase
         $this->assertStringContainsString('<html lang="en">', (new ReportGenerator($this->sampleResult(), 'en'))->format('html')->render());
     }
 
+    public function test_html_report_lang_uses_a_hyphen_for_region_locales(): void
+    {
+        $this->assertStringContainsString('<html lang="pt-BR">', (new ReportGenerator($this->sampleResult(), 'pt_BR'))->format('html')->render());
+        $this->assertStringContainsString('<html lang="de">', (new ReportGenerator($this->sampleResult(), 'de'))->format('html')->render());
+    }
+
     /** @return array<string, array{0: string, 1: bool}> */
     public static function ownAnalyzerCases(): array
     {

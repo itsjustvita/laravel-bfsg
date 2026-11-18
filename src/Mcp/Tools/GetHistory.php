@@ -38,7 +38,7 @@ class GetHistory extends Tool
                     $query->forUrl($url);
                 }
 
-                $reports = $query->limit(max(1, min(100, (int) $request->get('limit', 20))))->get();
+                $reports = $query->limit(max(1, min(100, (int) ($request->get('limit') ?? 20))))->get();
             } catch (Throwable $e) {
                 return Response::error('Database error: '.self::cleanError($e->getMessage()).'. Run php artisan migrate.');
             }

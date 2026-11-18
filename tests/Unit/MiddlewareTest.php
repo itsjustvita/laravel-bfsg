@@ -111,6 +111,38 @@ class MiddlewareTest extends TestCase
         $this->assertSame(0, BfsgReport::query()->count());
     }
 
+    #[DataProvider('slashPatterns')]
+    public function test_ignored_paths_with_a_leading_slash_match(string $pattern, string $uri): void
+    {
+        config()->set('bfsg.middleware.ignored_paths', [$pattern]);
+
+        $this->through(Request::create($uri), $this->html());
+
+        $this->assertSame([], $this->logs()->getRecords());
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function slashPatterns(): array
+    {
+        return [
+            'slash wildcard' => ['/billing/*', '/billing/invoices'],
+            'slash exact' => ['/account/settings', '/account/settings'],
+            'no slash wildcard' => ['billing/*', '/billing/invoices'],
+            'no slash exact' => ['account/settings', '/account/settings'],
+        ];
+    }
+
+    public function test_ignored_path_slash_matches_only_the_homepage(): void
+    {
+        config()->set('bfsg.middleware.ignored_paths', ['/']);
+
+        $this->through(Request::create('/'), $this->html());
+        $this->assertSame([], $this->logs()->getRecords(), 'the homepage is ignored');
+
+        $this->through(Request::create('/page'), $this->html());
+        $this->assertCount(1, $this->logs()->getRecords(), 'other pages are still checked');
+    }
+
     public function test_the_default_ignored_paths_keep_password_reset_tokens_in_the_path_out_of_logs_and_the_database(): void
     {
         config()->set('bfsg.middleware.ignored_paths', (require __DIR__.'/../../config/bfsg.php')['middleware']['ignored_paths']);

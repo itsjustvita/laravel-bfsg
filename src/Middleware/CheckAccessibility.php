@@ -97,7 +97,10 @@ class CheckAccessibility
         }
 
         foreach ((array) config('bfsg.middleware.ignored_paths', []) as $path) {
-            if ($request->is($path)) {
+            // "/billing/*" means "billing/*" (Request::is() compares without the leading slash); "/" stays the homepage.
+            $path = (string) $path;
+
+            if ($request->is($path === '/' ? $path : ltrim($path, '/'))) {
                 return false;
             }
         }

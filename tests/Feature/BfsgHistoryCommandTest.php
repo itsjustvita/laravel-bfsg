@@ -215,6 +215,59 @@ class BfsgHistoryCommandTest extends TestCase
         $this->artisan('bfsg:history', ['--limit' => 'abc'])->assertExitCode(2);
     }
 
+    public function test_cleanup_with_an_overlong_days_value_exits_2_and_deletes_nothing(): void
+    {
+        BfsgReport::create(['url' => 'https://example.com/', 'total_violations' => 1, 'score' => 90, 'grade' => 'A'])
+            ->forceFill(['created_at' => now()->subYears(5)])->save();
+
+        $this->artisan('bfsg:history', ['--cleanup' => true, '--days' => '9999999999999999'])
+            ->expectsOutputToContain('--days')
+            ->assertExitCode(2);
+
+        $this->assertSame(1, BfsgReport::count());
+    }
+
+    public function test_overlong_limit_exits_2(): void
+    {
+        $this->artisan('bfsg:history', ['--limit' => '9999999999999999'])->assertExitCode(2);
+        $this->artisan('bfsg:history', ['--limit' => '1000000'])->assertExitCode(2);
+    }
+
+    public function test_options_up_to_six_digits_keep_working(): void
+    {
+        BfsgReport::create(['url' => 'https://example.com/', 'total_violations' => 1, 'score' => 90, 'grade' => 'A'])
+            ->forceFill(['created_at' => now()->subYears(5)])->save();
+
+        foreach (['365', '36500', '999999'] as $days) {
+            $this->artisan('bfsg:history', ['--cleanup' => true, '--days' => $days])->assertExitCode(0);
+        }
+
+        foreach (['100', '100000', '999999'] as $limit) {
+            $this->artisan('bfsg:history', ['--limit' => $limit])->assertExitCode(0);
+        }
+    }
+
+    public function test_unknown_option_exits_2(): void
+    {
+        $this->artisan('bfsg:history', ['--bogus' => true])->assertExitCode(2);
+    }
+
+    public function test_stray_argument_exits_2(): void
+    {
+        $this->artisan('bfsg:history', ['stray' => 'value'])->assertExitCode(2);
+    }
+
+    public function test_valid_history_invocations_keep_their_exit_codes(): void
+    {
+        BfsgReport::create(['url' => 'https://example.com/', 'total_violations' => 1, 'score' => 90, 'grade' => 'A']);
+
+        $this->artisan('bfsg:history')->assertExitCode(0);
+        $this->artisan('bfsg:history', ['--trend' => true, '--url' => 'https://example.com/'])->assertExitCode(0);
+        $this->artisan('bfsg:history', ['--cleanup' => true])->assertExitCode(0);
+        $this->artisan('bfsg:history', ['--cleanup' => true, '--url' => 'https://example.com/'])->assertExitCode(0);
+        $this->artisan('bfsg:history', ['--trend' => true])->assertExitCode(2);
+    }
+
     public function test_missing_table_exits_2(): void
     {
         Schema::drop('bfsg_violations');

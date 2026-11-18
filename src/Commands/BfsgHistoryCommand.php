@@ -5,6 +5,7 @@ namespace ItsJustVita\LaravelBfsg\Commands;
 use Illuminate\Console\Command;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
+use ItsJustVita\LaravelBfsg\Commands\Concerns\ExitsWithOperationalErrors;
 use ItsJustVita\LaravelBfsg\Models\BfsgReport;
 use ItsJustVita\LaravelBfsg\Persistence\ReportRepository;
 use ItsJustVita\LaravelBfsg\Support\Sanitizer;
@@ -12,6 +13,8 @@ use Symfony\Component\Console\Formatter\OutputFormatter;
 
 class BfsgHistoryCommand extends Command
 {
+    use ExitsWithOperationalErrors;
+
     /** Invalid options, a missing table or a database error (1 stays free for findings-style failures). */
     public const OPERATIONAL_ERROR = 2;
 
@@ -34,8 +37,8 @@ class BfsgHistoryCommand extends Command
 
         $name = $this->option('cleanup') ? 'days' : 'limit';
 
-        if (! preg_match('/^[1-9][0-9]*$/', (string) $this->option($name))) {
-            $this->error("The --{$name} option must be a positive integer, got: ".self::escape((string) $this->option($name)));
+        if (! preg_match('/^[1-9][0-9]{0,5}$/', (string) $this->option($name))) {
+            $this->error("The --{$name} option must be a positive integer of at most 6 digits, got: ".self::escape((string) $this->option($name)));
 
             return self::OPERATIONAL_ERROR;
         }

@@ -4,7 +4,7 @@
     $host = parse_url((string) $report['url'], PHP_URL_HOST) ?: (string) $report['url'];
 @endphp
 <!DOCTYPE html>
-<html lang="{{ $locale }}">
+<html lang="{{ str_replace('_', '-', $locale) }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">

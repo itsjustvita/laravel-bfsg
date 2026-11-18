@@ -18,6 +18,7 @@ use ItsJustVita\LaravelBfsg\Reports\ReportGenerator;
 use ItsJustVita\LaravelBfsg\Tests\Support\CapturedOutput;
 use ItsJustVita\LaravelBfsg\Tests\TestCase;
 use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\VarDumper\VarDumper;
 
 class CommandsTest extends TestCase
@@ -487,6 +488,31 @@ class CommandsTest extends TestCase
 
         $this->assertSame(2, $exitCode);
         $this->assertStringContainsString('CSRF', $output->stderr());
+    }
+
+    public function test_interactive_auth_prompts_do_not_go_to_stdout(): void
+    {
+        Http::fake(fn (Request $request) => match (true) {
+            $request->url() === 'https://example.com/login' => Http::response('', 302, ['Location' => 'https://example.com/dashboard', 'Set-Cookie' => 'laravel_session=abc; Path=/']),
+            $request->url() === 'https://example.com/dashboard' => Http::response(self::ACCESSIBLE, 200),
+            default => Http::response('Not Found', 404),
+        });
+
+        $input = new ArrayInput(['url' => 'https://example.com/dashboard', '--auth' => true, '--format' => 'json']);
+        $input->setInteractive(true);
+        $stream = fopen('php://memory', 'w+');
+        fwrite($stream, "user@example.com\nsecret\n");
+        rewind($stream);
+        $input->setStream($stream);
+        $output = new CapturedOutput;
+
+        $exitCode = Artisan::all()['bfsg:check']->run($input, $output);
+
+        $this->assertSame(0, $exitCode, $output->stderr());
+        $this->assertStringNotContainsString('Email', $output->stdout());
+        $this->assertStringNotContainsString('Password', $output->stdout());
+        json_decode($output->stdout(), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertStringContainsString('Email', $output->stderr());
     }
 
     public function test_auth_without_credentials_is_an_error_in_non_interactive_runs(): void

@@ -14,7 +14,7 @@ use Throwable;
 /** The only writer of reports (bfsg:check --save, middleware, MCP generate_report). */
 final class ReportRepository
 {
-    private const CHUNK = 200;
+    public const CHUNK = 90;
 
     /** Longest URL stored (`bfsg_reports.url` is a text column; lookups go through the indexed `url_hash`). */
     public const URL_LENGTH = 2048;

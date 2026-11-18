@@ -335,6 +335,17 @@ class McpToolsTest extends TestCase
         $this->assertCount(1, BfsgMcpServer::tool(GetHistory::class, ['limit' => 1])->payload()['reports']);
     }
 
+    public function test_get_history_with_limit_null_uses_the_default(): void
+    {
+        foreach (range(1, 20) as $i) {
+            BfsgReport::create(['url' => "https://a.example/{$i}", 'total_violations' => 0, 'score' => 100, 'grade' => 'A+']);
+        }
+
+        $reports = BfsgMcpServer::tool(GetHistory::class, ['limit' => null])->assertOk()->payload()['reports'];
+
+        $this->assertCount(20, $reports);
+    }
+
     public function test_get_history_matches_a_pasted_url_with_query_fragment_or_credentials(): void
     {
         BfsgReport::create(['url' => 'https://a.example/page', 'total_violations' => 5, 'score' => 82, 'grade' => 'B']);
