@@ -88,6 +88,7 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
                 && Element::isNativelyInteractive($element)
                 && Element::tag($element) !== 'iframe'
                 && ! Element::isDisabled($element)
+                && Element::enumAttr($element, 'aria-disabled') !== 'true'
                 && ! Roles::isRoving($element)) {
                 $this->report('negative_tabindex_on_interactive', Severity::Notice, '2.1.1', $element, ['tag' => Element::tag($element)]);
             }
@@ -108,7 +109,7 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
                 $this->report('dialog_missing_name', Severity::Error, '4.1.2', $element);
             }
 
-            if (! $isElement && Element::enumAttr($element, 'aria-modal') !== 'true') {
+            if (! $isElement && ! in_array(Element::enumAttr($element, 'aria-modal'), ['true', 'false'], true)) {
                 $this->report('dialog_missing_aria_modal', Severity::Warning, '4.1.2', $element);
             }
         }
@@ -120,6 +121,10 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
             $tag = Element::tag($element);
 
             if (in_array($tag, self::CLICK_EXEMPT_TAGS, true) || Element::isNativelyInteractive($element)) {
+                continue;
+            }
+
+            if (Roles::isRoving($element) || $this->query('ancestor::*[@aria-activedescendant]', $element) !== []) {
                 continue;
             }
 
@@ -160,9 +165,12 @@ class KeyboardNavigationAnalyzer extends BaseAnalyzer
         foreach ($this->queryVisible('//a[not(@href)]') as $anchor) {
             $interactive = $this->hasEventHandler($anchor)
                 || in_array(Roles::effective($anchor), ['button', 'link'], true)
-                || $anchor->hasAttribute('tabindex');
+                || ($anchor->hasAttribute('tabindex') && (Element::tabindex($anchor) ?? 0) >= 0);
 
-            if (! $interactive || Element::isFocusable($anchor) || Roles::isRoving($anchor)) {
+            if (! $interactive
+                || Element::isFocusable($anchor)
+                || Element::enumAttr($anchor, 'aria-disabled') === 'true'
+                || Roles::isRoving($anchor)) {
                 continue;
             }
 

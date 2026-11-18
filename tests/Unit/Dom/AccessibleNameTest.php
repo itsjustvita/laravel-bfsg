@@ -110,4 +110,46 @@ class AccessibleNameTest extends TestCase
         $this->assertSame('Subscribe', $this->nameOf('<label>Email <input id="i"> <button data-t id="b">Subscribe</button></label>'));
         $this->assertSame('Notifications', $this->nameOf('<label><button data-t role="switch"></button> Notifications</label>'));
     }
+
+    public function test_labelledby_uses_the_referenced_elements_aria_label(): void
+    {
+        $this->assertSame('Search the site', $this->nameOf('<span id="lbl" aria-label="Search the site"></span><input data-t aria-labelledby="lbl">'));
+        $this->assertSame('Label text', $this->nameOf('<span id="lbl" aria-label="Label text">ignored</span><input data-t aria-labelledby="lbl">'));
+    }
+
+    public function test_labelledby_uses_the_alt_of_a_referenced_image(): void
+    {
+        $this->assertSame('Acme', $this->nameOf('<img id="logo" src="l.png" alt="Acme"><button data-t aria-labelledby="logo"></button>'));
+        $this->assertSame('Zone', $this->nameOf('<map><area id="z" href="#" alt="Zone"></map><button data-t aria-labelledby="z"></button>'));
+        $this->assertSame('Go', $this->nameOf('<input id="i" type="image" alt="Go"><button data-t aria-labelledby="i"></button>'));
+    }
+
+    public function test_labelledby_still_uses_text_content(): void
+    {
+        $this->assertSame('Plain text', $this->nameOf('<span id="l">Plain <b>text</b></span><input data-t aria-labelledby="l">'));
+    }
+
+    public function test_labelledby_to_an_empty_element_is_still_unnamed(): void
+    {
+        $this->assertSame('', $this->nameOf('<span id="l"></span><img id="m" src="x.png"><input data-t aria-labelledby="l m">'));
+        $this->assertSame('', $this->nameOf('<span id="l" aria-label=" "></span><input data-t aria-labelledby="l">'));
+    }
+
+    public function test_labelledby_multiple_ids_are_joined_in_order(): void
+    {
+        $this->assertSame('Acme Search the site Rest', $this->nameOf('<img id="a" src="l.png" alt="Acme"><span id="b" aria-label="Search the site"></span><span id="c">Rest</span><input data-t aria-labelledby="a b c">'));
+        $this->assertSame('Rest Acme', $this->nameOf('<img id="a" src="l.png" alt="Acme"><span id="c">Rest</span><input data-t aria-labelledby="c a">'));
+    }
+
+    public function test_labelledby_does_not_follow_the_referenced_elements_own_labelledby(): void
+    {
+        $this->assertSame('', $this->nameOf('<span id="a" aria-labelledby="b"></span><span id="b">B</span><input data-t aria-labelledby="a">'));
+    }
+
+    public function test_hidden_references_still_contribute(): void
+    {
+        $this->assertSame('Hidden label', $this->nameOf('<span id="l" hidden aria-label="Hidden label"></span><input data-t aria-labelledby="l">'));
+        $this->assertSame('Hidden text', $this->nameOf('<span id="l" hidden>Hidden text</span><input data-t aria-labelledby="l">'));
+        $this->assertSame('Hidden alt', $this->nameOf('<img id="l" hidden src="x.png" alt="Hidden alt"><input data-t aria-labelledby="l">'));
+    }
 }

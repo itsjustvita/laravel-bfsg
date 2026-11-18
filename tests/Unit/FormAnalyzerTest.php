@@ -155,4 +155,15 @@ class FormAnalyzerTest extends AnalyzerTestCase
 
         $this->assertNoViolation($this->analyze($html), 'forms.button_missing_name');
     }
+
+    public function test_labelledby_names_from_the_referenced_aria_label_and_alt(): void
+    {
+        $html = '<form><span id="lbl" aria-label="Search the site"></span><input type="text" name="q" aria-labelledby="lbl">'
+            .'<img id="logo" src="l.png" alt="Acme"><button type="button" aria-labelledby="logo"></button></form>';
+
+        $violations = $this->analyze($html);
+
+        $this->assertNoViolation($violations, 'forms.control_missing_label');
+        $this->assertNoViolation($violations, 'forms.button_missing_name');
+    }
 }

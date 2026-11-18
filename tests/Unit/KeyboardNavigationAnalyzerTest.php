@@ -182,4 +182,66 @@ class KeyboardNavigationAnalyzerTest extends AnalyzerTestCase
     {
         $this->assertSame([], $this->analyze('<div hidden><div onclick="x()" tabindex="3" role="button">x</div></div>'));
     }
+
+    public function test_aria_disabled_link_button_is_not_anchor_not_focusable(): void
+    {
+        $violations = $this->analyze($this->page('<a class="btn disabled" role="button" aria-disabled="true">Primary link</a>'));
+
+        $this->assertNoViolation($violations, 'keyboard.anchor_not_focusable');
+    }
+
+    public function test_aria_disabled_control_with_negative_tabindex_is_not_reported(): void
+    {
+        $violations = $this->analyze($this->page('<a href="#" class="btn disabled" tabindex="-1" role="button" aria-disabled="true">Primary link 2</a><button type="button" tabindex="-1" aria-disabled="true">Other</button>'));
+
+        $this->assertNoViolation($violations, 'keyboard.negative_tabindex_on_interactive');
+        $this->assertHasViolation($this->analyze($this->page('<button type="button" tabindex="-1" aria-disabled="false">Other</button>')), 'keyboard.negative_tabindex_on_interactive');
+    }
+
+    public function test_named_anchor_with_only_negative_tabindex_is_a_focus_target(): void
+    {
+        $this->assertNoViolation($this->analyze($this->page('<a id="main-content" tabindex="-1"></a>')), 'keyboard.anchor_not_focusable');
+    }
+
+    public function test_anchor_without_href_and_with_click_handler_is_still_reported(): void
+    {
+        $violations = $this->analyze($this->page('<a id="c" onclick="go()" tabindex="-1">Go</a><a id="d" role="button" aria-disabled="false">Go</a>'));
+
+        $this->assertHasViolation($violations, 'keyboard.anchor_not_focusable', element: 'a#c');
+        $this->assertHasViolation($violations, 'keyboard.anchor_not_focusable', element: 'a#d');
+    }
+
+    public function test_roving_tabindex_items_with_onclick_are_not_click_without_keyboard(): void
+    {
+        $html = '<div role="tablist" aria-label="Sections"><div role="tab" aria-selected="true" tabindex="0" onclick="show(1)" onkeydown="k(event)">One</div><div role="tab" aria-selected="false" tabindex="-1" onclick="show(2)" onkeydown="k(event)">Two</div></div>';
+
+        $this->assertNoViolation($this->analyze($this->page($html)), 'keyboard.click_without_keyboard');
+    }
+
+    public function test_activedescendant_options_with_onclick_are_not_click_without_keyboard(): void
+    {
+        $html = '<ul role="listbox" aria-label="Colour" tabindex="0" aria-activedescendant="o1"><li id="o1" role="option" aria-selected="true" onclick="pick(1)">Red</li></ul>';
+
+        $this->assertNoViolation($this->analyze($this->page($html)), 'keyboard.click_without_keyboard');
+    }
+
+    public function test_div_with_onclick_outside_a_widget_is_still_an_error(): void
+    {
+        $violations = $this->analyze($this->page('<div id="d" onclick="x()" tabindex="-1">x</div><div id="e" onclick="x()">y</div>'));
+
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div#d', severity: Severity::Error);
+        $this->assertHasViolation($violations, 'keyboard.click_without_keyboard', element: 'div#e', severity: Severity::Error);
+    }
+
+    public function test_aria_modal_false_is_not_a_missing_aria_modal(): void
+    {
+        $this->assertNoViolation($this->analyze($this->page('<div role="dialog" aria-modal="false" aria-labelledby="qv"><h2 id="qv">Quick view</h2></div>')), 'keyboard.dialog_missing_aria_modal');
+    }
+
+    public function test_dialog_without_aria_modal_is_still_reported(): void
+    {
+        $violations = $this->analyze($this->page('<div role="dialog" aria-label="A">x</div><div role="alertdialog" aria-label="B" aria-modal="">x</div>'));
+
+        $this->assertViolationCount($violations, 'keyboard.dialog_missing_aria_modal', 2);
+    }
 }

@@ -34,6 +34,11 @@ class PageTitleAnalyzer extends BaseAnalyzer
         $titles = $this->query('/html/head/title');
 
         if ($titles === []) {
+            // The parser moves a title behind stray head content into the body; document.title is still the first title element.
+            $titles = array_slice($this->query('//title[not(ancestor::svg) and not(ancestor::template)]'), 0, 1);
+        }
+
+        if ($titles === []) {
             $this->report('missing_title', Severity::Error, '2.4.2');
 
             return;
@@ -69,7 +74,7 @@ class PageTitleAnalyzer extends BaseAnalyzer
         }
     }
 
-    /** The whole title is generic, or every segment between | - – — is ("Home | Welcome"). */
+    /** The whole title is generic, or every segment between | – — or a spaced - is ("Home | Welcome"). */
     protected function isGeneric(string $title): bool
     {
         $segments = $this->segments($title);
@@ -90,7 +95,7 @@ class PageTitleAnalyzer extends BaseAnalyzer
     /** @return list<string> */
     protected function segments(string $title): array
     {
-        return array_values(array_filter(array_map('trim', preg_split('/\s*[|\-–—]\s*/u', $title) ?: []), fn (string $segment) => $segment !== ''));
+        return array_values(array_filter(array_map('trim', preg_split('/\s*[|–—]\s*|\s+-\s+/u', $title) ?: []), fn (string $segment) => $segment !== ''));
     }
 
     protected function generic(string $text): bool

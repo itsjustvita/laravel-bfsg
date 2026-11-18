@@ -86,4 +86,46 @@ class PageTitleAnalyzerTest extends AnalyzerTestCase
         $this->assertSame('/html[1]/head[1]/title[2]', $violation->selector);
         $this->assertCount(1, $violations);
     }
+
+    public function test_title_moved_into_body_by_the_parser_counts(): void
+    {
+        $violations = $this->analyze('<!doctype html><html lang="de"><head><meta charset="utf-8">x<title>Kontakt aufnehmen - Firma GmbH</title></head><body><main><h1>Kontakt</h1></main></body></html>');
+
+        $this->assertNoViolation($violations, 'page_title.missing_title');
+        $this->assertSame([], $violations);
+    }
+
+    public function test_title_inside_svg_does_not_count_as_page_title(): void
+    {
+        $violations = $this->analyze('<!DOCTYPE html><html><head>x</head><body><svg><title>Logo</title></svg><template><title>T</title></template></body></html>');
+
+        $this->assertHasViolation($violations, 'page_title.missing_title', severity: Severity::Error);
+    }
+
+    public function test_page_without_any_title_is_still_missing_title(): void
+    {
+        $this->assertHasViolation($this->analyze('<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><p>x</p></body></html>'), 'page_title.missing_title', severity: Severity::Error);
+    }
+
+    public function test_hyphenated_compound_title_is_one_segment(): void
+    {
+        foreach (['Neu-Ulm', 'Home-Office', 'Test-Seite', 'Corona-Test'] as $title) {
+            $this->assertSame([], $this->analyze($this->titled($title)), $title);
+        }
+    }
+
+    public function test_spaced_hyphen_still_separates_segments(): void
+    {
+        $this->assertHasViolation($this->analyze($this->titled('Home - Welcome')), 'page_title.generic_title', severity: Severity::Warning);
+        $this->assertHasViolation($this->analyze($this->titled('Home - Acme')), 'page_title.generic_title', severity: Severity::Notice);
+        $this->assertSame([], $this->analyze($this->titled('Kontakt - Firma GmbH')));
+    }
+
+    public function test_pipe_and_dashes_still_separate_segments(): void
+    {
+        foreach (['Home|Welcome', 'Home–Welcome', 'Home—Welcome'] as $title) {
+            $this->assertHasViolation($this->analyze($this->titled($title)), 'page_title.generic_title', severity: Severity::Warning);
+        }
+        $this->assertHasViolation($this->analyze($this->titled('Home|Acme')), 'page_title.generic_title', severity: Severity::Notice);
+    }
 }

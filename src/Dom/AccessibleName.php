@@ -59,11 +59,33 @@ final class AccessibleName
             $reference = $document->elementsById()[$id] ?? null;
 
             if ($reference !== null) {
-                $parts[] = $reference === $element ? self::native($element, $document) : self::content($reference, true);
+                $parts[] = $reference === $element ? self::native($element, $document) : self::referenced($reference);
             }
         }
 
         return Text::normalize(implode(' ', $parts));
+    }
+
+    /** accname 2B: a referenced node contributes its aria-label, then its image alt, then its content (hidden included, no further aria-labelledby). */
+    private static function referenced(DOMElement $reference): string
+    {
+        $label = Text::normalize($reference->getAttribute('aria-label'));
+
+        if ($label !== '') {
+            return $label;
+        }
+
+        $isImageInput = Element::tag($reference) === 'input' && Element::enumAttr($reference, 'type') === 'image';
+
+        if (in_array(Element::tag($reference), ['img', 'area'], true) || $isImageInput) {
+            $alt = Text::normalize($reference->getAttribute('alt'));
+
+            if ($alt !== '') {
+                return $alt;
+            }
+        }
+
+        return self::content($reference, true);
     }
 
     private static function native(DOMElement $element, HtmlDocument $document): string
