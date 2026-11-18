@@ -14,7 +14,7 @@ A patch release for 3.1.1: a set of false positives disappears, a few wrong resu
 ### Fixed
 - `aria.dangling_idref`: an `aria-controls` that points at a missing element is no longer reported on an element with `aria-expanded="false"` or `aria-selected="false"`. Radix, shadcn and Headless UI mount the popup or panel only while it is open. Other ID references and expanded triggers are reported as before.
 - `tables.th_missing_scope`: a key/value table with row headers only is no longer treated as a complex table.
-- `language.possible_language_change`: the English/German guess only runs where the declared language is English or German, so a French or Spanish page no longer gets a guess based on two languages it does not use.
+- `language.possible_language_change`: the English/German guess only runs where the declared language is English or German, so a French or Spanish page no longer gets a guess based on two languages it does not use. An English or German passage without its own `lang` on such a page is no longer flagged either.
 - `page_title.missing_title`: a `<title>` that the HTML parser moved into the body is found instead of reported as missing. Hyphenated compounds ("Neu-Ulm", "Home-Office") are no longer split into title segments; a hyphen separates segments only with spaces around it.
 - Keyboard: items of composite widgets (tabs in a tablist, options in a listbox, menu items and similar) with `onclick` are no longer `keyboard.click_without_keyboard` when they carry their role and sit inside their widget. A role-less clickable `div`, or an item role outside any widget, is still reported.
 - `keyboard.dialog_missing_aria_modal`: `aria-modal="false"` is no longer reported; the attribute is present and valid.
@@ -550,7 +550,9 @@ German TYPO3 sites. Analyzer output is now more consistent, less noisy, and Germ
 - Umfassende Testsuite
 - MIT-Lizenz
 
-[Unreleased]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.1.2...HEAD
+[3.1.2]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.1.1...v3.1.2
+[3.1.1]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.1.0...v3.1.1
 [3.1.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.2.4...v3.0.0
 [2.2.4]: https://github.com/itsjustvita/laravel-bfsg/compare/v2.2.2...v2.2.4

@@ -10,8 +10,10 @@
 What could matter:
 
 - **Some findings disappear.** Collapsed `aria-controls` triggers, key/value tables, clickable items of tabs, listboxes and menus, `aria-modal="false"`, `aria-disabled` links, text that is not rendered (`video`, `audio`, `canvas`, `iframe` fallbacks) and a few more false positives are no longer reported, so scores can rise slightly. Check CI thresholds that sit right at the line.
+- **A few findings can appear where 3.1.1 was wrong.** A link or control named through `aria-labelledby` now takes the referenced element's `aria-label` or image `alt`, so name checks such as `links.non_descriptive` judge that name. A page with `<base href>` gets its stylesheets from the right URL (the Angular default `<base href="/">` with `styles.css`), so contrast findings that were hidden behind a stylesheet that failed to load can show up. A `<title>` the parser moved into the body is judged like any title (`page_title.generic_title` instead of `page_title.missing_title`).
 - **`bfsg:history` exit codes.** An unknown option or a stray argument exits 2 (it used to exit 1), like `bfsg:check`. Scripts that test for exit code 1 on invalid invocations need to test for 2.
 - **`--days` and `--limit` take at most 6 digits.** A longer value is an invalid option and exits 2.
+- **`bfsg:check --auth` prompts on stderr.** The interactive e-mail and password prompts moved from stdout to stderr. A test of your own that answers them with `expectsQuestion()` no longer sees them; pass `--email` and `--password`, or set `BFSG_AUTH_EMAIL` and `BFSG_AUTH_PASSWORD`.
 - **`ignored_paths`.** An entry with a leading slash (`/admin/*`) now matches. The pattern `/*` ignores every path (it used to match only the homepage); remove it if you did not mean that.
 
 ## From 3.1.0 to 3.1.1
